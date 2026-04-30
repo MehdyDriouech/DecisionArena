@@ -41,13 +41,19 @@ class DecisionRoomRunner {
         int    $rounds = 2,
         string $language = 'en',
         bool   $forceDisagreement = false,
-        ?array $contextDoc = null
+        ?array $contextDoc = null,
+        bool   $devilAdvocateEnabled = false,
+        float  $devilAdvocateThreshold = 0.65,
+        array  $agentProviders = []
     ): array {
         $rounds              = min(max($rounds, 1), RoundPolicy::MAX_ROUNDS);
         $allMessages         = [];
         $previousRoundMessages = [];
         $state               = $this->debateMemory->loadState($sessionId);
         $this->voteRepo->clearSession($sessionId);
+
+        $daPromptPath = __DIR__ . '/../../../storage/prompts/devil_advocate.md';
+        $daPrompt     = file_exists($daPromptPath) ? file_get_contents($daPromptPath) : '';
 
         for ($round = 1; $round <= $rounds; $round++) {
             $roundMessages  = [];
@@ -81,7 +87,7 @@ class DecisionRoomRunner {
                         $this->debateMemory->buildPromptContext($state)
                     );
 
-                    $routed  = $this->providerRouter->chat($messages, $agent);
+                    $routed  = $this->providerRouter->chat($messages, $agent, null, null, $agentProviders[$agentId] ?? null);
                     $content = $routed['content'];
 
                     $msg = $this->messageRepo->create([
@@ -158,6 +164,54 @@ class DecisionRoomRunner {
                         'created_at'   => date('c'),
                     ]);
                     $roundMessages[] = $msg;
+                }
+            }
+
+            // Devil's Advocate: inject after all agents have spoken in this round
+            if ($devilAdvocateEnabled && $daPrompt !== '') {
+                $positiveKeywords = ['go', 'recommend', 'feasible', 'viable', 'agree'];
+                $positiveCount    = 0;
+                foreach ($roundMessages as $rm) {
+                    $lc = strtolower((string)($rm['content'] ?? ''));
+                    foreach ($positiveKeywords as $kw) {
+                        if (str_contains($lc, $kw)) {
+                            $positiveCount++;
+                            break;
+                        }
+                    }
+                }
+                $partialConfidence = $positiveCount / max(1, count($roundMessages));
+                if ($partialConfidence > $devilAdvocateThreshold) {
+                    $last3   = array_slice($roundMessages, -3);
+                    $context = implode("\n\n", array_map(
+                        fn($m) => '[' . ($m['agent_id'] ?? 'agent') . ']: ' . ($m['content'] ?? ''),
+                        $last3
+                    ));
+                    $daMessages = [
+                        ['role' => 'system', 'content' => $daPrompt],
+                        ['role' => 'user', 'content' => "Debate so far: ...$context..."],
+                    ];
+                    try {
+                        $daRouted  = $this->providerRouter->chat($daMessages, null, null, null, null);
+                        $daContent = $daRouted['content'];
+                        $daMsg     = $this->messageRepo->create([
+                            'id'           => $this->uuid(),
+                            'session_id'   => $sessionId,
+                            'role'         => 'assistant',
+                            'agent_id'     => 'devil_advocate',
+                            'provider_id'  => $daRouted['provider_id'] ?? null,
+                            'model'        => $daRouted['model'] ?? null,
+                            'round'        => $round,
+                            'phase'        => 'devil-advocate',
+                            'mode_context' => 'decision-room',
+                            'message_type' => 'devil_advocate',
+                            'content'      => $daContent,
+                            'created_at'   => date('c'),
+                        ]);
+                        $roundMessages[] = $daMsg;
+                    } catch (\Throwable $e) {
+                        error_log('[DecisionRoomRunner] Devil advocate failed: ' . $e->getMessage());
+                    }
                 }
             }
 

@@ -6,25 +6,28 @@ use Http\Request;
 use Http\Response;
 use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\MessageRepository;
+use Infrastructure\Persistence\SessionAgentProvidersRepository;
 use Infrastructure\Persistence\SnapshotRepository;
 use Infrastructure\Persistence\DebateRepository;
 use Infrastructure\Persistence\VoteRepository;
 
 class SessionController {
-    private SessionRepository  $sessionRepo;
-    private MessageRepository  $messageRepo;
-    private SnapshotRepository $snapshotRepo;
-    private DebateRepository   $debateRepo;
-    private DebateMemoryService $debateMemory;
-    private VoteRepository $voteRepo;
+    private SessionRepository              $sessionRepo;
+    private MessageRepository              $messageRepo;
+    private SnapshotRepository             $snapshotRepo;
+    private DebateRepository               $debateRepo;
+    private DebateMemoryService            $debateMemory;
+    private VoteRepository                 $voteRepo;
+    private SessionAgentProvidersRepository $agentProvidersRepo;
 
     public function __construct() {
-        $this->sessionRepo  = new SessionRepository();
-        $this->messageRepo  = new MessageRepository();
-        $this->snapshotRepo = new SnapshotRepository();
-        $this->debateRepo   = new DebateRepository();
-        $this->debateMemory = new DebateMemoryService($this->debateRepo);
-        $this->voteRepo     = new VoteRepository();
+        $this->sessionRepo        = new SessionRepository();
+        $this->messageRepo        = new MessageRepository();
+        $this->snapshotRepo       = new SnapshotRepository();
+        $this->debateRepo         = new DebateRepository();
+        $this->debateMemory       = new DebateMemoryService($this->debateRepo);
+        $this->voteRepo           = new VoteRepository();
+        $this->agentProvidersRepo = new SessionAgentProvidersRepository();
     }
 
     public function index(Request $req): array {
@@ -84,7 +87,29 @@ class SessionController {
             'created_at'           => $now,
             'updated_at'           => $now,
         ];
-        return $this->sessionRepo->create($session);
+        $created = $this->sessionRepo->create($session);
+
+        if (!empty($data['agent_providers']) && is_array($data['agent_providers'])) {
+            $this->agentProvidersRepo->saveForSession($id, $data['agent_providers']);
+        }
+
+        return $created;
+    }
+
+    /**
+     * GET /api/sessions/{id}/agent-providers
+     * Returns per-agent provider overrides for the session.
+     */
+    public function agentProviders(Request $req): array {
+        $id      = $req->param('id');
+        $session = $this->sessionRepo->findById($id);
+        if (!$session) {
+            return Response::error('Session not found', 404);
+        }
+        return [
+            'session_id'      => $id,
+            'agent_providers' => $this->agentProvidersRepo->findBySession($id),
+        ];
     }
 
     public function memory(Request $req): array {

@@ -30,6 +30,7 @@ function renderAdministration() {
     { id: 'templates',         icon: '📋', title: t('admin.templates'),         desc: t('admin.templatesDesc') },
     { id: 'template-maker',    icon: '🧩', title: t('admin.templateMaker'),    desc: t('admin.templateMakerDesc') },
     { id: 'scenario-packs',    icon: '🎯', title: t('scenario.admin.title'),   desc: t('scenario.admin.desc') },
+    { id: 'retrospective',     icon: '🔮', title: t('admin.retrospective'),    desc: t('admin.retrospectiveDesc') },
   ];
   return `
     <div class="page-header">
@@ -1145,6 +1146,107 @@ function renderScenarioPacks() {
   `;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Feature 5 — Retrospective (Post-mortem Stats)
+════════════════════════════════════════════════════════════════════════ */
+
+function renderRetrospective() {
+  const { state, t, escHtml } = getCtx();
+  const stats = state.postmortemStats;
+
+  const loadBtn = `<button class="btn btn-secondary btn-sm" data-action="load-postmortem-stats">📊 Charger les stats</button>`;
+
+  if (!stats) {
+    return `
+      <div class="page-header">
+        <div class="page-title">🔮 ${t('postmortem.stats.title')}</div>
+      </div>
+      <div class="card" style="padding:20px;text-align:center;">${loadBtn}</div>`;
+  }
+
+  if (stats.total === 0) {
+    return `
+      <div class="page-header">
+        <div class="page-title">🔮 ${t('postmortem.stats.title')}</div>
+      </div>
+      <div class="card" style="padding:20px;">
+        <div style="color:var(--text-muted);font-size:13px;">${t('postmortem.stats.empty')}</div>
+        ${loadBtn}
+      </div>`;
+  }
+
+  // Global stats
+  const totalPct = (n) => stats.total > 0 ? Math.round(n / stats.total * 100) : 0;
+  const globalHtml = `
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px;">
+      <div class="card" style="padding:14px 18px;min-width:120px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;">${stats.total}</div>
+        <div style="font-size:12px;color:var(--text-muted);">${t('postmortem.stats.total')}</div>
+      </div>
+      <div class="card" style="padding:14px 18px;min-width:120px;text-align:center;border:1px solid #22c55e30;">
+        <div style="font-size:24px;font-weight:700;color:#22c55e;">${stats.correct}</div>
+        <div style="font-size:12px;color:var(--text-muted);">${t('postmortem.stats.correct')} (${totalPct(stats.correct)}%)</div>
+      </div>
+      <div class="card" style="padding:14px 18px;min-width:120px;text-align:center;border:1px solid #f59e0b30;">
+        <div style="font-size:24px;font-weight:700;color:#f59e0b;">${stats.partial}</div>
+        <div style="font-size:12px;color:var(--text-muted);">${t('postmortem.stats.partial')} (${totalPct(stats.partial)}%)</div>
+      </div>
+      <div class="card" style="padding:14px 18px;min-width:120px;text-align:center;border:1px solid #ef444430;">
+        <div style="font-size:24px;font-weight:700;color:#ef4444;">${stats.incorrect}</div>
+        <div style="font-size:12px;color:var(--text-muted);">${t('postmortem.stats.incorrect')} (${totalPct(stats.incorrect)}%)</div>
+      </div>
+    </div>`;
+
+  // By mode (SVG bar chart)
+  const byMode = stats.by_mode || {};
+  const modeKeys = Object.keys(byMode);
+  const byModeHtml = modeKeys.length === 0 ? '' : `
+    <div class="card" style="padding:18px;margin-bottom:16px;">
+      <div style="font-weight:600;font-size:13px;margin-bottom:14px;">📊 ${t('postmortem.stats.by_mode')}</div>
+      ${modeKeys.map((mode) => {
+        const d = byMode[mode];
+        const pct = d.total > 0 ? Math.round(d.correct / d.total * 100) : 0;
+        return `
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+            <span style="font-size:12px;min-width:140px;color:var(--text-secondary);">${escHtml(mode.replace(/_/g, '-'))}</span>
+            <div style="flex:1;height:12px;background:var(--border);border-radius:6px;overflow:hidden;">
+              <div style="height:100%;width:${pct}%;background:#22c55e;border-radius:6px;"></div>
+            </div>
+            <span style="font-size:12px;color:var(--text-muted);min-width:60px;">${d.correct}/${d.total} (${pct}%)</span>
+          </div>`;
+      }).join('')}
+    </div>`;
+
+  // By agent
+  const byAgent = stats.by_agent || {};
+  const agentKeys = Object.keys(byAgent);
+  const byAgentHtml = agentKeys.length === 0 ? '' : `
+    <div class="card" style="padding:18px;">
+      <div style="font-weight:600;font-size:13px;margin-bottom:14px;">🎭 ${t('postmortem.stats.by_agent')}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;">
+        ${agentKeys.map((aid) => {
+          const d = byAgent[aid];
+          return `
+            <div style="padding:10px 14px;background:var(--bg-secondary);border-radius:8px;min-width:120px;text-align:center;">
+              <div style="font-weight:600;font-size:12px;margin-bottom:4px;">${escHtml(aid)}</div>
+              <div style="font-size:11px;color:var(--text-muted);">${d.correct_sessions}/${d.sessions_rated} correct</div>
+            </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+
+  return `
+    <div class="page-header">
+      <div class="page-title">🔮 ${t('postmortem.stats.title')}</div>
+    </div>
+    <div style="max-width:800px;">
+      ${globalHtml}
+      ${byModeHtml}
+      ${byAgentHtml}
+      <div style="margin-top:12px;">${loadBtn}</div>
+    </div>`;
+}
+
 /* ── Registration ── */
 
 function registerAdminFeature() {
@@ -1158,6 +1260,7 @@ function registerAdminFeature() {
   window.DecisionArena.views['persona-maker']   = renderPersonaMaker;
   window.DecisionArena.views['persona-builder'] = renderPersonaBuilder;
   window.DecisionArena.views['scenario-packs']  = renderScenarioPacks;
+  window.DecisionArena.views.retrospective      = renderRetrospective;
   window.DecisionArena.views.shared.showPersonaModal             = showPersonaModal;
   window.DecisionArena.views.shared.buildPersonaMarkdownPreview  = buildPersonaMarkdownPreview;
   window.DecisionArena.views.shared.buildSoulMarkdownPreview     = buildSoulMarkdownPreview;

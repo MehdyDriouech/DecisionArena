@@ -45,6 +45,11 @@ class StressTestController {
         $language   = $session['language'] ?? 'en';
         $contextDoc = $this->docRepo->findBySession($sessionId);
 
+        // Feature 3 & 4
+        $daEnabled      = (bool)($session['devil_advocate_enabled']   ?? false);
+        $daThreshold    = (float)($session['devil_advocate_threshold'] ?? 0.65);
+        $agentProviders = (new \Infrastructure\Persistence\SessionAgentProvidersRepository())->findBySession($sessionId);
+
         $result = $this->runner->run(
             $sessionId,
             $objective,
@@ -52,7 +57,10 @@ class StressTestController {
             $rounds,
             $language,
             $forceDisagree,
-            $contextDoc
+            $contextDoc,
+            $daEnabled,
+            $daThreshold,
+            $agentProviders
         );
 
         $this->sessionRepo->update($sessionId, ['status' => 'completed', 'mode' => 'stress-test']);

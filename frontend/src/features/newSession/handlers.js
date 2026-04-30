@@ -24,6 +24,9 @@ function resetNewSessionState() {
     forceDisagreement: false,
     ctxDocEnabled: false, ctxDocTab: 'manual', ctxDocTitle: '', ctxDocContent: '',
     ctxDocDraftSaved: false, ctxDocDraftSummary: null,
+    devilAdvocateEnabled: false,
+    devilAdvocateThreshold: 0.65,
+    agentProviders: {},
   };
 }
 
@@ -125,6 +128,12 @@ function registerNewSessionHandlers() {
         decision_threshold:    ['decision-room', 'confrontation', 'quick-decision', 'stress-test', 'jury'].includes(ns.mode)
                                ? (ns.juryThreshold || 0.55)
                                : undefined,
+        // Feature 3 — Devil's Advocate
+        devil_advocate_enabled:   ns.devilAdvocateEnabled ? 1 : 0,
+        devil_advocate_threshold: ns.devilAdvocateThreshold || 0.65,
+        // Feature 4 — Per-agent provider overrides (sent as separate field, stored by SessionController)
+        agent_providers: (ns.agentProviders && Object.keys(ns.agentProviders).length > 0)
+          ? ns.agentProviders : undefined,
       };
 
       const session = await SessionService.create(body);
@@ -349,6 +358,44 @@ function registerScenarioHandlers() {
     const { state, render } = getCtx();
     state.newSession.selectedScenarioId = null;
     render();
+  });
+
+  /* ══════════════════════════════════════════════════════════════════════
+     Feature 3 — Devil's Advocate toggle + threshold
+  ═══════════════════════════════════════════════════════════════════════ */
+  registerAction('toggle-devil-advocate', ({ element }) => {
+    const { state, render } = getCtx();
+    state.newSession.devilAdvocateEnabled = !!element.checked;
+    render();
+  });
+
+  registerAction('change-da-threshold', ({ element }) => {
+    const { state } = getCtx();
+    const val = parseFloat(element.value || 0.65);
+    state.newSession.devilAdvocateThreshold = val;
+    const label = document.getElementById('ns-da-threshold-val');
+    if (label) label.textContent = Math.round(val * 100) + '%';
+  });
+
+  /* ══════════════════════════════════════════════════════════════════════
+     Feature 4 — Per-agent provider overrides
+  ═══════════════════════════════════════════════════════════════════════ */
+  registerAction('set-agent-provider', ({ element }) => {
+    const { state } = getCtx();
+    const agentId = element.dataset.agentId;
+    if (!agentId) return;
+    state.newSession.agentProviders = state.newSession.agentProviders || {};
+    state.newSession.agentProviders[agentId] = state.newSession.agentProviders[agentId] || {};
+    state.newSession.agentProviders[agentId].provider_id = element.value;
+  });
+
+  registerAction('set-agent-model', ({ element }) => {
+    const { state } = getCtx();
+    const agentId = element.dataset.agentId;
+    if (!agentId) return;
+    state.newSession.agentProviders = state.newSession.agentProviders || {};
+    state.newSession.agentProviders[agentId] = state.newSession.agentProviders[agentId] || {};
+    state.newSession.agentProviders[agentId].model = element.value;
   });
 }
 

@@ -26,18 +26,79 @@ class ProviderRouter {
     /**
      * Routes a chat call and returns provider/model metadata.
      *
+     * Provider resolution priority order:
+     * 1. $sessionAgentOverride (session_agent_providers table — per-session per-agent override)
+     * 2. $explicitProviderId (explicit call parameter)
+     * 3. Persona frontmatter default (agent->providerId)
+     * 4. Global routing settings (routing_mode, etc.)
+     *
+     * @param array|null $sessionAgentOverride ['provider_id' => '...', 'model' => '...'] for the current agent
      * @return array{content:string, provider_id:string, provider_name:string, provider_type:string, model:string, routing_mode:string}
      */
     public function chat(
         array $messages,
         ?Agent $agent = null,
         ?string $explicitProviderId = null,
-        ?string $explicitModel = null
+        ?string $explicitModel = null,
+        ?array $sessionAgentOverride = null
     ): array {
         $explicitProviderId = $explicitProviderId !== null ? trim($explicitProviderId) : null;
         $explicitModel      = $explicitModel !== null ? trim($explicitModel) : null;
 
-        // Respect explicit provider selection (no routing settings)
+        // 1. Session-agent override (highest priority)
+        if ($sessionAgentOverride && !empty($sessionAgentOverride['provider_id'])) {
+            $providerData = $this->providerRepo->findById($sessionAgentOverride['provider_id']);
+            if (!$providerData || (int)($providerData['enabled'] ?? 0) !== 1) {
+                throw new \RuntimeException('Session agent override provider is not enabled or does not exist.');
+            }
+            $overrideModel = !empty($sessionAgentOverride['model']) ? trim($sessionAgentOverride['model']) : null;
+            $model = $this->resolveModel($overrideModel ?? $explicitModel, $agent, $providerData);
+            $provider = ProviderFactory::create($providerData);
+
+            $start = (int)floor(microtime(true) * 1000);
+            $this->logger->logLlmRequest([
+                'level'    => 'debug',
+                'category' => 'llm_request',
+                'agent_id' => $agent?->id,
+                'provider_id' => (string)$providerData['id'],
+                'model'    => $model,
+                'action'   => 'llm_request',
+                'request_payload' => [
+                    'routing_mode' => 'session_agent_override',
+                    'messages'     => $messages,
+                    'options'      => ['temperature' => null, 'max_tokens' => null, 'stream' => false],
+                    'prompt_size'  => [
+                        'message_count'   => count($messages),
+                        'character_count' => $this->countChars($messages),
+                    ],
+                ],
+            ]);
+
+            $content  = $provider->chat($messages, $model);
+            $duration = (int)floor(microtime(true) * 1000) - $start;
+
+            $this->logger->logLlmResponse([
+                'level'    => 'debug',
+                'category' => 'llm_response',
+                'agent_id' => $agent?->id,
+                'provider_id' => (string)$providerData['id'],
+                'model'    => $model,
+                'action'   => 'llm_response',
+                'response_payload' => ['raw' => null, 'content' => $content, 'usage' => null],
+                'metadata' => ['duration_ms' => $duration, 'success' => true],
+            ]);
+
+            return [
+                'content'       => $content,
+                'provider_id'   => (string)$providerData['id'],
+                'provider_name' => (string)($providerData['name'] ?? $providerData['id']),
+                'provider_type' => (string)($providerData['type'] ?? ''),
+                'model'         => $model,
+                'routing_mode'  => 'session_agent_override',
+            ];
+        }
+
+        // 2. Explicit provider selection (no routing settings)
         if ($explicitProviderId) {
             $providerData = $this->providerRepo->findById($explicitProviderId);
             if (!$providerData || (int)($providerData['enabled'] ?? 0) !== 1) {

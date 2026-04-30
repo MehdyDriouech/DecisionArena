@@ -35,6 +35,13 @@ class Migration {
         $this->createSessionComparisonsTable();
         $this->createAppSettingsTable();
         $this->createScenarioPacksTable();
+        // Deliberation Intelligence v2
+        $this->createPersonaScoresTable();
+        $this->createConfidenceTimelineTable();
+        $this->createBiasReportsTable();
+        $this->createPostmortemsTable();
+        $this->createSessionAgentProvidersTable();
+        $this->addMissingColumnsV2();
         $this->seedDefaultTemplates();
         $this->seedStressTestTemplate();
         $this->seedDefaultScenarioPacks();
@@ -746,6 +753,105 @@ class Migration {
                 ':updated_at'         => $now,
             ]);
         }
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════
+       Deliberation Intelligence v2 — new tables
+    ═══════════════════════════════════════════════════════════════════ */
+
+    private function createPersonaScoresTable(): void {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS session_persona_scores (
+                id              TEXT PRIMARY KEY,
+                session_id      TEXT NOT NULL,
+                agent_id        TEXT NOT NULL,
+                message_count   INTEGER NOT NULL DEFAULT 0,
+                avg_message_length REAL NOT NULL DEFAULT 0,
+                citation_count  INTEGER NOT NULL DEFAULT 0,
+                influence_score REAL NOT NULL DEFAULT 0,
+                dominance       TEXT NOT NULL DEFAULT 'passive',
+                computed_at     TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_persona_scores_session ON session_persona_scores(session_id)');
+        } catch (\Throwable $e) {}
+    }
+
+    private function createConfidenceTimelineTable(): void {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS session_confidence_timeline (
+                id                  TEXT PRIMARY KEY,
+                session_id          TEXT NOT NULL,
+                round               INTEGER NOT NULL,
+                confidence          REAL NOT NULL DEFAULT 0,
+                dominant_position   TEXT NOT NULL DEFAULT 'ITERATE',
+                consensus_forming   INTEGER NOT NULL DEFAULT 0,
+                computed_at         TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_confidence_timeline_session ON session_confidence_timeline(session_id)');
+        } catch (\Throwable $e) {}
+    }
+
+    private function createBiasReportsTable(): void {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS session_bias_reports (
+                id              TEXT PRIMARY KEY,
+                session_id      TEXT NOT NULL,
+                bias_report_json TEXT NOT NULL,
+                computed_at     TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_bias_reports_session ON session_bias_reports(session_id)');
+        } catch (\Throwable $e) {}
+    }
+
+    private function createPostmortemsTable(): void {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS session_postmortems (
+                id                      TEXT PRIMARY KEY,
+                session_id              TEXT NOT NULL UNIQUE,
+                outcome                 TEXT NOT NULL,
+                confidence_in_retrospect REAL NOT NULL DEFAULT 0.5,
+                notes                   TEXT NULL,
+                created_at              TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_postmortems_session ON session_postmortems(session_id)');
+        } catch (\Throwable $e) {}
+    }
+
+    private function createSessionAgentProvidersTable(): void {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS session_agent_providers (
+                id          TEXT PRIMARY KEY,
+                session_id  TEXT NOT NULL,
+                agent_id    TEXT NOT NULL,
+                provider_id TEXT NOT NULL,
+                model       TEXT NULL,
+                UNIQUE (session_id, agent_id),
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sap_session ON session_agent_providers(session_id)');
+        } catch (\Throwable $e) {}
+    }
+
+    private function addMissingColumnsV2(): void {
+        // Devil's Advocate session config
+        $this->addColumnIfMissing('sessions', 'devil_advocate_enabled',   'INTEGER DEFAULT 0');
+        $this->addColumnIfMissing('sessions', 'devil_advocate_threshold', 'REAL DEFAULT 0.65');
+        // Message type for devil advocate
+        $this->addColumnIfMissing('messages', 'is_devil_advocate', 'INTEGER DEFAULT 0');
     }
 
     private function addColumnIfMissing(string $table, string $column, string $definition): void {

@@ -210,6 +210,300 @@ function renderDecisionSummaryCard(sh) {
   `;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Feature 1 — Persona Score Panel
+════════════════════════════════════════════════════════════════════════ */
+
+function renderPersonaScorePanel(sessionId, scores) {
+  const { escHtml, t } = getCtx();
+  const loaded = Array.isArray(scores);
+  const badgeClass = (d) => d === 'active' ? 'badge-success' : d === 'moderate' ? 'badge-warning' : 'badge-muted';
+
+  const tooltipHtml = `<span class="info-tooltip" data-tooltip="${t('persona.score.tooltip').replace(/"/g, '&quot;')}" aria-label="${t('persona.score.tooltip').replace(/"/g, '&quot;')}">?</span>`;
+
+  if (!loaded) {
+    return `
+      <div class="card debate-card" style="margin-top:16px;" id="persona-score-panel-${escHtml(sessionId)}">
+        <div class="debate-card-title">🎭 ${t('persona.score.title')} ${tooltipHtml}</div>
+        <div style="font-size:13px;color:var(--text-muted);margin-top:8px;">
+          <button class="btn btn-secondary btn-sm" data-action="load-persona-scores" data-session-id="${escHtml(sessionId)}">
+            📊 Charger les scores
+          </button>
+        </div>
+      </div>`;
+  }
+
+  if (scores.length === 0) {
+    return `
+      <div class="card debate-card" style="margin-top:16px;" id="persona-score-panel-${escHtml(sessionId)}">
+        <div class="debate-card-title">🎭 ${t('persona.score.title')} ${tooltipHtml}</div>
+        <div style="font-size:13px;color:var(--text-muted);margin-top:8px;">Aucun message d'agent trouvé.</div>
+      </div>`;
+  }
+
+  const rows = scores.map((s) => {
+    const pct = Math.round((s.influence_score || 0) * 100);
+    const dom = s.dominance || 'passive';
+    return `
+      <div style="padding:12px;background:var(--bg-secondary);border-radius:8px;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+          <span style="font-weight:600;font-size:13px;">${escHtml(s.persona_name || s.agent_id)}</span>
+          <span class="badge ${badgeClass(dom)}">${t('persona.score.' + dom)}</span>
+          <span style="font-size:11px;color:var(--text-muted);">${s.message_count} ${t('persona.score.messages')} · ${s.citation_count} ${t('persona.score.citations')}</span>
+          <button class="btn btn-secondary btn-sm" data-ui="expert-only" data-action="open-persona-editor" data-agent-id="${escHtml(s.agent_id)}" style="margin-left:auto;font-size:11px;padding:3px 8px;">
+            ✏️ ${t('persona.score.label.improve')}
+          </button>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-size:12px;color:var(--text-secondary);white-space:nowrap;">${t('persona.score.influence')}</span>
+          <div style="flex:1;height:8px;background:var(--border);border-radius:4px;overflow:hidden;">
+            <div style="height:100%;width:${pct}%;background:var(--accent);border-radius:4px;transition:width .3s;"></div>
+          </div>
+          <span style="font-size:12px;font-weight:600;width:36px;text-align:right;">${pct}%</span>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:6px;font-style:italic;">${escHtml(s.label || '')}</div>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="card debate-card" style="margin-top:16px;" id="persona-score-panel-${escHtml(sessionId)}">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+        <div class="debate-card-title" style="margin:0;">🎭 ${t('persona.score.title')}</div>
+        ${tooltipHtml}
+        <button class="btn btn-secondary btn-sm" style="margin-left:auto;font-size:11px;" data-action="load-persona-scores" data-session-id="${escHtml(sessionId)}">↺</button>
+      </div>
+      ${rows}
+    </div>`;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Feature 2 — Confidence Timeline Panel (SVG chart)
+════════════════════════════════════════════════════════════════════════ */
+
+function renderConfidenceTimelinePanel(sessionId, timeline) {
+  const { escHtml, t } = getCtx();
+  const tooltipHtml = `<span class="info-tooltip" data-tooltip="${t('timeline.tooltip').replace(/"/g, '&quot;')}" aria-label="${t('timeline.tooltip').replace(/"/g, '&quot;')}">?</span>`;
+
+  if (!timeline) {
+    return `
+      <div class="card debate-card" style="margin-top:16px;" id="timeline-panel-${escHtml(sessionId)}">
+        <div class="debate-card-title">📈 ${t('timeline.title')} ${tooltipHtml}</div>
+        <button class="btn btn-secondary btn-sm" style="margin-top:8px;" data-action="load-confidence-timeline" data-session-id="${escHtml(sessionId)}">
+          📈 Charger la timeline
+        </button>
+      </div>`;
+  }
+
+  const rounds = timeline.rounds || [];
+  if (rounds.length === 0) {
+    return `
+      <div class="card debate-card" style="margin-top:16px;" id="timeline-panel-${escHtml(sessionId)}">
+        <div class="debate-card-title">📈 ${t('timeline.title')} ${tooltipHtml}</div>
+        <div style="font-size:13px;color:var(--text-muted);margin-top:8px;">${t('timeline.no_data')}</div>
+      </div>`;
+  }
+
+  // SVG chart — 400×120 viewport
+  const W = 400, H = 100, padX = 30, padY = 12;
+  const innerW = W - padX * 2, innerH = H - padY * 2;
+  const n = rounds.length;
+  const xStep = n <= 1 ? innerW : innerW / (n - 1);
+
+  const pts = rounds.map((r, i) => ({
+    x: padX + (n <= 1 ? innerW / 2 : i * xStep),
+    y: padY + innerH - (r.confidence * innerH),
+    r: r,
+  }));
+
+  const polyline = pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const area = `${padX},${(padY + innerH).toFixed(1)} ` + pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ') + ` ${pts[pts.length - 1].x.toFixed(1)},${(padY + innerH).toFixed(1)}`;
+
+  const circles = pts.map((p) => {
+    const col = p.r.consensus_forming ? 'var(--accent)' : '#94a3b8';
+    const title = `${t('timeline.round')} ${p.r.round}: ${Math.round(p.r.confidence * 100)}% — ${p.r.dominant_position}`;
+    return `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="5" fill="${col}" stroke="white" stroke-width="1.5"><title>${escHtml(title)}</title></circle>`;
+  }).join('');
+
+  const consensusAnnotation = (() => {
+    if (!timeline.consensus_reached_at_round) return '';
+    const idx = rounds.findIndex((r) => r.round === timeline.consensus_reached_at_round);
+    if (idx < 0) return '';
+    const p = pts[idx];
+    return `<line x1="${p.x.toFixed(1)}" y1="${padY}" x2="${p.x.toFixed(1)}" y2="${(padY + innerH).toFixed(1)}" stroke="var(--accent)" stroke-width="1" stroke-dasharray="3,3" opacity="0.6"/>
+      <text x="${(p.x + 4).toFixed(1)}" y="${(padY + 9).toFixed(1)}" font-size="9" fill="var(--accent)">${escHtml(t('timeline.consensus_at'))} ${timeline.consensus_reached_at_round}</text>`;
+  })();
+
+  const xLabels = pts.map((p) => `<text x="${p.x.toFixed(1)}" y="${(H - 1).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${t('timeline.round')} ${p.r.round}</text>`).join('');
+  const yLabels = ['0%', '50%', '100%'].map((lbl, i) => {
+    const y = padY + innerH - (i * 0.5 * innerH);
+    return `<text x="${(padX - 3).toFixed(1)}" y="${y.toFixed(1)}" text-anchor="end" font-size="9" fill="var(--text-muted)">${lbl}</text>`;
+  }).join('');
+
+  const lateBadge = timeline.late_consensus ? `<span class="badge badge-warning" style="margin-left:8px;font-size:11px;">⚠ ${t('timeline.late_consensus')}</span>` : '';
+
+  return `
+    <div class="card debate-card" style="margin-top:16px;" id="timeline-panel-${escHtml(sessionId)}">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+        <div class="debate-card-title" style="margin:0;">📈 ${t('timeline.title')}</div>
+        ${tooltipHtml}
+        ${lateBadge}
+        <button class="btn btn-secondary btn-sm" style="margin-left:auto;font-size:11px;" data-action="load-confidence-timeline" data-session-id="${escHtml(sessionId)}">↺</button>
+      </div>
+      <svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;display:block;overflow:visible;" aria-label="${t('timeline.title')}">
+        <polygon points="${area}" fill="var(--accent)" opacity="0.1"/>
+        <polyline points="${polyline}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>
+        ${consensusAnnotation}
+        ${circles}
+        ${xLabels}
+        ${yLabels}
+      </svg>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:6px;display:flex;gap:16px;flex-wrap:wrap;" data-ui="expert-only">
+        ${rounds.map((r) => `<span>${t('timeline.round')} ${r.round}: <strong>${Math.round(r.confidence * 100)}%</strong> ${r.dominant_position}${r.consensus_forming ? ' ✓' : ''}</span>`).join('')}
+      </div>
+    </div>`;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Feature 5 — Post-mortem Banner + Form
+════════════════════════════════════════════════════════════════════════ */
+
+function renderPostmortemBanner(session, postmortem) {
+  const { escHtml, t } = getCtx();
+  const sid = session.id;
+
+  // If postmortem exists, show it compactly
+  if (postmortem) {
+    const outcomeKey = `postmortem.outcome.badge.${postmortem.outcome}`;
+    const badgeCls = postmortem.outcome === 'correct' ? 'badge-success' : postmortem.outcome === 'incorrect' ? 'badge-danger' : 'badge-warning';
+    const pct = Math.round((postmortem.confidence_in_retrospect || 0.5) * 100);
+    return `
+      <div class="card" style="padding:14px 18px;margin-top:16px;background:var(--bg-secondary);">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span style="font-weight:600;font-size:13px;">🔮 ${t('postmortem.title')}</span>
+          <span class="badge ${badgeCls}">${t(outcomeKey)}</span>
+          <span style="font-size:12px;color:var(--text-muted);">${t('postmortem.confidence')}: ${pct}%</span>
+          <button class="btn btn-secondary btn-sm" style="margin-left:auto;font-size:11px;" data-action="open-postmortem-form" data-session-id="${escHtml(sid)}">✏️</button>
+        </div>
+        ${postmortem.notes ? `<div style="font-size:12px;color:var(--text-secondary);margin-top:8px;font-style:italic;">${escHtml(postmortem.notes)}</div>` : ''}
+      </div>`;
+  }
+
+  // Show banner if session is older than 30 days
+  const createdAt = new Date(session.created_at || 0);
+  const ageMs = Date.now() - createdAt.getTime();
+  const thirtyDaysMs = 30 * 24 * 3600 * 1000;
+  if (ageMs < thirtyDaysMs) return '';
+
+  return `
+    <div class="card" style="padding:14px 18px;margin-top:16px;border:1px solid var(--accent);background:rgba(99,102,241,0.04);">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span style="font-size:18px;">🔮</span>
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:600;font-size:13px;">${t('postmortem.banner')}</div>
+        </div>
+        <button class="btn btn-primary btn-sm" data-action="open-postmortem-form" data-session-id="${escHtml(sid)}">
+          ${t('postmortem.bannerCta')}
+        </button>
+      </div>
+    </div>`;
+}
+
+function renderPostmortemForm(sessionId, existing) {
+  const { escHtml, t } = getCtx();
+  const pm = existing || {};
+  const opts = ['correct', 'partial', 'incorrect'];
+  const pct = Math.round(((pm.confidence_in_retrospect ?? 0.5)) * 100);
+  return `
+    <div class="card" style="padding:18px;margin-top:8px;" id="postmortem-form-${escHtml(sessionId)}">
+      <div style="font-weight:700;font-size:14px;margin-bottom:14px;">🔮 ${t('postmortem.title')}</div>
+      <div class="form-group">
+        <label>${t('postmortem.outcome.correct')} / ${t('postmortem.outcome.partial')} / ${t('postmortem.outcome.incorrect')}</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          ${opts.map((o) => `
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;">
+              <input type="radio" name="pm-outcome-${escHtml(sessionId)}" value="${o}" ${pm.outcome === o ? 'checked' : ''} data-action="select-postmortem-outcome" data-session-id="${escHtml(sessionId)}" style="accent-color:var(--accent);">
+              ${t('postmortem.outcome.' + o)}
+            </label>`).join('')}
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="pm-confidence-${escHtml(sessionId)}">${t('postmortem.confidence')}: <strong id="pm-conf-val-${escHtml(sessionId)}">${pct}%</strong></label>
+        <input class="input" id="pm-confidence-${escHtml(sessionId)}" type="range" min="0" max="1" step="0.05" value="${pm.confidence_in_retrospect ?? 0.5}" data-action="preview-postmortem-confidence" data-session-id="${escHtml(sessionId)}" style="padding:6px 0;width:100%;">
+      </div>
+      <div class="form-group">
+        <label for="pm-notes-${escHtml(sessionId)}">${t('postmortem.notes')}</label>
+        <textarea class="textarea" id="pm-notes-${escHtml(sessionId)}" placeholder="${escHtml(t('postmortem.notesPlaceholder'))}" style="min-height:70px;">${escHtml(pm.notes || '')}</textarea>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="btn btn-primary btn-sm" data-action="submit-postmortem" data-session-id="${escHtml(sessionId)}">${t('postmortem.submit')}</button>
+        <button class="btn btn-secondary btn-sm" data-action="close-postmortem-form" data-session-id="${escHtml(sessionId)}">✕</button>
+        <span id="pm-status-${escHtml(sessionId)}" style="font-size:12px;color:var(--text-muted);"></span>
+      </div>
+    </div>`;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Feature 6 — Bias Detection Panel
+════════════════════════════════════════════════════════════════════════ */
+
+function renderBiasDetectionPanel(sessionId, biasReport) {
+  const { escHtml, t } = getCtx();
+  const tooltipHtml = `<span class="info-tooltip" data-tooltip="${t('bias.tooltip').replace(/"/g, '&quot;')}" aria-label="${t('bias.tooltip').replace(/"/g, '&quot;')}">?</span>`;
+
+  if (!biasReport) {
+    return `
+      <div class="card debate-card" style="margin-top:16px;" id="bias-panel-${escHtml(sessionId)}">
+        <div class="debate-card-title">🧠 ${t('bias.title')} ${tooltipHtml}</div>
+        <button class="btn btn-secondary btn-sm" style="margin-top:8px;" data-action="load-bias-report" data-session-id="${escHtml(sessionId)}">
+          🔍 Analyser les biais
+        </button>
+      </div>`;
+  }
+
+  if (biasReport.clean || (biasReport.detected || []).length === 0) {
+    return `
+      <div class="card debate-card" style="margin-top:16px;" id="bias-panel-${escHtml(sessionId)}">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+          <div class="debate-card-title" style="margin:0;">🧠 ${t('bias.title')}</div>
+          ${tooltipHtml}
+          <button class="btn btn-secondary btn-sm" style="margin-left:auto;font-size:11px;" data-action="load-bias-report" data-session-id="${escHtml(sessionId)}">↺</button>
+        </div>
+        <div style="margin-top:8px;"><span class="badge badge-success">✓ ${t('bias.clean')}</span></div>
+      </div>`;
+  }
+
+  const detected = biasReport.detected || [];
+  const badgeCls = (sev) => sev === 'high' ? 'badge-danger' : sev === 'medium' ? 'badge-warning' : 'badge-muted';
+  const biasNameKey = (b) => {
+    const map = { groupthink: 'bias.groupthink', anchoring: 'bias.anchoring', confirmation_bias: 'bias.confirmation', availability_bias: 'bias.availability', authority_bias: 'bias.authority' };
+    return map[b] || b;
+  };
+
+  const rows = detected.map((d) => `
+    <div style="padding:10px;background:rgba(239,68,68,0.05);border-radius:8px;border:1px solid rgba(239,68,68,0.15);margin-bottom:10px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <strong style="font-size:13px;">${escHtml(t(biasNameKey(d.bias)))}</strong>
+        <span class="badge ${badgeCls(d.severity)}">${escHtml(t('bias.severity.' + d.severity))}</span>
+      </div>
+      <details data-ui="expert-only">
+        <summary style="font-size:12px;color:var(--text-muted);cursor:pointer;">${t('bias.evidence')}</summary>
+        <div style="font-size:12px;color:var(--text-secondary);margin-top:6px;padding:8px;background:var(--bg-secondary);border-radius:4px;">${escHtml(d.evidence)}</div>
+      </details>
+      <div style="font-size:12px;color:var(--accent);margin-top:6px;padding:8px;background:rgba(99,102,241,0.06);border-radius:4px;">💡 ${escHtml(d.recommendation)}</div>
+    </div>`).join('');
+
+  return `
+    <div class="card debate-card" style="margin-top:16px;" id="bias-panel-${escHtml(sessionId)}">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+        <div class="debate-card-title" style="margin:0;">🧠 ${t('bias.title')}</div>
+        ${tooltipHtml}
+        <span class="badge badge-danger" style="font-size:11px;">${detected.length} ${t('bias.detected')}</span>
+        <button class="btn btn-secondary btn-sm" style="margin-left:auto;font-size:11px;" data-action="load-bias-report" data-session-id="${escHtml(sessionId)}">↺</button>
+      </div>
+      ${rows}
+    </div>`;
+}
+
 /* ── Main session history view ── */
 
 function renderSessionHistory() {
@@ -251,7 +545,11 @@ function renderSessionHistory() {
     const name       = agentName(msg.agent_id);
     const targetBadge = msg.target_agent_id ? `<span class="badge badge-info" style="font-size:11px;">→ ${escHtml(msg.target_agent_id)}</span>` : '';
     const typeBadge  = msg.message_type === 'synthesis' ? `<span class="badge badge-success" style="font-size:11px;">✨ ${t('dr.synthesis')}</span>` : '';
-    return `<div class="agent-card" style="margin-bottom:12px;"><div class="agent-card-header"><span class="agent-icon">${icon}</span><div style="flex:1;min-width:0;"><div class="agent-name">${escHtml(name)}</div></div>${targetBadge}${typeBadge}</div><div class="agent-content md-content">${renderMarkdown(msg.content)}</div><div class="agent-card-footer" style="font-size:11px;color:var(--text-muted);">${msg.provider_id ? `<span>${escHtml(msg.provider_id)}</span>` : ''}${msg.model ? `<span>${escHtml(msg.model)}</span>` : ''}${msg.created_at ? `<span style="margin-left:auto;">${formatDate(msg.created_at)}</span>` : ''}</div></div>`;
+    const isDA      = msg.agent_id === 'devil_advocate' || msg.message_type === 'devil_advocate';
+    const daClass   = isDA ? ' devil-advocate-card' : '';
+    const daBadge   = isDA ? `<span class="badge" style="background:rgba(220,38,38,0.12);color:#dc2626;font-size:10px;">😈 ${t('devil.advocate.badge')}</span>` : '';
+    const provBadge = (msg.provider_id || msg.model) ? `<span class="provider-badge" data-ui="expert-only">${msg.provider_id ? escHtml(msg.provider_id) : ''}${msg.model ? ` · ${escHtml(msg.model)}` : ''}</span>` : '';
+    return `<div class="agent-card${daClass}" style="margin-bottom:12px;"><div class="agent-card-header"><span class="agent-icon">${icon}</span><div style="flex:1;min-width:0;"><div class="agent-name">${escHtml(name)}</div></div>${daBadge}${targetBadge}${typeBadge}</div><div class="agent-content md-content">${renderMarkdown(msg.content)}</div><div class="agent-card-footer" style="font-size:11px;color:var(--text-muted);">${provBadge}${msg.created_at ? `<span style="margin-left:auto;">${formatDate(msg.created_at)}</span>` : ''}</div></div>`;
   };
 
   const bodyHtml = (() => {
@@ -272,6 +570,23 @@ function renderSessionHistory() {
 
   const agents = session.selected_agents || [];
 
+  // Deliberation Intelligence v2 state (loaded on demand)
+  const personaScores    = state.personaScores?.[session.id];
+  const confidenceTimeline = state.confidenceTimeline?.[session.id];
+  const biasReport       = state.biasReport?.[session.id];
+  const postmortem       = state.postmortem?.[session.id];
+  const showPostmortemForm = state.postmortemFormOpen?.[session.id];
+
+  // Devil's advocate interventions count
+  const daMessages = messages.filter((m) => m.message_type === 'devil_advocate' || m.agent_id === 'devil_advocate');
+
+  // Postmortem badge for session card
+  const pmBadge = (() => {
+    if (!postmortem?.outcome) return '';
+    const cls = postmortem.outcome === 'correct' ? 'badge-success' : postmortem.outcome === 'incorrect' ? 'badge-danger' : 'badge-warning';
+    return `<span class="badge ${cls}" style="font-size:11px;">${t('postmortem.outcome.badge.' + postmortem.outcome)}</span>`;
+  })();
+
   return `
     <div style="max-width:960px;margin:0 auto;padding:24px 20px;">
       <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:24px;">
@@ -280,15 +595,18 @@ function renderSessionHistory() {
 
       ${mode !== 'chat' ? renderDecisionSummaryCard(data) : ''}
 
+      ${mode !== 'chat' ? renderConfidenceTimelinePanel(session.id, confidenceTimeline || null) : ''}
+
       <div class="card" style="margin-bottom:24px;padding:20px;">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <span style="font-size:28px;">${modeIcons[mode] || '💬'}</span>
           <div style="flex:1;min-width:0;">
-            <div style="font-size:20px;font-weight:700;color:var(--text-primary);">${escHtml(session.title)}</div>
+            <div style="font-size:20px;font-weight:700;color:var(--text-primary);">${escHtml(session.title)} ${pmBadge}</div>
             <div style="font-size:13px;color:var(--text-muted);margin-top:4px;">
               ${formatDate(session.created_at)} · ${session.mode}
               ${session.status ? ` · <span class="badge ${session.status === 'completed' ? 'badge-success' : 'badge-muted'}">${session.status}</span>` : ''}
               ${routingBadge ? ` · ${routingBadge}` : ''}
+              ${daMessages.length > 0 ? ` · <span class="badge" style="background:rgba(239,68,68,0.12);color:#dc2626;font-size:11px;">😈 ${daMessages.length} ${t('devil.advocate.count')}</span>` : ''}
             </div>
           </div>
         </div>
@@ -326,12 +644,17 @@ function renderSessionHistory() {
 
       ${mode !== 'chat' ? `
       <div class="session-history-analytics-panels">
+        ${(window.DecisionArena.views.shared.renderDebateAuditPanel || (() => ''))(session.id)}
+        ${renderPersonaScorePanel(session.id, personaScores || null)}
         ${(window.DecisionArena.views.shared.renderGraphViewPanel || (() => ''))(session.id)}
         ${(window.DecisionArena.views.shared.renderArgumentHeatmapPanel || (() => ''))(session.id)}
-        ${(window.DecisionArena.views.shared.renderDebateAuditPanel || (() => ''))(session.id)}
+        ${renderBiasDetectionPanel(session.id, biasReport || null)}
         ${(window.DecisionArena.views.shared.renderDebateReplayPanel || (() => ''))(session.id)}
       </div>
       ` : ''}
+
+      ${renderPostmortemBanner(session, postmortem || null)}
+      ${showPostmortemForm ? renderPostmortemForm(session.id, postmortem || null) : ''}
 
       <div class="card" style="padding:16px;margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;">
         <button class="btn btn-secondary btn-sm" data-action="open-rerun-modal" data-session-id="${escHtml(session.id)}">
@@ -347,8 +670,23 @@ function renderSessionHistory() {
 
 function registerSessionHistoryFeature() {
   window.DecisionArena.views['session-history'] = renderSessionHistory;
-  window.DecisionArena.views.shared.renderTemplateCard    = renderTemplateCard;
-  window.DecisionArena.views.shared.renderActionPlanPanel = renderActionPlanPanel;
+  window.DecisionArena.views.shared.renderTemplateCard       = renderTemplateCard;
+  window.DecisionArena.views.shared.renderActionPlanPanel    = renderActionPlanPanel;
+  window.DecisionArena.views.shared.renderPersonaScorePanel  = renderPersonaScorePanel;
+  window.DecisionArena.views.shared.renderConfidenceTimeline = renderConfidenceTimelinePanel;
+  window.DecisionArena.views.shared.renderBiasDetectionPanel = renderBiasDetectionPanel;
+  window.DecisionArena.views.shared.renderPostmortemBanner   = renderPostmortemBanner;
+  window.DecisionArena.views.shared.renderPostmortemForm     = renderPostmortemForm;
 }
 
-export { registerSessionHistoryFeature, renderSessionHistory, renderTemplateCard, renderActionPlanPanel };
+export {
+  registerSessionHistoryFeature,
+  renderSessionHistory,
+  renderTemplateCard,
+  renderActionPlanPanel,
+  renderPersonaScorePanel,
+  renderConfidenceTimelinePanel,
+  renderBiasDetectionPanel,
+  renderPostmortemBanner,
+  renderPostmortemForm,
+};

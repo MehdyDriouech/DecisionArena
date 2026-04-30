@@ -292,6 +292,143 @@ function registerSessionHistoryHandlers() {
       if (statusEl) statusEl.textContent = '❌ ' + err.message;
     }
   });
+
+  /* ══════════════════════════════════════════════════════════════════════
+     Feature 1 — Persona Scores
+  ═══════════════════════════════════════════════════════════════════════ */
+  registerAction('load-persona-scores', async ({ element }) => {
+    const { state, render, apiFetch } = getCtx();
+    const sessionId = element.dataset.sessionId;
+    if (!sessionId) return;
+    try {
+      const result = await apiFetch(`/api/sessions/${sessionId}/persona-scores`);
+      state.personaScores = state.personaScores || {};
+      state.personaScores[sessionId] = result.scores || [];
+      render();
+    } catch (err) {
+      console.error('persona-scores', err);
+    }
+  });
+
+  registerAction('open-persona-editor', ({ element }) => {
+    const agentId = element.dataset.agentId;
+    if (agentId) {
+      window.DecisionArena.router.navigate('persona-builder');
+    }
+  });
+
+  /* ══════════════════════════════════════════════════════════════════════
+     Feature 2 — Confidence Timeline
+  ═══════════════════════════════════════════════════════════════════════ */
+  registerAction('load-confidence-timeline', async ({ element }) => {
+    const { state, render, apiFetch } = getCtx();
+    const sessionId = element.dataset.sessionId;
+    if (!sessionId) return;
+    try {
+      const result = await apiFetch(`/api/sessions/${sessionId}/confidence-timeline`);
+      state.confidenceTimeline = state.confidenceTimeline || {};
+      state.confidenceTimeline[sessionId] = result;
+      render();
+    } catch (err) {
+      console.error('confidence-timeline', err);
+    }
+  });
+
+  /* ══════════════════════════════════════════════════════════════════════
+     Feature 5 — Post-mortem
+  ═══════════════════════════════════════════════════════════════════════ */
+  registerAction('open-postmortem-form', async ({ element }) => {
+    const { state, render, apiFetch } = getCtx();
+    const sessionId = element.dataset.sessionId;
+    if (!sessionId) return;
+    state.postmortemFormOpen = state.postmortemFormOpen || {};
+    state.postmortemFormOpen[sessionId] = true;
+    // Load existing postmortem if not yet loaded
+    if (!state.postmortem?.[sessionId]) {
+      try {
+        const result = await apiFetch(`/api/sessions/${sessionId}/postmortem`);
+        state.postmortem = state.postmortem || {};
+        state.postmortem[sessionId] = result.postmortem || null;
+      } catch (_) {}
+    }
+    render();
+  });
+
+  registerAction('close-postmortem-form', ({ element }) => {
+    const { state, render } = getCtx();
+    const sessionId = element.dataset.sessionId;
+    if (!sessionId) return;
+    state.postmortemFormOpen = state.postmortemFormOpen || {};
+    state.postmortemFormOpen[sessionId] = false;
+    render();
+  });
+
+  registerAction('select-postmortem-outcome', ({ element }) => {
+    const { state } = getCtx();
+    const sessionId = element.dataset.sessionId;
+    if (!sessionId) return;
+    state.postmortem = state.postmortem || {};
+    state.postmortem[sessionId] = state.postmortem[sessionId] || {};
+    state.postmortem[sessionId].outcome = element.value;
+  });
+
+  registerAction('preview-postmortem-confidence', ({ element }) => {
+    const sid = element?.dataset?.sessionId;
+    if (!sid) return;
+    const val = parseFloat(element.value || 0.5);
+    const el  = document.getElementById(`pm-conf-val-${sid}`);
+    if (el) el.textContent = Math.round(val * 100) + '%';
+  });
+
+  registerAction('submit-postmortem', async ({ element }) => {
+    const { state, render, apiFetch, t } = getCtx();
+    const sessionId = element.dataset.sessionId;
+    if (!sessionId) return;
+    const statusEl    = document.getElementById(`pm-status-${sessionId}`);
+    const outcomeEl   = document.querySelector(`input[name="pm-outcome-${sessionId}"]:checked`);
+    const confidenceEl = document.getElementById(`pm-confidence-${sessionId}`);
+    const notesEl      = document.getElementById(`pm-notes-${sessionId}`);
+    if (!outcomeEl) {
+      if (statusEl) statusEl.textContent = '⚠ Sélectionnez un résultat.';
+      return;
+    }
+    if (statusEl) statusEl.textContent = '⏳';
+    try {
+      const result = await apiFetch(`/api/sessions/${sessionId}/postmortem`, {
+        method: 'POST',
+        body: JSON.stringify({
+          outcome:                  outcomeEl.value,
+          confidence_in_retrospect: parseFloat(confidenceEl?.value || 0.5),
+          notes:                    notesEl?.value || '',
+        }),
+      });
+      state.postmortem = state.postmortem || {};
+      state.postmortem[sessionId] = result.postmortem || null;
+      state.postmortemFormOpen = state.postmortemFormOpen || {};
+      state.postmortemFormOpen[sessionId] = false;
+      if (statusEl) statusEl.textContent = '✅ ' + t('postmortem.saved');
+      render();
+    } catch (err) {
+      if (statusEl) statusEl.textContent = '❌ ' + err.message;
+    }
+  });
+
+  /* ══════════════════════════════════════════════════════════════════════
+     Feature 6 — Bias Detection
+  ═══════════════════════════════════════════════════════════════════════ */
+  registerAction('load-bias-report', async ({ element }) => {
+    const { state, render, apiFetch } = getCtx();
+    const sessionId = element.dataset.sessionId;
+    if (!sessionId) return;
+    try {
+      const result = await apiFetch(`/api/sessions/${sessionId}/bias-report`);
+      state.biasReport = state.biasReport || {};
+      state.biasReport[sessionId] = result.bias_report || null;
+      render();
+    } catch (err) {
+      console.error('bias-report', err);
+    }
+  });
 }
 
 export { registerSessionHistoryHandlers };

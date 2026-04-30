@@ -43,7 +43,7 @@ import { registerStressTestHandlers } from './features/stressTest/handlers.js';
 import { registerSessionHistoryHandlers } from './features/sessionHistory/handlers.js';
 import { registerComparisonsHandlers } from './features/comparisons/handlers.js';
 import { registerLaunchAssistantHandlers } from './features/launchAssistant/handlers.js';
-import { registerAdminHandlers, registerScenarioPackAdminHandlers } from './features/admin/handlers.js';
+import { registerAdminHandlers, registerScenarioPackAdminHandlers, registerRetrospectiveHandlers } from './features/admin/handlers.js';
 import { registerDebateAuditHandlers } from './features/debateAudit/handlers.js';
 import { registerGraphViewHandlers } from './features/graphView/handlers.js';
 import { registerJuryHandlers } from './features/jury/handlers.js';
@@ -119,6 +119,7 @@ function bootstrapModuleArchitecture() {
   registerLaunchAssistantHandlers();
   registerAdminHandlers();
   registerScenarioPackAdminHandlers();
+  registerRetrospectiveHandlers();
   registerDebateAuditHandlers();
   registerGraphViewHandlers();
   registerJuryHandlers();

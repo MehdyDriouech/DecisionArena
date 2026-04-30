@@ -59,6 +59,11 @@ class ConfrontationController {
             return Response::error('Invalid reply_policy', 400);
         }
 
+        // Feature 3 & 4
+        $daEnabled      = (bool)($session['devil_advocate_enabled']   ?? false);
+        $daThreshold    = (float)($session['devil_advocate_threshold'] ?? 0.65);
+        $agentProviders = (new \Infrastructure\Persistence\SessionAgentProvidersRepository())->findBySession($sessionId);
+
         $result = $this->runner->run(
             $sessionId,
             $objective,
@@ -69,7 +74,10 @@ class ConfrontationController {
             $interactionStyle,
             $replyPolicy,
             $forceDisagreement,
-            $contextDoc
+            $contextDoc,
+            $daEnabled,
+            $daThreshold,
+            $agentProviders
         );
 
         // Mark session as completed

@@ -272,6 +272,20 @@ function renderNewSession() {
       ${ns.mode === 'quick-decision' ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;padding:8px 12px;background:var(--bg-secondary);border-radius:6px;">⚡ ${t('mode.quickDecisionRoundsHint')}</div>` : ''}
 
       ${['decision-room', 'confrontation', 'quick-decision', 'stress-test', 'jury'].includes(ns.mode) ? `
+        <!-- Devil's Advocate toggle (always visible) -->
+        <div class="form-group" style="margin-top:16px;">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;font-weight:500;font-size:13px;">
+            <input type="checkbox" id="ns-devil-advocate" ${ns.devilAdvocateEnabled ? 'checked' : ''} data-action="toggle-devil-advocate" style="width:16px;height:16px;accent-color:#dc2626;">
+            😈 ${t('devil.advocate.enable')} ${tip(t('devil.advocate.tooltip'))}
+          </label>
+        </div>
+        ${ns.devilAdvocateEnabled ? `
+        <div class="form-group" data-ui="expert-only">
+          <label for="ns-da-threshold">${t('devil.advocate.threshold')}: <strong id="ns-da-threshold-val">${Math.round((ns.devilAdvocateThreshold || 0.65) * 100)}%</strong></label>
+          <input class="input" id="ns-da-threshold" type="range" min="0.50" max="0.90" step="0.05" value="${ns.devilAdvocateThreshold || 0.65}" data-action="change-da-threshold" style="padding:6px 0;">
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-top:2px;"><span>50%</span><span>65%</span><span>80%</span><span>90%</span></div>
+        </div>` : ''}
+
         <div data-ui="expert-only">
         <div class="form-group" style="margin-top:16px;">
           <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;font-weight:500;font-size:13px;">
@@ -286,6 +300,31 @@ function renderNewSession() {
           <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-top:2px;"><span>50%</span><span>55%</span><span>65%</span><span>70%</span><span>80%</span></div>
           <div class="card-description">${t('vote.consensusThresholdDesc')}</div>
         </div>
+        </div>
+
+        <!-- Feature 4 — Per-agent provider override (expert mode only) -->
+        <div data-ui="expert-only" style="margin-top:16px;">
+          <div style="font-weight:600;font-size:12px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">
+            ⚙️ ${t('agent.provider.label')} ${tip(t('agent.provider.tooltip'))}
+          </div>
+          ${(() => {
+            const agents = ns.mode === 'confrontation'
+              ? [...new Set([...(ns.blueTeam||[]), ...(ns.redTeam||[])])]
+              : (ns.selectedAgents || []);
+            const providers = state.providers || [];
+            return agents.map((agId) => {
+              const override = (ns.agentProviders || {})[agId] || {};
+              return `
+                <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">
+                  <span style="font-size:12px;min-width:80px;">${agId}</span>
+                  <select class="input" style="flex:1;min-width:120px;padding:4px 6px;font-size:12px;" data-action="set-agent-provider" data-agent-id="${agId}">
+                    <option value="">${t('agent.provider.empty')}</option>
+                    ${providers.map((p) => `<option value="${p.id}" ${override.provider_id === p.id ? 'selected' : ''}>${p.name || p.id}</option>`).join('')}
+                  </select>
+                  <input class="input" type="text" placeholder="model" style="width:120px;padding:4px 6px;font-size:12px;" value="${override.model || ''}" data-action="set-agent-model" data-agent-id="${agId}">
+                </div>`;
+            }).join('') || `<div style="font-size:12px;color:var(--text-muted);">Sélectionnez des agents pour configurer leurs providers.</div>`;
+          })()}
         </div>
       ` : ''}
 

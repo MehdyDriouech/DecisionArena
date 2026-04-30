@@ -46,7 +46,18 @@ class DecisionRoomController {
         $language   = $session['language'] ?? 'en';
         $contextDoc = (new ContextDocumentRepository())->findBySession($sessionId);
 
-        $result = $this->runner->run($sessionId, $objective, $selectedAgents, $rounds, $language, $forceDisagreement, $contextDoc);
+        // Feature 3: Devil's Advocate — read from session config
+        $daEnabled   = (bool)($session['devil_advocate_enabled']   ?? false);
+        $daThreshold = (float)($session['devil_advocate_threshold'] ?? 0.65);
+
+        // Feature 4: per-agent provider overrides
+        $agentProviders = (new \Infrastructure\Persistence\SessionAgentProvidersRepository())->findBySession($sessionId);
+
+        $result = $this->runner->run(
+            $sessionId, $objective, $selectedAgents, $rounds, $language,
+            $forceDisagreement, $contextDoc,
+            $daEnabled, $daThreshold, $agentProviders
+        );
 
         $this->sessionRepo->update($sessionId, ['status' => 'completed']);
 

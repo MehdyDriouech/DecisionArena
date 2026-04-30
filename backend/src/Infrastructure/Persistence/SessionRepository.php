@@ -58,6 +58,13 @@ class SessionRepository {
             ':created_at'           => $data['created_at'],
             ':updated_at'           => $data['updated_at'],
         ]);
+        // Feature 3 & 4: write new columns via update (avoids ALTER TABLE on old DBs)
+        $extras = [];
+        if (isset($data['devil_advocate_enabled']))   $extras['devil_advocate_enabled']   = (int)$data['devil_advocate_enabled'];
+        if (isset($data['devil_advocate_threshold']))  $extras['devil_advocate_threshold']  = (float)$data['devil_advocate_threshold'];
+        if (!empty($extras)) {
+            try { $this->update($data['id'], $extras); } catch (\Throwable $e) {}
+        }
         return $this->findById($data['id']);
     }
 

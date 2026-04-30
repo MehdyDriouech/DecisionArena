@@ -155,6 +155,18 @@ $router->post('/api/scenario-packs/{id}/duplicate', [Controllers\ScenarioPackCon
 // kept for backward compat — maps to prefill (no session creation on server)
 $router->post('/api/sessions/from-scenario-pack', [Controllers\ScenarioPackController::class, 'prefill']);
 
+// Deliberation Intelligence v2 — specific sub-routes BEFORE generic {id}
+$router->get('/api/sessions/{id}/persona-scores',       [Controllers\PersonaScoreController::class,      'show']);
+$router->get('/api/sessions/{id}/confidence-timeline',  [Controllers\ConfidenceTimelineController::class, 'show']);
+$router->get('/api/sessions/{id}/bias-report',          [Controllers\BiasDetectionController::class,      'show']);
+$router->get('/api/sessions/{id}/agent-providers',      [Controllers\SessionController::class,            'agentProviders']);
+$router->post('/api/sessions/{id}/devil-advocate/run',  [Controllers\DevilAdvocateController::class,      'run']);
+$router->get('/api/sessions/{id}/postmortem',           [Controllers\PostmortemController::class,         'show']);
+$router->post('/api/sessions/{id}/postmortem',          [Controllers\PostmortemController::class,         'store']);
+
+// Post-mortem stats (global — no session id)
+$router->get('/api/postmortems/stats', [Controllers\PostmortemController::class, 'stats']);
+
 // Templates — specific routes BEFORE parameterized routes
 $router->post('/api/templates/make', [Controllers\TemplateMakerController::class, 'make']);
 $router->get('/api/templates', [Controllers\TemplateController::class, 'index']);

@@ -17,6 +17,7 @@ Decision Arena est un outil **local** de *Decision Intelligence* basé sur des *
 - [Configuration des providers LLM](#configuration-des-providers-llm)
 - [Modes d'analyse](#modes-danalyse)
 - [Deliberation Intelligence](#deliberation-intelligence)
+  - [Endpoints v2](#endpoints-v2)
 - [Fonctionnalités transverses](#fonctionnalités-transverses)
 - [Concepts & terminologie](#concepts--terminologie)
 - [Architecture](#architecture)
@@ -44,6 +45,7 @@ Decision Arena répond à ça :
 | Audit du raisonnement | ✅ Graph, heatmap, replay |
 | Traçabilité | ✅ Logs, snapshots, exports |
 | Rejouabilité | ✅ Rerun avec variations, comparaison de sessions |
+| Qualité décisionnelle | ✅ Scoring des personas, timeline de confiance, détection de biais (heuristiques), Devil's Advocate, post-mortem |
 
 ---
 
@@ -145,6 +147,8 @@ Le backend supporte plusieurs stratégies de sélection du provider, configurabl
 | `load-balance` | Round-robin sur les providers éligibles |
 | `agent-default` | Chaque persona utilise son provider/modèle par défaut |
 
+**Priorité effective par appel LLM :** surcharge par session (**Nouvelle session**, mode Expert : provider + modèle par agent) → paramètres explicités → frontmatter persona (`provider_id` / `model`) → réglages de routage globaux.
+
 > ⚠️ Deux providers locaux ne peuvent pas partager la même `base_url`. Cochez la case **local** pour Ollama / LM Studio.
 
 Le badge **Routing** dans l'historique de session affiche le mode actif au moment de la session.
@@ -194,6 +198,11 @@ Vote final multi-agents avec décision collective basée sur un seuil de consens
 
 > Idéal pour : validation finale, go / no-go.
 
+### Options « Nouvelle session » (modes structurés)
+
+- **Devil's Advocate** (toujours visible sur les modes concernés) : après chaque tour, si le consensus **partiel** dépasse le seuil (défaut `0.65`), un message **advocatus diaboli** est injecté (un appel LLM par déclenchement, hors pool de votes). Le seuil est réglable en **mode Expert**.
+- **Provider par agent** (mode Expert uniquement) : assigner un provider et un modèle différent à chaque agent pour des désaccords **réels** au niveau modèle.
+
 ---
 
 ### Disponibilité des fonctionnalités par mode
@@ -208,8 +217,12 @@ Vote final multi-agents avec décision collective basée sur un seuil de consens
 | Heatmap d'arguments | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Replay | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Audit qualité | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Scoring personas / timeline confiance / biais | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Devil's Advocate (si activé à la création) | ✗ | ✓ | ✓ | ✗* | ✓ | ✓ |
 | Seuil de consensus configurable | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Export enrichi | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+\* Quick Decision : un seul tour — le mécanisme par tour peut ne pas s'appliquer comme sur les autres modes.
 
 > **Note :** le mode Chat ne persiste pas de données de délibération (pas d'arguments structurés, pas de votes). Les panneaux Deliberation Intelligence s'affichent en mode "notice" pour les sessions chat.
 
@@ -218,6 +231,20 @@ Vote final multi-agents avec décision collective basée sur un seuil de consens
 ## Deliberation Intelligence
 
 Ensemble de panneaux d'analyse disponibles pour toutes les sessions de délibération, via `/api/sessions/{id}/…` :
+
+### Endpoints v2
+
+| Rôle | Méthode | Chemin | LLM |
+|---|---|---|---|
+| Scoring personas | GET | `/api/sessions/{id}/persona-scores` | non |
+| Timeline de confiance | GET | `/api/sessions/{id}/confidence-timeline` | non |
+| Rapport de biais (heuristiques) | GET | `/api/sessions/{id}/bias-report` | non |
+| Devil's Advocate (déclenchement manuel) | POST | `/api/sessions/{id}/devil-advocate/run` | oui |
+| Post-mortem (lecture / enregistrement) | GET, POST | `/api/sessions/{id}/postmortem` | non |
+| Statistiques rétrospectives (admin) | GET | `/api/postmortems/stats` | non |
+| Overrides provider/modèle par agent | GET | `/api/sessions/{id}/agent-providers` | — |
+
+Les **endpoints « classiques »** restent disponibles sous le même préfixe : `audit`, `graph`, `argument-heatmap`, `replay`, `votes`, ainsi que `PUT /api/sessions/{id}/decision-threshold`.
 
 ### Audit du débat
 `GET /api/sessions/{id}/audit`
@@ -246,6 +273,33 @@ Votes pondérés par agent + décision automatique (`GO` / `NO-GO` / `ITERATE`) 
 
 Le **seuil de consensus** (`sessions.decision_threshold`, défaut `0.55`) est configurable à la création et ajustable après coup depuis l'historique de session (recalcul à la demande via `PUT /api/sessions/{id}/decision-threshold`).
 
+### Scoring des personas (`GET /api/sessions/{id}/persona-scores`)
+
+Indicateurs **sans LLM** : volumétrie des messages, longueur moyenne, citations croisées entre agents → score d’influence, badge dominant (actif / modéré / passif). Résultats mis en cache en SQLite jusqu’à l’arrivée de nouveaux messages.
+
+### Timeline de confiance (`GET /api/sessions/{id}/confidence-timeline`)
+
+Courbe **par tour** : confiance agrégée (signaux lexical + votes sur le dernier tour), position dominante (GO / NO-GO / ITERATE), marqueur de consensus précoce / tardif. Affichée en SVG côté historique ; détail par tour en **mode Expert**.
+
+### Détection de biais (`GET /api/sessions/{id}/bias-report`)
+
+Rapport **heuristique** (sans LLM) : groupthink, ancrage, confirmation, disponibilité, autorité — avec sévérité, preuve textuelle et recommandation. Mis en cache tant qu’aucun nouveau message.
+
+### Devil's Advocate — déclenchement manuel
+
+`POST /api/sessions/{id}/devil-advocate/run` (corps : `current_round`, `partial_confidence`) pour forcer ou tester une intervention ; prompt Markdown : `backend/storage/prompts/devil_advocate.md`.
+
+### Post-mortem & rétrospective
+
+- `GET|POST /api/sessions/{id}/postmortem` — bilan utilisateur (correct / partiel / incorrect, confiance rétrospective, notes).
+- `GET /api/postmortems/stats` — agrégats (totaux, par mode, par agent présent dans la session).
+
+Dans l’UI : **bannière** sur les sessions de plus de 30 jours sans bilan ; **badge** sur la carte session ; vue **Administration → Rétrospective** avec graphiques simples.
+
+### Overrides LLM par session
+
+`GET /api/sessions/{id}/agent-providers` — surcharge par agent enregistrée à la création (`agent_providers` sur `POST /api/sessions`).
+
 ---
 
 ## Fonctionnalités transverses
@@ -261,6 +315,10 @@ Comparer 2 à 4 sessions côte à côte — artefact Markdown exportable.
 ### Action Plan
 
 Génération automatique d'un plan d'action depuis la synthèse, enrichissable manuellement, persisté en SQLite.
+
+### Post-mortem & Rétrospective
+
+Après plusieurs semaines, vous pouvez **noter l’issue réelle** d’une décision (correct / partiel / incorrect) avec un niveau de confiance rétrospective. Les sessions listées peuvent afficher un **badge** de résultat. **Administration → Rétrospective** agrège les statistiques (totaux, par mode, par agent). Aucune génération LLM.
 
 ### Exports
 
@@ -284,7 +342,7 @@ Sessions pré-configurées (mode, agents, prompt starter). Créez les vôtres de
 Interface disponible en **Français** et **Anglais**. Switch via **FR / EN** dans la sidebar.  
 La langue des **réponses des agents** est définie par session (formulaire "Nouvelle session").
 
-Fichiers i18n : `frontend/i18n/fr.json`, `frontend/i18n/en.json`
+Fichiers i18n : `frontend/i18n.js` (traductions embarquées **fr** / **en** ; clés `persona.score.*`, `timeline.*`, `devil.advocate.*`, `agent.provider.*`, `postmortem.*`, `bias.*`, etc.)
 
 ### Logs applicatifs
 
@@ -312,6 +370,10 @@ Fichiers i18n : `frontend/i18n/fr.json`, `frontend/i18n/en.json`
 | **Action Plan** | Plan d'actions généré et enrichi manuellement |
 | **Rerun** | Nouvelle session dérivée d'une session existante |
 | **DR / CF / QD / ST / LA** | Decision Room / Confrontation / Quick Decision / Stress Test / Launch Assistant |
+| **Devil's Advocate** | Message qui challenge le consensus émergent (hors agrégation de votes) |
+| **Timeline de confiance** | Évolution de la « confiance » et de la position dominante par tour (analyse sans LLM) |
+| **Rapport de biais** | Détection heuristique de biais cognitifs dans la structure du débat (sans LLM) |
+| **Post-mortem** | Bilan utilisateur sur l’issue réelle d’une décision (correct / partiel / incorrect) |
 
 ---
 
@@ -395,8 +457,8 @@ decision-room-ai/
    - Importer `register<Feature>Feature()` et `register<Feature>Handlers()`
    - Appeler les deux dans `bootstrapModuleArchitecture()`
 4. Ajouter les endpoints backend si nécessaire
-5. Ajouter les traductions dans `frontend/i18n/fr.json` et `en.json`
-6. Vérifier le flux complet en UI
+5. Ajouter les traductions dans `frontend/i18n.js` (sections `fr` et `en`)
+6. Vérifier le flux complet en UI ; respect du **mode simple / expert** (`data-ui="expert-only"`)
 
 ### Conventions
 

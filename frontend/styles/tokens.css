@@ -1,3 +1,26 @@
 :root {
   --font-family-base: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  --color-dissent: #dc2626;
+}
+
+/* ── Devil's Advocate message card ── */
+.agent-card[data-devil-advocate="true"],
+.devil-advocate-card {
+  border-left: 3px solid var(--color-dissent) !important;
+  background: rgba(220, 38, 38, 0.04) !important;
+}
+
+.devil-advocate-card .agent-card-header::before {
+  content: "😈 ";
+}
+
+/* ── Provider badge (expert mode, per message) ── */
+.provider-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-family: monospace;
+  display: inline-block;
 }

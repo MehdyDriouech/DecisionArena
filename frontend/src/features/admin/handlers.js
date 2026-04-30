@@ -930,4 +930,21 @@ function registerScenarioPackAdminHandlers() {
   });
 }
 
-export { registerAdminHandlers, registerScenarioPackAdminHandlers };
+/* ══════════════════════════════════════════════════════════════════════
+   Feature 5 — Post-mortem stats (admin retrospective)
+═══════════════════════════════════════════════════════════════════════ */
+
+function registerRetrospectiveHandlers() {
+  registerAction('load-postmortem-stats', async () => {
+    const { state, render, apiFetch } = getCtx();
+    try {
+      const result = await apiFetch('/api/postmortems/stats');
+      state.postmortemStats = result;
+      render();
+    } catch (err) {
+      console.error('postmortem-stats', err.message);
+    }
+  });
+}
+
+export { registerAdminHandlers, registerScenarioPackAdminHandlers, registerRetrospectiveHandlers };
