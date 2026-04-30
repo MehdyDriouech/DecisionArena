@@ -1,0 +1,95 @@
+<?php
+namespace Controllers;
+
+use Http\Request;
+use Http\Response;
+use Infrastructure\Persistence\SessionRepository;
+use Infrastructure\Persistence\ContextDocumentRepository;
+use Domain\Orchestration\ConfrontationRunner;
+
+class ConfrontationController {
+    private SessionRepository $sessionRepo;
+    private ConfrontationRunner $runner;
+
+    public function __construct() {
+        $this->sessionRepo = new SessionRepository();
+        $this->runner      = new ConfrontationRunner();
+    }
+
+    public function run(Request $req): array {
+        $data = $req->body();
+
+        $sessionId       = $data['session_id'] ?? '';
+        $objective       = $data['objective']  ?? '';
+
+        if (!$sessionId || !$objective) {
+            return Response::error('session_id and objective required', 400);
+        }
+
+        $session = $this->sessionRepo->findById($sessionId);
+        if (!$session) {
+            return Response::error('Session not found', 404);
+        }
+
+        // Resolve selected agents (new unified list or legacy blue/red teams)
+        $blueTeam       = $data['blue_team'] ?? [];
+        $redTeam        = $data['red_team']  ?? [];
+        $selectedAgents = $data['selected_agents'] ?? [];
+
+        if (empty($selectedAgents)) {
+            $selectedAgents = array_unique(array_merge(
+                $blueTeam ?: ['pm', 'architect', 'po'],
+                $redTeam  ?: ['analyst', 'critic']
+            ));
+        }
+
+        // Confrontation settings (from request or session defaults)
+        $rounds            = (int)($data['rounds']             ?? $session['cf_rounds']             ?? 3);
+        $interactionStyle  = $data['interaction_style']        ?? $session['cf_interaction_style']  ?? 'sequential';
+        $replyPolicy       = $data['reply_policy']             ?? $session['cf_reply_policy']       ?? 'all-agents-reply';
+        $includeSynthesis  = (bool)($data['include_synthesis'] ?? $data['final_synthesis']          ?? true);
+        $forceDisagreement = (bool)($data['force_disagreement'] ?? $session['force_disagreement']   ?? false);
+        $language   = $session['language'] ?? 'fr';
+        $contextDoc = (new ContextDocumentRepository())->findBySession($sessionId);
+
+        if (!in_array($interactionStyle, ['sequential', 'agent-to-agent'], true)) {
+            return Response::error('Invalid interaction_style', 400);
+        }
+        if (!in_array($replyPolicy, ['all-agents-reply', 'only-mentioned-agent-replies', 'critic-priority'], true)) {
+            return Response::error('Invalid reply_policy', 400);
+        }
+
+        $result = $this->runner->run(
+            $sessionId,
+            $objective,
+            $selectedAgents,
+            $includeSynthesis,
+            $language,
+            $rounds,
+            $interactionStyle,
+            $replyPolicy,
+            $forceDisagreement,
+            $contextDoc
+        );
+
+        // Mark session as completed
+        $this->sessionRepo->update($sessionId, ['status' => 'completed']);
+
+        return [
+            'session_id'        => $sessionId,
+            'rounds'            => $result['rounds'],
+            'synthesis'         => $result['synthesis'],
+            'verdict'           => $result['verdict'] ?? null,
+            'total_rounds'      => $result['total_rounds'],
+            'interaction_style' => $result['interaction_style'],
+            'reply_policy'      => $result['reply_policy'] ?? $replyPolicy,
+            'arguments'         => $result['arguments'] ?? [],
+            'positions'         => $result['positions'] ?? [],
+            'interaction_edges' => $result['interaction_edges'] ?? [],
+            'weighted_analysis' => $result['weighted_analysis'] ?? [],
+            'dominance_indicator' => $result['dominance_indicator'] ?? '',
+            'votes'             => $result['votes'] ?? [],
+            'automatic_decision'=> $result['automatic_decision'] ?? null,
+        ];
+    }
+}
