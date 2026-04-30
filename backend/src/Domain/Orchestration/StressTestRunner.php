@@ -80,6 +80,10 @@ class StressTestRunner {
                 $agent = $this->assembler->assemble($agentId);
                 if (!$agent) continue;
 
+                $assignedTarget = ($round > 1 && $agentId !== 'synthesizer')
+                    ? $this->computeAssignedTarget($agentsForRound, $agentId, $round)
+                    : null;
+
                 try {
                     $messages = $this->promptBuilder->buildStressTestMessages(
                         $agent,
@@ -90,7 +94,8 @@ class StressTestRunner {
                         $language,
                         $forceDisagreement,
                         $contextDoc,
-                        $this->debateMemory->buildPromptContext($state)
+                        $this->debateMemory->buildPromptContext($state),
+                        $assignedTarget
                     );
 
                     $routed  = $this->providerRouter->chat($messages, $agent, null, null, $agentProviders[$agentId] ?? null);
@@ -111,7 +116,7 @@ class StressTestRunner {
                         'created_at'   => date('c'),
                     ]);
                     $roundMessages[] = $msg;
-                    $targetAgentId = $this->resolveLatestTargetAgent($previousRoundMessages, $agentId);
+                    $targetAgentId = $this->resolveTargetAgentId($content, $previousRoundMessages, $agentId, $assignedTarget);
                     $this->debateMemory->processMessage(
                         $sessionId,
                         $round,
@@ -237,14 +242,33 @@ class StressTestRunner {
         ];
     }
 
-    private function resolveLatestTargetAgent(array $previousRoundMessages, string $agentId): ?string {
-        for ($i = count($previousRoundMessages) - 1; $i >= 0; $i--) {
-            $candidate = $previousRoundMessages[$i]['agent_id'] ?? null;
-            if ($candidate && $candidate !== $agentId) {
-                return $candidate;
+    private function resolveTargetAgentId(string $content, array $previousRoundMessages, string $agentId, ?string $assignedTarget = null): ?string {
+        if (!empty($previousRoundMessages)) {
+            if (preg_match('/##\s*Target Agent\s*\n+\s*([a-z][a-z0-9-]*)/im', $content, $m)) {
+                $parsed = strtolower(trim($m[1]));
+                $valid  = array_map('strtolower', array_column($previousRoundMessages, 'agent_id'));
+                if (in_array($parsed, $valid, true) && $parsed !== strtolower($agentId)) {
+                    return $parsed;
+                }
+            }
+            if ($assignedTarget !== null) {
+                $valid = array_map('strtolower', array_column($previousRoundMessages, 'agent_id'));
+                if (in_array(strtolower($assignedTarget), $valid, true)) {
+                    return $assignedTarget;
+                }
             }
         }
         return null;
+    }
+
+    private function computeAssignedTarget(array $allAgentIds, string $agentId, int $round): ?string {
+        $others = array_values(array_filter($allAgentIds, fn($id) => $id !== $agentId && $id !== 'synthesizer'));
+        if (empty($others)) {
+            return null;
+        }
+        $nonSynth = array_values(array_filter($allAgentIds, fn($id) => $id !== 'synthesizer'));
+        $agentIdx = (int)(array_search($agentId, $nonSynth) ?: 0);
+        return $others[($agentIdx + $round) % count($others)];
     }
 
     private function uuid(): string {

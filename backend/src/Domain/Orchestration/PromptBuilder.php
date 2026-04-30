@@ -55,7 +55,8 @@ class PromptBuilder {
         string $language = 'en',
         bool $forceDisagreement = false,
         ?array $contextDoc = null,
-        ?array $memoryContext = null
+        ?array $memoryContext = null,
+        ?string $assignedTarget = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'decision-room', $language);
 
@@ -81,6 +82,9 @@ class PromptBuilder {
             $userContent .= "- Refer explicitly to previous arguments when relevant.\n\n";
         }
         $userContent .= "**Your Task:** $roundInstruction\n\n";
+        if ($round > 1 && $agent->id !== 'synthesizer') {
+            $userContent .= $this->buildTargetAgentHint($agent->id, $previousRoundMessages, $assignedTarget);
+        }
         $userContent .= "Use your default response format.";
         $userContent .= $this->buildWeightedOpinionInstruction();
 
@@ -166,12 +170,13 @@ class PromptBuilder {
         string $language = 'en',
         bool   $forceDisagreement = false,
         ?array $contextDoc = null,
-        ?array $memoryContext = null
+        ?array $memoryContext = null,
+        ?string $assignedTarget = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'confrontation', $language);
 
         $instruction = $this->getConfrontationRoundInstruction(
-            $currentRound, $totalRounds, $interactionStyle, $agent->id, $previousMessages
+            $currentRound, $totalRounds, $interactionStyle, $agent->id, $previousMessages, $assignedTarget
         );
 
         $userContent  = $this->buildContextDocumentContent($contextDoc);
@@ -379,7 +384,8 @@ class PromptBuilder {
         string $language = 'en',
         bool   $forceDisagreement = true,
         ?array $contextDoc = null,
-        ?array $memoryContext = null
+        ?array $memoryContext = null,
+        ?string $assignedTarget = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'stress-test', $language);
 
@@ -429,6 +435,7 @@ class PromptBuilder {
             $userContent .= "- Kill criteria: explicit conditions under which you would stop or pivot\n";
             $userContent .= "- De-risking actions that could be done before committing fully\n\n";
             $userContent .= "Be practical. Every action must be executable. Prefer small next steps.";
+            $userContent .= $this->buildTargetAgentHint($agent->id, $previousRoundMessages, $assignedTarget);
         }
 
         if ($forceDisagreement && !$isSynthesizer) {
@@ -643,11 +650,12 @@ class PromptBuilder {
     }
 
     private function getConfrontationRoundInstruction(
-        int    $currentRound,
-        int    $totalRounds,
-        string $interactionStyle,
-        string $agentId,
-        array  $prevMessages
+        int     $currentRound,
+        int     $totalRounds,
+        string  $interactionStyle,
+        string  $agentId,
+        array   $prevMessages,
+        ?string $assignedTarget = null
     ): string {
         if ($currentRound === 1) {
             return "ROUND 1 — INITIAL POSITION: State your position clearly on the objective above. Present your strongest arguments, be specific and evidence-based. Use your default response format.";
@@ -675,10 +683,12 @@ class PromptBuilder {
                 . "Do not repeat your previous answer.";
         }
 
+        $targetHint = $this->buildTargetAgentHint($agentId, $prevMessages, $assignedTarget);
         return "CHALLENGE ROUND — CRITICAL ANALYSIS: Review the previous round's positions. "
             . "Challenge the weakest argument you see with specific counter-evidence. "
             . "Update your own position if warranted. Avoid generic agreement. "
-            . "Use your default response format.";
+            . "Use your default response format."
+            . $targetHint;
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -761,5 +771,38 @@ class PromptBuilder {
     private function loadPrompt(string $name): ?string {
         $data = $this->loader->loadById('prompts', $name);
         return $data ? $data['content'] : null;
+    }
+
+    /**
+     * Generates a directive instruction telling the LLM which specific agent to
+     * challenge this round, using the standardised ## Target Agent format.
+     *
+     * When $assignedTarget is provided the instruction is mandatory ("you MUST");
+     * otherwise it remains optional and lists all available peers.
+     */
+    public function buildTargetAgentHint(string $agentId, array $previousMessages, ?string $assignedTarget = null): string {
+        if (empty($previousMessages)) {
+            return '';
+        }
+        $ids = array_values(array_unique(array_filter(
+            array_column($previousMessages, 'agent_id'),
+            fn($id) => !empty($id) && $id !== $agentId
+        )));
+        if (empty($ids)) {
+            return '';
+        }
+
+        if ($assignedTarget !== null && in_array($assignedTarget, $ids, true)) {
+            return "\n\n---\n\n"
+                . "**Interaction assignment:** For this round you MUST directly challenge **[{$assignedTarget}]**'s argument.\n"
+                . "Begin your response with this exact block (before any other text):\n\n"
+                . "## Target Agent\n{$assignedTarget}\n\n"
+                . "Then write your challenge, counter-argument, or rebuttal of their specific position.\n";
+        }
+
+        $list = implode(', ', $ids);
+        return "\n\n> **Interaction tracking (optional):** If your response directly challenges or builds on a specific agent's argument, begin your response with the following block before any other text:\n"
+            . "> ```\n> ## Target Agent\n> {agent_id}\n> ```\n"
+            . "> Replace `{agent_id}` with the exact ID of the agent you are responding to. Available IDs: **{$list}**.\n";
     }
 }

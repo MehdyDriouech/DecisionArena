@@ -192,17 +192,22 @@ class ConfrontationRunner {
             $agent = $this->assembler->assemble($agentId);
             if (!$agent) continue;
 
+            $assignedTarget = ($currentRound > 1 && $agentId !== 'synthesizer')
+                ? $this->computeAssignedTarget($agents, $agentId, $currentRound)
+                : null;
+
             try {
                 $messages = $this->promptBuilder->buildConfrontationRoundMessages(
                     $agent, $objective, $prevMessages,
                     $currentRound, $totalRounds,
-                    $interactionStyle, $language, $forceDisagreement, $contextDoc, $memoryContext
+                    $interactionStyle, $language, $forceDisagreement, $contextDoc, $memoryContext,
+                    $assignedTarget
                 );
 
                 $routed        = $this->providerRouter->chat($messages, $agent, null, null, $agentProviders[$agentId] ?? null);
                 $content       = $routed['content'];
-                $targetAgentId = ($interactionStyle === 'agent-to-agent' && $currentRound > 1)
-                    ? $this->parseTargetAgent($content)
+                $targetAgentId = ($currentRound > 1)
+                    ? ($this->parseTargetAgent($content) ?? $assignedTarget)
                     : null;
                 $targetAgentId = $this->validateTargetAgentId($targetAgentId, $prevMessages, $agentId);
 
@@ -408,6 +413,16 @@ class ConfrontationRunner {
         if ($round === 1) return 'initial-position';
         if ($round === $total) return 'final-position';
         return $style === 'agent-to-agent' ? 'agent-reply' : 'challenge';
+    }
+
+    private function computeAssignedTarget(array $allAgentIds, string $agentId, int $round): ?string {
+        $others = array_values(array_filter($allAgentIds, fn($id) => $id !== $agentId && $id !== 'synthesizer'));
+        if (empty($others)) {
+            return null;
+        }
+        $nonSynth = array_values(array_filter($allAgentIds, fn($id) => $id !== 'synthesizer'));
+        $agentIdx = (int)(array_search($agentId, $nonSynth) ?: 0);
+        return $others[($agentIdx + $round) % count($others)];
     }
 
     private function uuid(): string {

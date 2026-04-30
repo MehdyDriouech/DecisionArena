@@ -66,6 +66,15 @@ function renderMain() {
   const main  = document.getElementById('main-content');
   if (!main) return;
 
+  // Preserve scroll position when re-rendering the same view.
+  // On view navigation we intentionally reset to the top.
+  const prevView      = main.dataset.renderedView || '';
+  const sameView      = prevView === state.view;
+  const prevScroll    = sameView ? main.scrollTop : 0;
+  // Full-height views (confrontation, decision-room, …) scroll inside .dr-content
+  const innerEl       = sameView ? main.querySelector('.dr-content, .chat-messages') : null;
+  const innerScroll   = innerEl ? innerEl.scrollTop : 0;
+
   const isNoProviderError = state.error && (
     state.error.toLowerCase().includes('no provider') ||
     state.error.toLowerCase().includes('aucun provider') ||
@@ -94,6 +103,17 @@ function renderMain() {
     main.innerHTML = errorBanner + viewFn();
   } else {
     main.innerHTML = `<div class="view-container">${errorBanner}${viewFn()}</div>`;
+  }
+
+  main.dataset.renderedView = state.view;
+  if (sameView && (prevScroll > 0 || innerScroll > 0)) {
+    requestAnimationFrame(() => {
+      if (prevScroll > 0) main.scrollTop = prevScroll;
+      if (innerScroll > 0) {
+        const newInner = main.querySelector('.dr-content, .chat-messages');
+        if (newInner) newInner.scrollTop = innerScroll;
+      }
+    });
   }
 }
 

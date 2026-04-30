@@ -74,6 +74,10 @@ class DecisionRoomRunner {
                 $agent = $this->assembler->assemble($agentId);
                 if (!$agent) continue;
 
+                $assignedTarget = ($round > 1 && $agentId !== 'synthesizer')
+                    ? $this->computeAssignedTarget($agentsForRound, $agentId, $round)
+                    : null;
+
                 try {
                     $messages = $this->promptBuilder->buildDecisionRoomMessages(
                         $agent,
@@ -84,7 +88,8 @@ class DecisionRoomRunner {
                         $language,
                         $forceDisagreement,
                         $contextDoc,
-                        $this->debateMemory->buildPromptContext($state)
+                        $this->debateMemory->buildPromptContext($state),
+                        $assignedTarget
                     );
 
                     $routed  = $this->providerRouter->chat($messages, $agent, null, null, $agentProviders[$agentId] ?? null);
@@ -105,7 +110,7 @@ class DecisionRoomRunner {
                         'created_at'   => date('c'),
                     ]);
                     $roundMessages[] = $msg;
-                    $targetAgentId = $this->resolveLatestTargetAgent($previousRoundMessages, $agentId);
+                    $targetAgentId = $this->resolveTargetAgentId($content, $previousRoundMessages, $agentId, $assignedTarget);
                     $this->debateMemory->processMessage(
                         $sessionId,
                         $round,
@@ -232,14 +237,40 @@ class DecisionRoomRunner {
         ];
     }
 
-    private function resolveLatestTargetAgent(array $previousRoundMessages, string $agentId): ?string {
-        for ($i = count($previousRoundMessages) - 1; $i >= 0; $i--) {
-            $candidate = $previousRoundMessages[$i]['agent_id'] ?? null;
-            if ($candidate && $candidate !== $agentId) {
-                return $candidate;
+    private function resolveTargetAgentId(string $content, array $previousRoundMessages, string $agentId, ?string $assignedTarget = null): ?string {
+        if (!empty($previousRoundMessages)) {
+            // 1. Explicit LLM declaration takes priority
+            if (preg_match('/##\s*Target Agent\s*\n+\s*([a-z][a-z0-9-]*)/im', $content, $m)) {
+                $parsed = strtolower(trim($m[1]));
+                $valid  = array_map('strtolower', array_column($previousRoundMessages, 'agent_id'));
+                if (in_array($parsed, $valid, true) && $parsed !== strtolower($agentId)) {
+                    return $parsed;
+                }
+            }
+            // 2. Fall back to the pre-assigned target when LLM was silent
+            if ($assignedTarget !== null) {
+                $valid = array_map('strtolower', array_column($previousRoundMessages, 'agent_id'));
+                if (in_array(strtolower($assignedTarget), $valid, true)) {
+                    return $assignedTarget;
+                }
             }
         }
         return null;
+    }
+
+    /**
+     * Assigns a unique challenge target to each agent using a round-robin
+     * rotation so that all agents in the graph receive at least one incoming
+     * edge per round.
+     */
+    private function computeAssignedTarget(array $allAgentIds, string $agentId, int $round): ?string {
+        $others = array_values(array_filter($allAgentIds, fn($id) => $id !== $agentId && $id !== 'synthesizer'));
+        if (empty($others)) {
+            return null;
+        }
+        $nonSynth = array_values(array_filter($allAgentIds, fn($id) => $id !== 'synthesizer'));
+        $agentIdx = (int)(array_search($agentId, $nonSynth) ?: 0);
+        return $others[($agentIdx + $round) % count($others)];
     }
 
     private function uuid(): string {

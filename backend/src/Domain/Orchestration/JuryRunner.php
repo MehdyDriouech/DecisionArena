@@ -68,15 +68,23 @@ class JuryRunner {
                 $agent = $this->assembler->assemble($agentId);
                 if (!$agent) continue;
 
+                $assignedTarget = ($phase !== 'jury-opening')
+                    ? $this->computeAssignedTarget($debateAgents, $agentId, $round)
+                    : null;
+
                 try {
                     $messages = $this->buildJuryMessages(
                         $agent, $objective, $prevMessages,
                         $round, $rounds, $phase,
-                        $language, $forceDisagreement, $contextDoc
+                        $language, $forceDisagreement, $contextDoc, $assignedTarget
                     );
 
                     $routed  = $this->providerRouter->chat($messages, $agent);
                     $content = $routed['content'];
+
+                    $targetAgentId = ($phase !== 'jury-opening')
+                        ? ($this->parseJuryTargetAgent($content, $prevMessages, $agentId) ?? $assignedTarget)
+                        : null;
 
                     $msg = $this->messageRepo->create([
                         'id'              => $this->uuid(),
@@ -87,7 +95,7 @@ class JuryRunner {
                         'model'           => $routed['model'] ?? null,
                         'round'           => $round,
                         'phase'           => $phase,
-                        'target_agent_id' => null,
+                        'target_agent_id' => $targetAgentId,
                         'mode_context'    => 'jury',
                         'message_type'    => $phase,
                         'content'         => $content,
@@ -96,7 +104,7 @@ class JuryRunner {
                     $roundMessages[] = $msg;
 
                     $this->debateMemory->processMessage(
-                        $sessionId, $round, $agentId, $content, null, $state
+                        $sessionId, $round, $agentId, $content, $targetAgentId, $state
                     );
 
                     // Parse and save vote for every round
@@ -229,14 +237,16 @@ class JuryRunner {
         string $phase,
         string $language,
         bool   $forceDisagreement,
-        ?array $contextDoc
+        ?array $contextDoc,
+        ?string $assignedTarget = null
     ): array {
         $agentId = $agent->id;
 
         // System prompt — use agent persona
-        $persona  = $agent->description ?? $agent->name ?? $agentId;
-        $langNote = $language !== 'en' ? " Respond in language code: $language." : '';
-        $system   = "You are {$agent->name}, a {$persona} participating in a structured jury deliberation.$langNote\n";
+        $personaName  = $agent->persona->name ?? $agentId;
+        $personaTitle = $agent->persona->title ?: $personaName;
+        $langNote     = $language !== 'en' ? " Respond in language code: $language." : '';
+        $system       = "You are {$personaName}, a {$personaTitle} participating in a structured jury deliberation.$langNote\n";
         $system  .= "Your role: apply your domain expertise to evaluate the proposal rigorously.\n";
         $system  .= "Be direct, evidence-based, and precise. Disagree when warranted.";
 
@@ -261,16 +271,37 @@ class JuryRunner {
             $userContent .= "\n";
         }
 
+        // Build list of potential targets from previous messages
+        $prevAgentIds = array_values(array_unique(array_filter(
+            array_column($prevMessages, 'agent_id'),
+            fn($id) => !empty($id) && $id !== $agentId
+        )));
+        $targetList = !empty($prevAgentIds) ? implode(', ', $prevAgentIds) : '';
+
         // Phase-specific instruction
         if ($phase === 'jury-opening') {
             $instruction = "You are participating in a jury deliberation. Give your **Opening Statement**: your initial position, your strongest argument, your biggest concern, and your **Provisional Vote** using the vote format below.";
         } elseif ($phase === 'jury-cross-examination') {
-            $instruction = "**Cross Examination round**: Select one other jury member's argument to challenge or support. Name the target explicitly. State your agreement or disagreement, your specific objection, and update your vote.";
+            $effectiveTarget = $assignedTarget ?? ($targetList ? explode(', ', $targetList)[0] : null);
+            if ($effectiveTarget) {
+                $instruction = "**Cross Examination round**: You are assigned to challenge **[{$effectiveTarget}]**'s argument.\n\n"
+                    . "Begin your response with this exact block (before any other text):\n\n"
+                    . "## Target Agent\n{$effectiveTarget}\n\n"
+                    . "Then state your specific objection to their position, what you agree or disagree with, and update your vote.";
+            } else {
+                $instruction = "**Cross Examination round**: Challenge another jury member's argument. Begin with `## Target Agent\n{agent_id}` then state your objection and update your vote.";
+            }
         } elseif ($phase === 'jury-verdict') {
             $instruction = "**Committee Verdict**: As the synthesizer, produce the final committee verdict. Include: vote distribution summary, majority position, minority report, automatic decision, decision confidence, and recommended next action.";
         } else {
-            $deliberationRound = $round - 2; // relative deliberation count
-            $instruction = "**Deliberation round {$deliberationRound}**: Revise or defend your position. State what has changed since your last contribution, your final concern, and your **Final Vote**.";
+            $deliberationRound = $round - 2;
+            $effectiveTarget   = $assignedTarget ?? ($targetList ? explode(', ', $targetList)[0] : null);
+            $instruction = "**Deliberation round {$deliberationRound}**: Revise or defend your position.\n\n";
+            if ($effectiveTarget) {
+                $instruction .= "For this round, specifically address **[{$effectiveTarget}]**'s latest argument. Begin with:\n\n"
+                    . "## Target Agent\n{$effectiveTarget}\n\n";
+            }
+            $instruction .= "State what has changed since your last contribution, your final concern, and your **Final Vote**.";
         }
 
         $userContent .= "**Your task:** $instruction\n\n";
@@ -295,6 +326,35 @@ class JuryRunner {
             ['role' => 'system', 'content' => $system],
             ['role' => 'user',   'content' => $userContent],
         ];
+    }
+
+    private function computeAssignedTarget(array $allAgentIds, string $agentId, int $round): ?string {
+        $others = array_values(array_filter($allAgentIds, fn($id) => $id !== $agentId && $id !== 'synthesizer'));
+        if (empty($others)) {
+            return null;
+        }
+        $nonSynth = array_values(array_filter($allAgentIds, fn($id) => $id !== 'synthesizer'));
+        $agentIdx = (int)(array_search($agentId, $nonSynth) ?: 0);
+        return $others[($agentIdx + $round) % count($others)];
+    }
+
+    /**
+     * Parses an explicit ## Target Agent block from LLM output and validates
+     * that the declared agent actually spoke in the previous messages.
+     */
+    private function parseJuryTargetAgent(string $content, array $prevMessages, string $authorId): ?string {
+        if (!preg_match('/##\s*Target Agent\s*\n+\s*([a-z][a-z0-9-]*)/im', $content, $m)) {
+            return null;
+        }
+        $parsed = strtolower(trim($m[1]));
+        $valid  = array_map('strtolower', array_filter(
+            array_column($prevMessages, 'agent_id'),
+            fn($id) => !empty($id)
+        ));
+        if (!in_array($parsed, $valid, true) || $parsed === strtolower($authorId)) {
+            return null;
+        }
+        return $parsed;
     }
 
     private function uuid(): string {
