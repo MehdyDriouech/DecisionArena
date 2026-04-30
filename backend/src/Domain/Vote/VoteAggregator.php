@@ -1,6 +1,7 @@
 <?php
 namespace Domain\Vote;
 
+use Domain\DecisionReliability\ReliabilityConfig;
 use Infrastructure\Persistence\VoteRepository;
 
 class VoteAggregator {
@@ -10,7 +11,8 @@ class VoteAggregator {
         $this->repo = $repo ?? new VoteRepository();
     }
 
-    public function recompute(string $sessionId, float $threshold = 0.55): ?array {
+    public function recompute(string $sessionId, float $threshold = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD): ?array {
+        $threshold = ReliabilityConfig::normalizeThreshold($threshold);
         $votes = $this->repo->findVotesBySession($sessionId);
         if (empty($votes)) {
             return null;
@@ -81,7 +83,8 @@ class VoteAggregator {
     /**
      * Build a human-readable explanation of the automatic decision.
      */
-    public function getDecisionExplanation(string $sessionId, float $threshold = 0.55): array {
+    public function getDecisionExplanation(string $sessionId, float $threshold = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD): array {
+        $threshold = ReliabilityConfig::normalizeThreshold($threshold);
         $votes    = $this->repo->findVotesBySession($sessionId);
         $decision = $this->repo->findDecisionBySession($sessionId);
 

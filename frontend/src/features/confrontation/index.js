@@ -4,7 +4,7 @@
  * sessionHistory, and stressTest.
  */
 
-import { renderTooltip, renderPanelRecommendBadge } from '../../ui/components.js';
+import { renderTooltip, renderPanelRecommendBadge, renderCardDescription } from '../../ui/components.js';
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
 import { renderExportButtons, renderAgentChatPanel } from '../chat/view.js';
 import { renderDebateAuditPanel } from '../debateAudit/index.js';
@@ -156,21 +156,115 @@ function renderVoteExplanationInline(sessionId) {
   `;
 }
 
+function formatReliabilityOutcome(adj, t) {
+  if (!adj) return { text: t('vote.noDecision'), badgeClass: 'badge-muted' };
+  const fo = adj.final_outcome;
+  if (fo) {
+    const k = `decision.final_outcome.${fo}`;
+    const tr = t(k);
+    const text = tr !== k ? tr : String(fo).replace(/_/g, ' ');
+    let badgeClass = 'badge-success';
+    if (String(fo).includes('INSUFFICIENT')) badgeClass = 'badge-danger';
+    else if (String(fo).includes('FRAGILE') || String(fo).includes('NO_CONSENSUS')) badgeClass = 'badge-warning';
+    else if (String(fo).startsWith('NO_GO')) badgeClass = 'badge-danger';
+    return { text, badgeClass };
+  }
+  const ui = adj.legacy_decision_label || adj.ui_decision_label || adj.decision_label;
+  if (ui) {
+    let lk = `decision.label.${String(ui).toLowerCase()}`;
+    if (String(ui).toUpperCase() === 'ITERATE') {
+      lk = 'decision.label.needs-more-info';
+    }
+    if (String(ui).toUpperCase() === 'NO_CONSENSUS') {
+      lk = 'decision.label.no-consensus';
+    }
+    const lt = t(lk);
+    const text = lt !== lk ? lt : String(ui);
+    return { text, badgeClass: 'badge-info' };
+  }
+  return { text: t('vote.noDecision'), badgeClass: 'badge-muted' };
+}
+
+function translateReliabilityRecommended(recKeyOrText, t) {
+  if (!recKeyOrText) return '';
+  if (recKeyOrText === 'complete_context_rerun') return t('reliability.recommended.complete_context_rerun');
+  return recKeyOrText;
+}
+
 function renderWeightedVotePanel(source, sessionId) {
   const { state, escHtml, agentName, t } = getCtx();
   const votes = source?.votes || [];
   const decision = source?.automatic_decision || null;
+  const rawDecision = source?.raw_decision || decision;
+  const adjustedDecision = source?.adjusted_decision || null;
+  const displayDecision = adjustedDecision || decision;
+  const relSummary = source?.decision_reliability_summary || null;
+  const clarification = source?.context_clarification || null;
   if (!votes.length && !decision) return '';
   const voteRows = votes.map((v) => `<tr><td>${escHtml(agentName(v.agent_id))}</td><td>${escHtml(v.vote || '')}</td><td>${Number(v.confidence || 0)}</td><td>${Number(v.impact || 0)}</td><td>${Number(v.domain_weight || 0)}</td><td><strong>${Number(v.weight_score || 0).toFixed(2)}</strong></td><td>${escHtml(v.rationale || '')}</td></tr>`).join('');
   let distributionHtml = '';
   const summary = decision?.vote_summary && typeof decision.vote_summary === 'object' ? decision.vote_summary : null;
   if (summary?.decision_scores) distributionHtml = Object.entries(summary.decision_scores).map(([label, score]) => `<li>${escHtml(label)}: ${Math.round(Number(score) * 100)}%</li>`).join('');
-  const scorePercent = decision ? Math.round(Number(decision.decision_score || 0) * 100) : 0;
-  const thresholdPercent = decision ? Math.round(Number(decision.threshold_used || 0.55) * 100) : 55;
-  const label = decision?.decision_label ? decision.decision_label : t('vote.noDecision');
-  const confidence = decision?.confidence_level ? decision.confidence_level : '-';
+  const scorePercent = displayDecision ? Math.round(Number(displayDecision.decision_score || 0) * 100) : 0;
+  const thresholdPercent = displayDecision ? Math.round(Number(displayDecision.threshold_used || 0.55) * 100) : 55;
+  const outcomeFmt = formatReliabilityOutcome(adjustedDecision || displayDecision, t);
+  const label = outcomeFmt.text;
+  const outcomeBadge = adjustedDecision?.final_outcome
+    ? `<span class="badge ${outcomeFmt.badgeClass}" style="font-size:12px;">${escHtml(label)}</span>`
+    : `<span>${escHtml(label)}</span>`;
+  const confidence = displayDecision?.confidence_level ? displayDecision.confidence_level : '-';
+  const rawUi = rawDecision?.decision_label != null ? String(rawDecision.decision_label) : null;
+  const adjUi = adjustedDecision ? String(adjustedDecision.legacy_decision_label || adjustedDecision.ui_decision_label || '') : '';
+  const showAdjustment = Boolean(adjustedDecision && rawUi && adjUi && rawUi.toLowerCase() !== adjUi.toLowerCase());
+  const adjustmentHint = showAdjustment
+    ? `<div style="margin-top:6px;font-size:12px;color:var(--warning,#f59e0b);">⚖️ ${t('reliability.adjustedDecision')}: <strong>${escHtml(rawUi)}</strong> → <strong>${escHtml(adjUi)}</strong></div>`
+    : '';
+  const voteTaxonomy = adjustedDecision?.vote_label || adjustedDecision?.decision_label;
+  const statusLine = adjustedDecision?.decision_status
+    ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">${t('reliability.voteLabel')}: <strong>${escHtml(String(voteTaxonomy || '—'))}</strong> · ${t('reliability.qualityStatus')}: <strong>${escHtml(String(adjustedDecision.decision_status))}</strong></div>`
+    : '';
 
-  // Show confirmation badge only when the last recompute targets THIS session
+  const topIssues = Array.isArray(relSummary?.top_issues) ? relSummary.top_issues : [];
+  const issuesHtml = topIssues.length
+    ? `<div style="margin-top:12px;padding:12px;background:var(--bg-secondary);border-radius:8px;border-left:3px solid var(--warning,#f59e0b);">
+        <div style="font-weight:600;font-size:12px;margin-bottom:6px;">${t('reliability.block.why')}</div>
+        <ul class="debate-list" style="margin:0;padding-left:18px;">${topIssues.map((it) => {
+          const key = typeof it === 'object' && it?.key ? it.key : String(it);
+          const msg = t(key);
+          return `<li>${escHtml(msg !== key ? msg : key)}</li>`;
+        }).join('')}</ul>
+      </div>`
+    : '';
+  const recRaw = relSummary?.recommended_action || '';
+  const recText = translateReliabilityRecommended(recRaw, t);
+  const todoHtml = recRaw
+    ? `<div style="margin-top:10px;padding:12px;background:var(--bg-secondary);border-radius:8px;border-left:3px solid var(--accent);">
+        <div style="font-weight:600;font-size:12px;margin-bottom:6px;">${t('reliability.block.todo')}</div>
+        <div style="font-size:13px;color:var(--text-secondary);">${escHtml(recText)}</div>
+      </div>`
+    : '';
+
+  const clarifyQs = Array.isArray(clarification?.questions) ? clarification.questions : [];
+  const insufficient = adjustedDecision?.final_outcome === 'INSUFFICIENT_CONTEXT';
+  const clarifyHtml = insufficient && clarifyQs.length
+    ? `<div style="margin-top:12px;padding:14px;background:rgba(239,68,68,0.06);border-radius:8px;border:1px solid rgba(239,68,68,0.2);">
+        <div style="font-weight:600;font-size:13px;margin-bottom:8px;">${t('reliability.missingBlockTitle')}</div>
+        <ul class="debate-list" style="margin:0 0 10px 18px;">${clarifyQs.map((q) => {
+          if (q && typeof q === 'object' && q.key) {
+            const tk = t(q.key);
+            const line = tk !== q.key ? tk : (q.fallback || q.key);
+            return `<li>${escHtml(line)}</li>`;
+          }
+          return '';
+        }).filter(Boolean).join('')}</ul>
+        ${sessionId ? `<button type="button" class="btn btn-primary btn-sm" data-action="scroll-to-session-objective">${t('reliability.cta.completeAndRerun')}</button>` : ''}
+      </div>`
+    : '';
+
+  const relLevel = relSummary?.reliability_level
+    ? `<span>${t('reliability.summaryLevel')}: <strong>${escHtml(relSummary.reliability_level)}</strong></span>`
+    : '';
+
   const lastRecompute = state.lastRecomputeThreshold ?? null;
   const recomputeForThis = lastRecompute?.sessionId === sessionId ? lastRecompute.threshold : null;
   const recomputeBadge = recomputeForThis !== null
@@ -191,7 +285,72 @@ function renderWeightedVotePanel(source, sessionId) {
   ` : '';
   const hl = panelHighlightsFromState(state);
   const titleRow = `🗳️ ${t('vote.weightedFinalVote')} ${renderTooltip(t('tooltip.votes'))} ${renderPanelRecommendBadge('votes', hl, t)}`;
-  return `<div class="card debate-card" style="margin:16px 0 24px;"><div class="debate-card-title" style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;">${titleRow}</div><div class="card-description">${t('panel.votes.desc')}</div><div class="debate-dominance" style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;"><span><strong>${t('vote.finalDecision')}:</strong> ${escHtml(label)}</span><span>${t('vote.decisionScore')}: ${scorePercent}%</span><span>${t('vote.confidenceLevel')}: ${escHtml(confidence)}</span><span>${t('vote.thresholdUsed')}: <strong>${thresholdPercent}%</strong></span></div><div style="overflow:auto;"><table class="debate-table"><thead><tr><th>${t('debate.agent')}</th><th>${t('vote.vote')}</th><th>${t('debate.confidence')}</th><th>${t('debate.impact')}</th><th>${t('debate.domainWeight')}</th><th>${t('debate.weightScore')}</th><th>${t('vote.rationale')}</th></tr></thead><tbody>${voteRows || `<tr><td colspan="7">${t('vote.noVotes')}</td></tr>`}</tbody></table></div>${distributionHtml ? `<div class="debate-subtitle">${t('vote.distribution')}</div><ul class="debate-list">${distributionHtml}</ul>` : ''}${actionsHtml}</div>`;
+  const mainBlock = `
+    <div class="debate-dominance" style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">
+      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:10px;">
+        <span><strong>${t('reliability.finalOutcome')}:</strong></span>${outcomeBadge}
+      </div>
+      <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:13px;">
+        <span>${t('vote.decisionScore')}: <strong>${scorePercent}%</strong></span>
+        <span>${t('vote.confidenceLevel')}: <strong>${escHtml(confidence)}</strong></span>
+        <span>${t('vote.thresholdUsed')}: <strong>${thresholdPercent}%</strong></span>
+        ${relLevel}
+      </div>
+      ${statusLine}
+    </div>`;
+
+  return `<div class="card debate-card" style="margin:16px 0 24px;"><div class="debate-card-title" style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;">${titleRow}</div>${renderCardDescription({ text: t('panel.votes.desc') })}${mainBlock}${adjustmentHint}${issuesHtml}${todoHtml}${clarifyHtml}<div style="overflow:auto;margin-top:12px;"><table class="debate-table"><thead><tr><th>${t('debate.agent')}</th><th>${t('vote.vote')}</th><th>${t('debate.confidence')}</th><th>${t('debate.impact')}</th><th>${t('debate.domainWeight')}</th><th>${t('debate.weightScore')}</th><th>${t('vote.rationale')}</th></tr></thead><tbody>${voteRows || `<tr><td colspan="7">${t('vote.noVotes')}</td></tr>`}</tbody></table></div>${distributionHtml ? `<div class="debate-subtitle">${t('vote.distribution')}</div><ul class="debate-list">${distributionHtml}</ul>` : ''}${actionsHtml}</div>`;
+}
+
+function renderDecisionReliabilityCard(source) {
+  const { escHtml, t } = getCtx();
+  const contextQuality = source?.context_quality || null;
+  const rawDecision = source?.raw_decision || source?.automatic_decision || null;
+  const adjustedDecision = source?.adjusted_decision || null;
+  const risk = source?.false_consensus_risk || source?.false_consensus?.false_consensus_risk || null;
+  const warnings = Array.isArray(source?.reliability_warnings) ? source.reliability_warnings : [];
+  const relSummary = source?.decision_reliability_summary || null;
+  const fc = source?.false_consensus || {};
+  if (!contextQuality && !adjustedDecision && !risk && warnings.length === 0) return '';
+
+  const level = contextQuality?.level || 'unknown';
+  const scorePct = Math.round(Number(contextQuality?.score || 0) * 100);
+  const semPct = contextQuality?.semantic_density != null ? Math.round(Number(contextQuality.semantic_density) * 100) : null;
+  const capPct = Math.round(Number(source?.reliability_cap ?? contextQuality?.reliability_cap ?? 1) * 100);
+  const rawPct = Math.round(Number(rawDecision?.decision_score || 0) * 100);
+  const adjPct = Math.round(Number(adjustedDecision?.decision_score || rawDecision?.decision_score || 0) * 100);
+  const missing = Array.isArray(contextQuality?.missing_information) ? contextQuality.missing_information : [];
+  const recommendations = Array.isArray(fc.recommendations) ? fc.recommendations : [];
+  const divScore = fc.diversity_score != null ? fc.diversity_score : null;
+  const riskBadge = risk === 'high' ? 'badge-danger' : risk === 'medium' ? 'badge-warning' : 'badge-success';
+  const levelBadge = level === 'weak' ? 'badge-danger' : level === 'medium' ? 'badge-warning' : 'badge-success';
+  const hintDup = relSummary?.top_issues?.length
+    ? `<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">${t('reliability.seeVotePanelForDetails')}</div>`
+    : '';
+  const issuesBlock = !relSummary?.top_issues?.length && missing.length
+    ? `<div style="margin-top:10px;"><div style="font-weight:600;font-size:13px;">${t('reliability.missingInformation')}</div><ul class="debate-list">${missing.slice(0, 6).map((m) => `<li>${escHtml(m)}</li>`).join('')}</ul></div>`
+    : '';
+
+  return `
+    <div class="card debate-card" style="margin:16px 0 24px;">
+      <div class="debate-card-title" style="display:flex;align-items:center;gap:6px;">🛡️ ${t('reliability.title')} ${renderTooltip(t('tooltip.reliability'))}</div>
+      ${renderCardDescription({ text: t('reliability.desc') })}
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">
+        <span class="badge ${levelBadge}">${t('reliability.contextQuality')}: ${escHtml(level)} (${scorePct}%)</span>
+        <span class="badge ${riskBadge}">${t('reliability.falseConsensusRisk')}: ${escHtml(risk || 'low')}</span>
+        <span class="badge badge-info">${t('reliability.cap')}: ${capPct}%</span>
+        ${semPct != null ? `<span class="badge badge-muted">${t('reliability.semanticDensity')}: ${semPct}%</span>` : ''}
+        ${divScore != null ? `<span class="badge badge-muted">${t('reliability.diversityScore')}: ${escHtml(String(divScore))} ${renderTooltip(t('tooltip.diversityScore'))}</span>` : ''}
+      </div>
+      <div style="margin-top:10px;font-size:13px;color:var(--text-secondary);">
+        <strong>${t('reliability.rawVsAdjusted')}:</strong> ${rawPct}% → ${adjPct}%
+      </div>
+      ${hintDup}
+      ${issuesBlock}
+      ${recommendations.length ? `<div style="margin-top:10px;"><div style="font-weight:600;font-size:13px;">${t('reliability.recommendation')}</div><ul class="debate-list">${recommendations.slice(0, 3).map((r) => `<li>${escHtml(r)}</li>`).join('')}</ul></div>` : ''}
+      ${warnings.length ? `<div style="margin-top:10px;"><div style="font-weight:600;font-size:13px;">${t('audit.warnings')}</div><ul class="debate-list">${warnings.slice(0, 5).map((w) => `<li>${escHtml(w)}</li>`).join('')}</ul></div>` : ''}
+    </div>
+  `;
 }
 
 function renderVerdictCard(verdict) {
@@ -242,6 +401,7 @@ function renderConfrontationResults(results) {
     const sid = state.currentSession?.id ?? '';
     html += renderDebateInsightsPanels(results);
     html += renderWeightedVotePanel(results, sid);
+    html += renderDecisionReliabilityCard(results);
     html += renderGraphViewPanel(sid);
     html += renderDebateAuditPanel(sid);
     html += renderArgumentHeatmapPanel(sid);
@@ -264,6 +424,7 @@ function renderConfrontationResults(results) {
   const sid2 = state.currentSession?.id ?? '';
   return legacyHtml
     + renderWeightedVotePanel(results, sid2)
+    + renderDecisionReliabilityCard(results)
     + renderGraphViewPanel(sid2)
     + renderDebateAuditPanel(sid2)
     + renderArgumentHeatmapPanel(sid2)
@@ -330,6 +491,7 @@ function registerConfrontationFeature() {
     renderConfrontationAgentCard,
     renderDebateInsightsPanels,
     renderWeightedVotePanel,
+    renderDecisionReliabilityCard,
     renderVerdictCard,
     renderSessionMemoryPanel,
     renderSessionContextDocPanel,
@@ -346,6 +508,7 @@ export {
   renderWeightedPositionsCard,
   renderInteractionGraphCard,
   renderWeightedVotePanel,
+  renderDecisionReliabilityCard,
   renderVerdictCard,
   renderSessionMemoryPanel,
   renderSessionContextDocPanel,

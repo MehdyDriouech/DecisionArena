@@ -1,6 +1,8 @@
 <?php
 namespace Infrastructure\Persistence;
 
+use Domain\DecisionReliability\ReliabilityConfig;
+
 class SessionRepository {
     private \PDO $pdo;
 
@@ -27,12 +29,14 @@ class SessionRepository {
                 (id, title, mode, initial_prompt, selected_agents, rounds, language,
                  status, cf_rounds, cf_interaction_style, cf_reply_policy,
                  is_favorite, is_reference, force_disagreement,
+                 decision_threshold, context_quality_score, context_quality_level, context_quality_report, reliability_cap,
                  parent_session_id, rerun_reason,
                  created_at, updated_at)
             VALUES
                 (:id, :title, :mode, :initial_prompt, :selected_agents, :rounds, :language,
                  :status, :cf_rounds, :cf_interaction_style, :cf_reply_policy,
                  :is_favorite, :is_reference, :force_disagreement,
+                 :decision_threshold, :context_quality_score, :context_quality_level, :context_quality_report, :reliability_cap,
                  :parent_session_id, :rerun_reason,
                  :created_at, :updated_at)
         ');
@@ -53,6 +57,13 @@ class SessionRepository {
             ':is_favorite'          => $data['is_favorite'] ?? 0,
             ':is_reference'         => $data['is_reference'] ?? 0,
             ':force_disagreement'   => $data['force_disagreement'] ?? 0,
+            ':decision_threshold'   => $data['decision_threshold'] ?? ReliabilityConfig::DEFAULT_DECISION_THRESHOLD,
+            ':context_quality_score'=> $data['context_quality_score'] ?? null,
+            ':context_quality_level'=> $data['context_quality_level'] ?? null,
+            ':context_quality_report'=> is_array($data['context_quality_report'] ?? null)
+                                        ? json_encode($data['context_quality_report'], JSON_UNESCAPED_UNICODE)
+                                        : ($data['context_quality_report'] ?? null),
+            ':reliability_cap'      => $data['reliability_cap'] ?? null,
             ':parent_session_id'    => $data['parent_session_id'] ?? null,
             ':rerun_reason'         => $data['rerun_reason'] ?? null,
             ':created_at'           => $data['created_at'],
@@ -84,6 +95,12 @@ class SessionRepository {
 
     private function decodeRow(array $row): array {
         $row['selected_agents'] = json_decode($row['selected_agents'] ?? '[]', true) ?? [];
+        if (!empty($row['context_quality_report']) && is_string($row['context_quality_report'])) {
+            $decoded = json_decode($row['context_quality_report'], true);
+            if (is_array($decoded)) {
+                $row['context_quality_report'] = $decoded;
+            }
+        }
         return $row;
     }
 }

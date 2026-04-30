@@ -2,6 +2,8 @@
 namespace Domain\Orchestration;
 
 use Domain\Agents\AgentAssembler;
+use Domain\DecisionReliability\DecisionReliabilityService;
+use Domain\DecisionReliability\ReliabilityConfig;
 use Domain\Providers\ProviderRouter;
 use Domain\Verdict\VerdictParser;
 use Domain\Vote\VoteAggregator;
@@ -19,6 +21,7 @@ class QuickDecisionRunner {
     private VoteRepository $voteRepo;
     private VoteParser $voteParser;
     private VoteAggregator $voteAggregator;
+    private DecisionReliabilityService $reliabilityService;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -29,6 +32,7 @@ class QuickDecisionRunner {
         $this->voteRepo      = new VoteRepository();
         $this->voteParser    = new VoteParser();
         $this->voteAggregator = new VoteAggregator($this->voteRepo);
+        $this->reliabilityService = new DecisionReliabilityService();
     }
 
     public function run(
@@ -37,9 +41,11 @@ class QuickDecisionRunner {
         array  $selectedAgents,
         string $language          = 'en',
         bool   $forceDisagreement = false,
-        ?array $contextDoc        = null
+        ?array $contextDoc        = null,
+        float  $decisionThreshold = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD
     ): array {
         $warning = null;
+        $decisionThreshold = ReliabilityConfig::normalizeThreshold($decisionThreshold);
         $this->voteRepo->clearSession($sessionId);
 
         $nonSynth = array_values(array_filter($selectedAgents, fn($a) => $a !== 'synthesizer'));
@@ -120,7 +126,7 @@ class QuickDecisionRunner {
 
         $synthesis = [];
         $verdict   = null;
-        $automaticDecision = $this->voteAggregator->recompute($sessionId, 0.55);
+        $automaticDecision = $this->voteAggregator->recompute($sessionId, $decisionThreshold);
 
         $synthAgent = $this->assembler->assemble('synthesizer');
         if ($synthAgent) {
@@ -175,6 +181,16 @@ class QuickDecisionRunner {
             }
         }
 
+        $reliability = $this->reliabilityService->buildEnvelope(
+            $objective,
+            $contextDoc,
+            $automaticDecision,
+            $this->voteRepo->findVotesBySession($sessionId),
+            [],
+            [],
+            $decisionThreshold
+        );
+
         return [
             'round'     => $roundMessages,
             'synthesis' => $synthesis,
@@ -182,6 +198,15 @@ class QuickDecisionRunner {
             'warning'   => $warning,
             'votes' => $this->voteRepo->findVotesBySession($sessionId),
             'automatic_decision' => $automaticDecision,
+            'raw_decision' => $reliability['raw_decision'],
+            'adjusted_decision' => $reliability['adjusted_decision'],
+            'context_quality' => $reliability['context_quality'],
+            'reliability_cap' => $reliability['reliability_cap'],
+            'false_consensus_risk' => $reliability['false_consensus_risk'],
+            'false_consensus' => $reliability['false_consensus'],
+            'reliability_warnings' => $reliability['reliability_warnings'],
+            'decision_reliability_summary' => $reliability['decision_reliability_summary'] ?? null,
+            'context_clarification' => $reliability['context_clarification'] ?? null,
         ];
     }
 

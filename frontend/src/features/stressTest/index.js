@@ -53,9 +53,10 @@ function renderStressTestResults(results) {
   const sessionId      = window.DecisionArena.store.state.currentSession?.id ?? '';
   const insightsHtml   = shared.renderDebateInsightsPanels ? shared.renderDebateInsightsPanels(results) : '';
   const voteHtml       = shared.renderWeightedVotePanel    ? shared.renderWeightedVotePanel(results, sessionId) : '';
+  const reliabilityHtml = shared.renderDecisionReliabilityCard ? shared.renderDecisionReliabilityCard(results) : '';
   const verdictHtml    = results.verdict && shared.renderVerdictCard ? shared.renderVerdictCard(results.verdict) : '';
 
-  return roundsHtml + insightsHtml + voteHtml + verdictHtml
+  return roundsHtml + insightsHtml + voteHtml + reliabilityHtml + verdictHtml
     + renderGraphViewPanel(sessionId)
     + renderDebateAuditPanel(sessionId)
     + renderArgumentHeatmapPanel(sessionId)

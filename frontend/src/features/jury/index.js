@@ -4,7 +4,7 @@
 
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
 import { renderExportButtons, renderAgentChatPanel } from '../chat/view.js';
-import { renderWeightedVotePanel } from '../confrontation/index.js';
+import { renderWeightedVotePanel, renderDecisionReliabilityCard } from '../confrontation/index.js';
 import { renderDebateAuditPanel } from '../debateAudit/index.js';
 import { renderArgumentHeatmapPanel } from '../argumentHeatmap/index.js';
 import { renderDebateReplayPanel } from '../debateReplay/index.js';
@@ -84,6 +84,7 @@ function renderJuryResults(results) {
   return roundsHtml
     + synthHtml
     + renderLiveVotePanel(results, sessionId)
+    + renderDecisionReliabilityCard(results)
     + renderGraphViewPanel(sessionId)
     + renderArgumentHeatmapPanel(sessionId)
     + renderDebateAuditPanel(sessionId)

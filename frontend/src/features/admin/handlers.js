@@ -937,12 +937,27 @@ function registerScenarioPackAdminHandlers() {
 function registerRetrospectiveHandlers() {
   registerAction('load-postmortem-stats', async () => {
     const { state, render, apiFetch } = getCtx();
+    state.postmortemStatsLoading = true;
+    state.postmortemStatsError = null;
+    render();
     try {
       const result = await apiFetch('/api/postmortems/stats');
-      state.postmortemStats = result;
-      render();
+      const total = Number(result?.total ?? 0);
+      state.postmortemStats = {
+        total,
+        correct: Number(result?.correct ?? 0),
+        incorrect: Number(result?.incorrect ?? 0),
+        partial: Number(result?.partial ?? 0),
+        by_mode: result?.by_mode && typeof result.by_mode === 'object' ? result.by_mode : {},
+        by_agent: result?.by_agent && typeof result.by_agent === 'object' ? result.by_agent : {},
+      };
+      state.postmortemStatsError = null;
     } catch (err) {
-      console.error('postmortem-stats', err.message);
+      console.error('postmortem-stats', err);
+      state.postmortemStatsError = err?.message || String(err);
+    } finally {
+      state.postmortemStatsLoading = false;
+      render();
     }
   });
 }

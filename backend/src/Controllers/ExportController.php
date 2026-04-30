@@ -1,6 +1,8 @@
 <?php
 namespace Controllers;
 
+use Domain\DecisionReliability\DecisionReliabilityService;
+use Domain\DecisionReliability\ReliabilityConfig;
 use Http\Request;
 use Http\Response;
 use Infrastructure\Persistence\SessionRepository;
@@ -12,6 +14,9 @@ use Infrastructure\Persistence\ActionPlanRepository;
 use Infrastructure\Persistence\DebateRepository;
 use Infrastructure\Persistence\VoteRepository;
 use Infrastructure\Persistence\ProviderRoutingSettingsRepository;
+use Infrastructure\Persistence\ConfidenceTimelineRepository;
+use Infrastructure\Persistence\PersonaScoreRepository;
+use Infrastructure\Persistence\BiasReportRepository;
 use Domain\Orchestration\DebateMemoryService;
 
 class ExportController {
@@ -25,6 +30,10 @@ class ExportController {
     private VoteRepository            $voteRepo;
     private ProviderRoutingSettingsRepository $providerRoutingRepo;
     private DebateMemoryService       $debateMemory;
+    private DecisionReliabilityService $reliabilityService;
+    private ConfidenceTimelineRepository $timelineRepo;
+    private PersonaScoreRepository $personaScoreRepo;
+    private BiasReportRepository $biasRepo;
 
     public function __construct() {
         $this->sessionRepo  = new SessionRepository();
@@ -37,6 +46,10 @@ class ExportController {
         $this->voteRepo     = new VoteRepository();
         $this->providerRoutingRepo = new ProviderRoutingSettingsRepository();
         $this->debateMemory = new DebateMemoryService();
+        $this->reliabilityService = new DecisionReliabilityService();
+        $this->timelineRepo = new ConfidenceTimelineRepository();
+        $this->personaScoreRepo = new PersonaScoreRepository();
+        $this->biasRepo = new BiasReportRepository();
     }
 
     public function export(Request $req): array {
@@ -55,6 +68,21 @@ class ExportController {
         $edges      = $this->debateRepo->findEdgesBySession($id);
         $votes      = $this->voteRepo->findVotesBySession($id);
         $decision   = $this->voteRepo->findDecisionBySession($id);
+        $threshold  = ReliabilityConfig::normalizeThreshold($session['decision_threshold'] ?? null);
+        $objective  = (string)($session['initial_prompt'] ?? '');
+        $timelineRows = $this->timelineRepo->findBySession($id);
+        $reliability = $this->reliabilityService->buildEnvelope(
+            $objective,
+            $contextDoc,
+            $decision,
+            $votes,
+            $positions,
+            $edges,
+            $threshold,
+            $timelineRows ? ['rounds' => $timelineRows] : null,
+            $this->personaScoreRepo->findBySession($id),
+            $this->biasRepo->findBySession($id)
+        );
 
         $actionPlan = $this->planRepo->findBySession($id);
 
@@ -76,6 +104,15 @@ class ExportController {
                 'votes'                => $votes,
                 'decision'             => $decision,
                 'automatic_decision'   => $decision,
+                'raw_decision'         => $reliability['raw_decision'],
+                'adjusted_decision'    => $reliability['adjusted_decision'],
+                'context_quality'      => $reliability['context_quality'],
+                'reliability_cap'      => $reliability['reliability_cap'],
+                'false_consensus_risk' => $reliability['false_consensus_risk'],
+                'false_consensus'      => $reliability['false_consensus'],
+                'reliability_warnings' => $reliability['reliability_warnings'],
+                'decision_reliability_summary' => $reliability['decision_reliability_summary'] ?? null,
+                'context_clarification' => $reliability['context_clarification'] ?? null,
                 'weighted_analysis'    => $this->debateMemory->buildWeightedAnalysis($debateState),
                 'dominance_indicator'  => $this->debateMemory->buildDominanceIndicator($debateState),
                 'action_plan'          => $actionPlan,
@@ -90,7 +127,7 @@ class ExportController {
 
         $routing = null;
         try { $routing = $this->providerRoutingRepo->get(); } catch (\Throwable $e) { $routing = null; }
-        $content = $this->buildMarkdown($session, $messages, $contextDoc, $actionPlan, $arguments, $positions, $edges, $votes, $decision, $routing);
+        $content = $this->buildMarkdown($session, $messages, $contextDoc, $actionPlan, $arguments, $positions, $edges, $votes, $decision, $routing, $reliability);
         return [
             'format'   => 'markdown',
             'content'  => $content,
@@ -114,10 +151,25 @@ class ExportController {
         $edges      = $this->debateRepo->findEdgesBySession($id);
         $votes      = $this->voteRepo->findVotesBySession($id);
         $decision   = $this->voteRepo->findDecisionBySession($id);
+        $threshold  = ReliabilityConfig::normalizeThreshold($session['decision_threshold'] ?? null);
+        $objective  = (string)($session['initial_prompt'] ?? '');
+        $timelineRows = $this->timelineRepo->findBySession($id);
+        $reliability = $this->reliabilityService->buildEnvelope(
+            $objective,
+            $contextDoc,
+            $decision,
+            $votes,
+            $positions,
+            $edges,
+            $threshold,
+            $timelineRows ? ['rounds' => $timelineRows] : null,
+            $this->personaScoreRepo->findBySession($id),
+            $this->biasRepo->findBySession($id)
+        );
         $routing     = null;
         try { $routing = $this->providerRoutingRepo->get(); } catch (\Throwable $e) { $routing = null; }
         $debateState = ['arguments' => $arguments, 'positions' => $positions, 'edges' => $edges];
-        $md          = $this->buildMarkdown($session, $messages, $contextDoc, null, $arguments, $positions, $edges, $votes, $decision, $routing);
+        $md          = $this->buildMarkdown($session, $messages, $contextDoc, null, $arguments, $positions, $edges, $votes, $decision, $routing, $reliability);
         $json        = json_encode([
             'session'             => $session,
             'messages'            => $messages,
@@ -129,6 +181,15 @@ class ExportController {
             'votes'               => $votes,
             'decision'            => $decision,
             'automatic_decision'  => $decision,
+            'raw_decision'        => $reliability['raw_decision'],
+            'adjusted_decision'   => $reliability['adjusted_decision'],
+            'context_quality'     => $reliability['context_quality'],
+            'reliability_cap'     => $reliability['reliability_cap'],
+            'false_consensus_risk'=> $reliability['false_consensus_risk'],
+            'false_consensus'     => $reliability['false_consensus'],
+            'reliability_warnings'=> $reliability['reliability_warnings'],
+            'decision_reliability_summary' => $reliability['decision_reliability_summary'] ?? null,
+            'context_clarification' => $reliability['context_clarification'] ?? null,
             'weighted_analysis'   => $this->debateMemory->buildWeightedAnalysis($debateState),
             'dominance_indicator' => $this->debateMemory->buildDominanceIndicator($debateState),
             'action_plan'         => null,
@@ -162,7 +223,8 @@ class ExportController {
         array  $edges             = [],
         array  $votes             = [],
         ?array $automaticDecision = null,
-        ?array $routing           = null
+        ?array $routing           = null,
+        ?array $reliability       = null
     ): string {
         $agents = is_array($session['selected_agents'])
             ? implode(', ', $session['selected_agents'])
@@ -301,7 +363,7 @@ class ExportController {
             $label     = $automaticDecision['decision_label']    ?? 'no-consensus';
             $scorePct  = round((float)($automaticDecision['decision_score'] ?? 0) * 100, 1);
             $conf      = $automaticDecision['confidence_level']  ?? 'low';
-            $threshold = round((float)($automaticDecision['threshold_used'] ?? 0.55) * 100, 1);
+            $threshold = round((float)($automaticDecision['threshold_used'] ?? ReliabilityConfig::DEFAULT_DECISION_THRESHOLD) * 100, 1);
             $md .= "- **Decision:** {$label}\n";
             $md .= "- **Score:** {$scorePct}%\n";
             $md .= "- **Confidence:** {$conf}\n";
@@ -319,6 +381,60 @@ class ExportController {
             $md .= "\n";
         } else {
             $md .= "_No automatic decision computed._\n\n";
+        }
+
+        if (!empty($reliability)) {
+            $md .= "### Decision Reliability\n\n";
+            $cq = $reliability['context_quality'] ?? [];
+            $adj = $reliability['adjusted_decision'] ?? [];
+            $md .= "- **Context quality:** " . (($cq['level'] ?? 'unknown')) . " (" . round((float)($cq['score'] ?? 0), 2) . ")\n";
+            $md .= "- **Semantic density:** " . round((float)($cq['semantic_density'] ?? 0), 2) . "\n";
+            $md .= "- **Reliability cap:** " . round((float)($reliability['reliability_cap'] ?? 1), 2) . "\n";
+            $md .= "- **False consensus risk:** " . ($reliability['false_consensus_risk'] ?? 'low') . "\n";
+            $fc = $reliability['false_consensus'] ?? [];
+            if (isset($fc['diversity_score'])) {
+                $md .= "- **Argument diversity score:** " . $fc['diversity_score'] . " (low values increase risk)\n";
+            }
+            if (!empty($adj['final_outcome'])) {
+                $md .= "- **Final outcome:** " . $adj['final_outcome'] . " (vote: " . ($adj['vote_label'] ?? $adj['decision_label'] ?? '') . ", quality: " . ($adj['decision_status'] ?? '') . ")\n";
+                if (!empty($adj['legacy_decision_label'])) {
+                    $md .= "- **Legacy display label:** " . $adj['legacy_decision_label'] . "\n";
+                }
+            } elseif (!empty($adj['decision_label'])) {
+                $md .= "- **Adjusted vote label:** " . $adj['decision_label'] . " (" . round((float)($adj['decision_score'] ?? 0) * 100, 1) . "%)\n";
+            }
+            $rsum = $reliability['decision_reliability_summary'] ?? null;
+            if (is_array($rsum)) {
+                $md .= "- **Decision possible:** " . (($rsum['decision_possible'] ?? true) ? 'yes' : 'no') . "\n";
+                $md .= "- **Reliability level:** " . ($rsum['reliability_level'] ?? '') . "\n";
+                if (!empty($rsum['recommended_action'])) {
+                    $md .= "- **Recommended action:** " . $rsum['recommended_action'] . "\n";
+                }
+                if (!empty($rsum['top_issues']) && is_array($rsum['top_issues'])) {
+                    $md .= "- **Top issues:**\n";
+                    foreach ($rsum['top_issues'] as $iss) {
+                        if (is_array($iss) && isset($iss['key'])) {
+                            $md .= "  - " . $iss['key'] . "\n";
+                        }
+                    }
+                }
+            }
+            $cl = $reliability['context_clarification'] ?? null;
+            if (is_array($cl) && !empty($cl['questions'])) {
+                $md .= "- **Clarification prompts:**\n";
+                foreach ($cl['questions'] as $q) {
+                    if (is_array($q)) {
+                        $md .= "  - " . ($q['key'] ?? '') . ": " . ($q['fallback'] ?? '') . "\n";
+                    }
+                }
+            }
+            if (!empty($reliability['reliability_warnings']) && is_array($reliability['reliability_warnings'])) {
+                $md .= "- **Warnings:**\n";
+                foreach ($reliability['reliability_warnings'] as $w) {
+                    $md .= "  - " . $w . "\n";
+                }
+            }
+            $md .= "\n";
         }
 
         // ── 9. Action Plan ────────────────────────────────────────────────

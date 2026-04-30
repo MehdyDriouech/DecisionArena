@@ -20,7 +20,7 @@ function renderSidebar() {
     { id: 'administration',   icon: '⚙️', label: t('nav.admin') },
   ];
 
-  const adminViews   = ['personas', 'persona-builder', 'persona-maker', 'providers', 'souls', 'templates', 'template-maker', 'scenario-packs', 'logs'];
+  const adminViews   = ['personas', 'persona-builder', 'persona-maker', 'providers', 'souls', 'templates', 'template-maker', 'scenario-packs', 'logs', 'retrospective'];
   const featureViews = ['launch-assistant', 'session-comparisons', 'session-comparison'];
   const isAdminSubView = adminViews.includes(state.view);
 

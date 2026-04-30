@@ -2,6 +2,9 @@
 namespace Domain\Orchestration;
 
 use Domain\Agents\AgentAssembler;
+use Domain\DecisionReliability\DecisionReliabilityService;
+use Domain\DecisionReliability\DevilAdvocateTriggerPolicy;
+use Domain\DecisionReliability\ReliabilityConfig;
 use Domain\Providers\ProviderRouter;
 use Domain\Verdict\VerdictParser;
 use Domain\Vote\VoteAggregator;
@@ -21,6 +24,8 @@ class ConfrontationRunner {
     private VoteRepository $voteRepo;
     private VoteParser $voteParser;
     private VoteAggregator $voteAggregator;
+    private DevilAdvocateTriggerPolicy $daTriggerPolicy;
+    private DecisionReliabilityService $reliabilityService;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -32,6 +37,8 @@ class ConfrontationRunner {
         $this->voteRepo      = new VoteRepository();
         $this->voteParser    = new VoteParser();
         $this->voteAggregator = new VoteAggregator($this->voteRepo);
+        $this->daTriggerPolicy = new DevilAdvocateTriggerPolicy();
+        $this->reliabilityService = new DecisionReliabilityService();
     }
 
     /**
@@ -50,9 +57,11 @@ class ConfrontationRunner {
         ?array $contextDoc             = null,
         bool   $devilAdvocateEnabled   = false,
         float  $devilAdvocateThreshold = 0.65,
-        array  $agentProviders         = []
+        array  $agentProviders         = [],
+        float  $decisionThreshold      = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD
     ): array {
         $rounds = min(max($rounds, 1), 15);
+        $decisionThreshold = ReliabilityConfig::normalizeThreshold($decisionThreshold);
 
         // Split synthesizer out — it runs separately at the end
         $activeAgents = array_values(array_filter($selectedAgents, fn($a) => $a !== 'synthesizer'));
@@ -64,6 +73,16 @@ class ConfrontationRunner {
         $prevMessages = [];
         $state        = $this->debateMemory->loadState($sessionId);
         $this->voteRepo->clearSession($sessionId);
+        $daPartialHistory = [];
+        $contextQuality = $this->reliabilityService->buildEnvelope(
+            $objective,
+            $contextDoc,
+            null,
+            [],
+            [],
+            [],
+            $decisionThreshold
+        )['context_quality'];
 
         $daPromptPath = __DIR__ . '/../../../storage/prompts/devil_advocate.md';
         $daPrompt     = file_exists($daPromptPath) ? file_get_contents($daPromptPath) : '';
@@ -91,7 +110,15 @@ class ConfrontationRunner {
                     }
                 }
                 $partialConfidence = $positiveCount / max(1, count($roundMessages));
-                if ($partialConfidence > $devilAdvocateThreshold) {
+                if ($this->daTriggerPolicy->shouldTrigger(
+                    $round,
+                    $partialConfidence,
+                    $devilAdvocateThreshold,
+                    [
+                        'partial_confidence_history' => $daPartialHistory,
+                        'context_quality' => $contextQuality,
+                    ]
+                )) {
                     $last3   = array_slice($roundMessages, -3);
                     $context = implode("\n\n", array_map(
                         fn($m) => '[' . ($m['agent_id'] ?? 'agent') . ']: ' . ($m['content'] ?? ''),
@@ -123,6 +150,7 @@ class ConfrontationRunner {
                         error_log('[ConfrontationRunner] Devil advocate failed: ' . $e->getMessage());
                     }
                 }
+                $daPartialHistory[] = $partialConfidence;
             }
 
             $allRounds[$round] = $roundMessages;
@@ -130,7 +158,7 @@ class ConfrontationRunner {
         }
 
         // Optional synthesis by the synthesizer agent
-        $automaticDecision = $this->voteAggregator->recompute($sessionId, 0.55);
+        $automaticDecision = $this->voteAggregator->recompute($sessionId, $decisionThreshold);
         $synthesis = [];
         $verdict   = null;
         if ($includeSynthesis) {
@@ -150,6 +178,15 @@ class ConfrontationRunner {
         }
 
         $weighted = $this->debateMemory->buildWeightedAnalysis($state);
+        $reliability = $this->reliabilityService->buildEnvelope(
+            $objective,
+            $contextDoc,
+            $automaticDecision,
+            $this->voteRepo->findVotesBySession($sessionId),
+            $state['positions'],
+            $state['edges'],
+            $decisionThreshold
+        );
         return [
             'rounds'            => $allRounds,
             'synthesis'         => $synthesis,
@@ -164,6 +201,15 @@ class ConfrontationRunner {
             'dominance_indicator' => $this->debateMemory->buildDominanceIndicator($state),
             'votes' => $this->voteRepo->findVotesBySession($sessionId),
             'automatic_decision' => $automaticDecision,
+            'raw_decision' => $reliability['raw_decision'],
+            'adjusted_decision' => $reliability['adjusted_decision'],
+            'context_quality' => $reliability['context_quality'],
+            'reliability_cap' => $reliability['reliability_cap'],
+            'false_consensus_risk' => $reliability['false_consensus_risk'],
+            'false_consensus' => $reliability['false_consensus'],
+            'reliability_warnings' => $reliability['reliability_warnings'],
+            'decision_reliability_summary' => $reliability['decision_reliability_summary'] ?? null,
+            'context_clarification' => $reliability['context_clarification'] ?? null,
         ];
     }
 

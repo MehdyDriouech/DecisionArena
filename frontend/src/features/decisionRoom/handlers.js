@@ -98,14 +98,41 @@ function registerDecisionRoomHandlers() {
       if (state.sessionHistory) {
         if (decision !== null) state.sessionHistory.automatic_decision = decision;
         if (votes !== null)    state.sessionHistory.votes = votes;
+        state.sessionHistory.raw_decision = result.raw_decision ?? state.sessionHistory.raw_decision;
+        state.sessionHistory.adjusted_decision = result.adjusted_decision ?? state.sessionHistory.adjusted_decision;
+        state.sessionHistory.context_quality = result.context_quality ?? state.sessionHistory.context_quality;
+        state.sessionHistory.reliability_cap = result.reliability_cap ?? state.sessionHistory.reliability_cap;
+        state.sessionHistory.false_consensus_risk = result.false_consensus_risk ?? state.sessionHistory.false_consensus_risk;
+        state.sessionHistory.false_consensus = result.false_consensus ?? state.sessionHistory.false_consensus;
+        state.sessionHistory.reliability_warnings = result.reliability_warnings ?? state.sessionHistory.reliability_warnings;
+        state.sessionHistory.decision_reliability_summary = result.decision_reliability_summary ?? state.sessionHistory.decision_reliability_summary;
+        state.sessionHistory.context_clarification = result.context_clarification ?? state.sessionHistory.context_clarification;
       }
       if (state.drResults) {
         if (decision !== null) state.drResults.automatic_decision = decision;
         if (votes !== null)    state.drResults.votes = votes;
+        state.drResults.raw_decision = result.raw_decision ?? state.drResults.raw_decision;
+        state.drResults.adjusted_decision = result.adjusted_decision ?? state.drResults.adjusted_decision;
+        state.drResults.context_quality = result.context_quality ?? state.drResults.context_quality;
+        state.drResults.reliability_cap = result.reliability_cap ?? state.drResults.reliability_cap;
+        state.drResults.false_consensus_risk = result.false_consensus_risk ?? state.drResults.false_consensus_risk;
+        state.drResults.false_consensus = result.false_consensus ?? state.drResults.false_consensus;
+        state.drResults.reliability_warnings = result.reliability_warnings ?? state.drResults.reliability_warnings;
+        state.drResults.decision_reliability_summary = result.decision_reliability_summary ?? state.drResults.decision_reliability_summary;
+        state.drResults.context_clarification = result.context_clarification ?? state.drResults.context_clarification;
       }
       if (state.confrontationResults) {
         if (decision !== null) state.confrontationResults.automatic_decision = decision;
         if (votes !== null)    state.confrontationResults.votes = votes;
+        state.confrontationResults.raw_decision = result.raw_decision ?? state.confrontationResults.raw_decision;
+        state.confrontationResults.adjusted_decision = result.adjusted_decision ?? state.confrontationResults.adjusted_decision;
+        state.confrontationResults.context_quality = result.context_quality ?? state.confrontationResults.context_quality;
+        state.confrontationResults.reliability_cap = result.reliability_cap ?? state.confrontationResults.reliability_cap;
+        state.confrontationResults.false_consensus_risk = result.false_consensus_risk ?? state.confrontationResults.false_consensus_risk;
+        state.confrontationResults.false_consensus = result.false_consensus ?? state.confrontationResults.false_consensus;
+        state.confrontationResults.reliability_warnings = result.reliability_warnings ?? state.confrontationResults.reliability_warnings;
+        state.confrontationResults.decision_reliability_summary = result.decision_reliability_summary ?? state.confrontationResults.decision_reliability_summary;
+        state.confrontationResults.context_clarification = result.context_clarification ?? state.confrontationResults.context_clarification;
       }
       state.voteExplanation      = null;
       state.voteExplanationError = null;

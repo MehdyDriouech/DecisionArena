@@ -72,6 +72,15 @@ function registerSessionsHandlers() {
           dominance_indicator: data.dominance_indicator || '',
           votes:               data.votes               || [],
           automatic_decision:  data.automatic_decision  || null,
+          raw_decision:        data.raw_decision        || null,
+          adjusted_decision:   data.adjusted_decision   || null,
+          context_quality:     data.context_quality     || null,
+          reliability_cap:     data.reliability_cap     || null,
+          false_consensus_risk: data.false_consensus_risk || 'low',
+          false_consensus:     data.false_consensus     || null,
+          reliability_warnings: data.reliability_warnings || [],
+          decision_reliability_summary: data.decision_reliability_summary ?? null,
+          context_clarification: data.context_clarification ?? null,
         };
         try {
           const vd = await SessionService.getVerdict(sessionId);
@@ -87,6 +96,13 @@ function registerSessionsHandlers() {
           if (state.sessionHistory) {
             state.sessionHistory.decisionSummary  = sum;
             state.sessionHistory.panelHighlights = Array.isArray(sum?.highlights) ? sum.highlights : [];
+            state.sessionHistory.context_quality = ds?.context_quality ?? state.sessionHistory.context_quality;
+            state.sessionHistory.reliability_cap = ds?.reliability_cap ?? state.sessionHistory.reliability_cap;
+            state.sessionHistory.adjusted_decision = ds?.adjusted_decision ?? state.sessionHistory.adjusted_decision;
+            state.sessionHistory.false_consensus_risk = ds?.false_consensus_risk ?? state.sessionHistory.false_consensus_risk;
+            state.sessionHistory.reliability_warnings = ds?.reliability_warnings ?? state.sessionHistory.reliability_warnings;
+            state.sessionHistory.decision_reliability_summary = ds?.decision_reliability_summary ?? state.sessionHistory.decision_reliability_summary;
+            state.sessionHistory.context_clarification = ds?.context_clarification ?? state.sessionHistory.context_clarification;
           }
         } catch (_) {
           if (state.sessionHistory) {

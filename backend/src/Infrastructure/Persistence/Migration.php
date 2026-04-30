@@ -1,6 +1,8 @@
 <?php
 namespace Infrastructure\Persistence;
 
+use Domain\DecisionReliability\ReliabilityConfig;
+
 class Migration {
     private \PDO $pdo;
 
@@ -368,7 +370,11 @@ class Migration {
         $this->addColumnIfMissing('messages', 'target_agent_id', 'TEXT NULL');
         $this->addColumnIfMissing('messages', 'mode_context', 'TEXT NULL');
         $this->addColumnIfMissing('messages', 'message_type', 'TEXT NULL');
-        $this->addColumnIfMissing('sessions', 'decision_threshold', 'REAL DEFAULT 0.55');
+        $this->addColumnIfMissing('sessions', 'decision_threshold', 'REAL DEFAULT ' . ReliabilityConfig::DEFAULT_DECISION_THRESHOLD);
+        $this->addColumnIfMissing('sessions', 'context_quality_score', 'REAL DEFAULT NULL');
+        $this->addColumnIfMissing('sessions', 'context_quality_level', 'TEXT DEFAULT NULL');
+        $this->addColumnIfMissing('sessions', 'context_quality_report', 'TEXT DEFAULT NULL');
+        $this->addColumnIfMissing('sessions', 'reliability_cap', 'REAL DEFAULT NULL');
 
         // Providers (routing + ordering)
         $this->addColumnIfMissing('providers', 'priority', 'INTEGER DEFAULT 100');
@@ -637,7 +643,7 @@ class Migration {
                 persona_ids        TEXT NOT NULL DEFAULT '[]',
                 rounds             INTEGER DEFAULT 2,
                 force_disagreement INTEGER DEFAULT 0,
-                decision_threshold REAL DEFAULT 0.55,
+                decision_threshold REAL DEFAULT " . ReliabilityConfig::DEFAULT_DECISION_THRESHOLD . ",
                 prompt_starter     TEXT,
                 max_personas       INTEGER NULL,
                 enabled            INTEGER DEFAULT 1,
@@ -664,7 +670,7 @@ class Migration {
                 'persona_ids'        => json_encode(['dev','qa','architect','ux-expert','critic','synthesizer']),
                 'rounds'             => 2,
                 'force_disagreement' => 1,
-                'decision_threshold' => 0.55,
+                'decision_threshold' => ReliabilityConfig::DEFAULT_DECISION_THRESHOLD,
                 'prompt_starter'     => 'Analyse and prioritise this backlog item or user story. Challenge feasibility, value, edge cases and effort.',
                 'max_personas'       => null,
             ],
@@ -720,7 +726,7 @@ class Migration {
                 'persona_ids'        => json_encode(['analyst','pm','ux-expert','critic']),
                 'rounds'             => 3,
                 'force_disagreement' => 0,
-                'decision_threshold' => 0.55,
+                'decision_threshold' => ReliabilityConfig::DEFAULT_DECISION_THRESHOLD,
                 'prompt_starter'     => 'Simulate market reaction to this campaign or launch message. Challenge positioning, target audience fit and potential backfires.',
                 'max_personas'       => null,
             ],

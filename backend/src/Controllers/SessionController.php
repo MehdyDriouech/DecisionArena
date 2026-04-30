@@ -1,11 +1,17 @@
 <?php
 namespace Controllers;
 
+use Domain\DecisionReliability\DecisionReliabilityService;
+use Domain\DecisionReliability\ReliabilityConfig;
 use Domain\Orchestration\DebateMemoryService;
 use Http\Request;
 use Http\Response;
 use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\MessageRepository;
+use Infrastructure\Persistence\ConfidenceTimelineRepository;
+use Infrastructure\Persistence\PersonaScoreRepository;
+use Infrastructure\Persistence\BiasReportRepository;
+use Infrastructure\Persistence\ContextDocumentRepository;
 use Infrastructure\Persistence\SessionAgentProvidersRepository;
 use Infrastructure\Persistence\SnapshotRepository;
 use Infrastructure\Persistence\DebateRepository;
@@ -18,6 +24,11 @@ class SessionController {
     private DebateRepository               $debateRepo;
     private DebateMemoryService            $debateMemory;
     private VoteRepository                 $voteRepo;
+    private ContextDocumentRepository      $contextDocRepo;
+    private ConfidenceTimelineRepository   $timelineRepo;
+    private PersonaScoreRepository         $personaScoreRepo;
+    private BiasReportRepository           $biasRepo;
+    private DecisionReliabilityService     $reliabilityService;
     private SessionAgentProvidersRepository $agentProvidersRepo;
 
     public function __construct() {
@@ -27,6 +38,11 @@ class SessionController {
         $this->debateRepo         = new DebateRepository();
         $this->debateMemory       = new DebateMemoryService($this->debateRepo);
         $this->voteRepo           = new VoteRepository();
+        $this->contextDocRepo     = new ContextDocumentRepository();
+        $this->timelineRepo       = new ConfidenceTimelineRepository();
+        $this->personaScoreRepo   = new PersonaScoreRepository();
+        $this->biasRepo           = new BiasReportRepository();
+        $this->reliabilityService = new DecisionReliabilityService();
         $this->agentProvidersRepo = new SessionAgentProvidersRepository();
     }
 
@@ -46,6 +62,22 @@ class SessionController {
         $edges = $this->debateRepo->findEdgesBySession($id);
         $votes = $this->voteRepo->findVotesBySession($id);
         $decision = $this->voteRepo->findDecisionBySession($id);
+        $contextDoc = $this->contextDocRepo->findBySession($id);
+        $threshold = ReliabilityConfig::normalizeThreshold($session['decision_threshold'] ?? null);
+        $objective = (string)($session['initial_prompt'] ?? '');
+        $timelineRows = $this->timelineRepo->findBySession($id);
+        $reliability = $this->reliabilityService->buildEnvelope(
+            $objective,
+            $contextDoc,
+            $decision,
+            $votes,
+            $positions,
+            $edges,
+            $threshold,
+            $timelineRows ? ['rounds' => $timelineRows] : null,
+            $this->personaScoreRepo->findBySession($id),
+            $this->biasRepo->findBySession($id)
+        );
         $state = ['arguments' => $arguments, 'positions' => $positions, 'edges' => $edges];
         return [
             'session' => $session,
@@ -57,6 +89,15 @@ class SessionController {
             'dominance_indicator' => $this->debateMemory->buildDominanceIndicator($state),
             'votes' => $votes,
             'automatic_decision' => $decision,
+            'raw_decision' => $reliability['raw_decision'],
+            'adjusted_decision' => $reliability['adjusted_decision'],
+            'context_quality' => $reliability['context_quality'],
+            'reliability_cap' => $reliability['reliability_cap'],
+            'false_consensus_risk' => $reliability['false_consensus_risk'],
+            'false_consensus' => $reliability['false_consensus'],
+            'reliability_warnings' => $reliability['reliability_warnings'],
+            'decision_reliability_summary' => $reliability['decision_reliability_summary'] ?? null,
+            'context_clarification' => $reliability['context_clarification'] ?? null,
         ];
     }
 
@@ -82,6 +123,7 @@ class SessionController {
             'is_favorite'          => 0,
             'is_reference'         => 0,
             'force_disagreement'   => (int)($data['force_disagreement'] ?? 0),
+            'decision_threshold'   => ReliabilityConfig::normalizeThreshold($data['decision_threshold'] ?? null),
             'parent_session_id'    => $data['parent_session_id'] ?? null,
             'rerun_reason'         => $data['rerun_reason'] ?? null,
             'created_at'           => $now,
@@ -139,8 +181,7 @@ class SessionController {
             return Response::error('Session not found', 404);
         }
         $data      = $req->body();
-        $threshold = (float)($data['decision_threshold'] ?? 0.55);
-        if ($threshold <= 0 || $threshold >= 1) $threshold = 0.55;
+        $threshold = ReliabilityConfig::normalizeThreshold($data['decision_threshold'] ?? null);
         $this->sessionRepo->update($id, ['decision_threshold' => $threshold]);
         return ['session' => $this->sessionRepo->findById($id)];
     }

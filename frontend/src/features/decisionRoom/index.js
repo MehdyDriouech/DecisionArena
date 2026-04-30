@@ -4,7 +4,7 @@
 
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
 import { renderExportButtons, renderAgentChatPanel } from '../chat/view.js';
-import { renderDebateInsightsPanels, renderWeightedVotePanel } from '../confrontation/index.js';
+import { renderDebateInsightsPanels, renderWeightedVotePanel, renderDecisionReliabilityCard } from '../confrontation/index.js';
 import { renderDebateAuditPanel } from '../debateAudit/index.js';
 import { renderGraphViewPanel } from '../graphView/index.js';
 import { renderArgumentHeatmapPanel } from '../argumentHeatmap/index.js';
@@ -88,6 +88,7 @@ function renderDRResults(results) {
   return roundsHtml
     + renderDebateInsightsPanels(results)
     + renderWeightedVotePanel(results, sessionId)
+    + renderDecisionReliabilityCard(results)
     + renderGraphViewPanel(sessionId)
     + renderDebateAuditPanel(sessionId)
     + renderArgumentHeatmapPanel(sessionId)

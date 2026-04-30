@@ -110,6 +110,13 @@ function registerSessionHistoryHandlers() {
     document.getElementById('rerun-modal-overlay')?.remove();
   });
 
+  registerAction('scroll-to-session-objective', () => {
+    const el = document.getElementById('session-objective-preview');
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  });
+
   registerAction('toggle-rerun-variation', ({ element }) => {
     const { state } = getCtx();
     const v   = element.dataset.variation;

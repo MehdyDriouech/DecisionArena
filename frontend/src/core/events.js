@@ -23,6 +23,19 @@ async function dispatchAction(actionName, context = {}) {
 }
 
 function bindGlobalEventDelegation(root = document) {
+  /* ── keyboard: data-nav on non-button cards (div[tabindex], etc.) ───────── */
+  root.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const navEl = e.target.closest('[data-nav]');
+    if (!navEl || !root.contains(navEl)) return;
+    if (navEl.matches('button, a[href]')) return;
+    const tag = (e.target.tagName || '').toUpperCase();
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    e.preventDefault();
+    try { window.DecisionArena.services?.LogService?.logUiAction?.('nav', { to: navEl.dataset.nav }); } catch (_) {}
+    window.DecisionArena.router.navigate(navEl.dataset.nav);
+  });
+
   /* ── click: data-nav then data-action ─────────────────────────────────── */
   root.addEventListener('click', async (e) => {
     const navEl = e.target.closest('[data-nav]');

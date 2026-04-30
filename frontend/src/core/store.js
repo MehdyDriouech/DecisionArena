@@ -184,6 +184,9 @@ const createInitialState = () => ({
     saveStatus: null,
     saveMessage: '',
   },
+  postmortemStats: null,
+  postmortemStatsLoading: false,
+  postmortemStatsError: null,
   templateMakerData: {
     id: '',
     name: '',

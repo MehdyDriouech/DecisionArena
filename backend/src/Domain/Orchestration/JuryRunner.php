@@ -2,6 +2,8 @@
 namespace Domain\Orchestration;
 
 use Domain\Agents\AgentAssembler;
+use Domain\DecisionReliability\DecisionReliabilityService;
+use Domain\DecisionReliability\ReliabilityConfig;
 use Domain\Providers\ProviderRouter;
 use Domain\Vote\VoteAggregator;
 use Domain\Vote\VoteParser;
@@ -17,6 +19,7 @@ class JuryRunner {
     private VoteParser         $voteParser;
     private VoteAggregator     $voteAggregator;
     private DebateMemoryService $debateMemory;
+    private DecisionReliabilityService $reliabilityService;
 
     public function __construct() {
         $this->assembler      = new AgentAssembler();
@@ -26,6 +29,7 @@ class JuryRunner {
         $this->voteParser     = new VoteParser();
         $this->voteAggregator = new VoteAggregator($this->voteRepo);
         $this->debateMemory   = new DebateMemoryService(new DebateRepository());
+        $this->reliabilityService = new DecisionReliabilityService();
     }
 
     public function run(
@@ -38,6 +42,7 @@ class JuryRunner {
         string $language,
         ?array $contextDoc
     ): array {
+        $threshold = ReliabilityConfig::normalizeThreshold($threshold);
         // Clamp rounds between 2 and 5
         $rounds = min(max($rounds, 2), 5);
 
@@ -204,6 +209,15 @@ class JuryRunner {
         $allRounds[$rounds] = $verdictMessages;
 
         $automaticDecision = $this->voteAggregator->recompute($sessionId, $threshold);
+        $reliability = $this->reliabilityService->buildEnvelope(
+            $objective,
+            $contextDoc,
+            $automaticDecision,
+            $allVotes,
+            $state['positions'] ?? [],
+            $state['edges'] ?? [],
+            $threshold
+        );
 
         return [
             'session_id'         => $sessionId,
@@ -217,6 +231,15 @@ class JuryRunner {
             'votes'              => $allVotes,
             'automatic_decision' => $automaticDecision,
             'threshold'          => $threshold,
+            'raw_decision' => $reliability['raw_decision'],
+            'adjusted_decision' => $reliability['adjusted_decision'],
+            'context_quality' => $reliability['context_quality'],
+            'reliability_cap' => $reliability['reliability_cap'],
+            'false_consensus_risk' => $reliability['false_consensus_risk'],
+            'false_consensus' => $reliability['false_consensus'],
+            'reliability_warnings' => $reliability['reliability_warnings'],
+            'decision_reliability_summary' => $reliability['decision_reliability_summary'] ?? null,
+            'context_clarification' => $reliability['context_clarification'] ?? null,
         ];
     }
 

@@ -1,6 +1,8 @@
 <?php
 namespace Domain\Orchestration;
 
+use Domain\DecisionReliability\ReliabilityConfig;
+
 /**
  * Heuristic decision synthesis from existing session data (no LLM).
  */
@@ -26,8 +28,16 @@ class DecisionSummaryService {
         $labelRaw = null;
         if ($verdict && !empty($verdict['verdict_label'])) {
             $labelRaw = (string)$verdict['verdict_label'];
-        } elseif ($decision && !empty($decision['decision_label'])) {
-            $labelRaw = (string)$decision['decision_label'];
+        } elseif ($decision) {
+            $labelRaw = (string)(
+                $decision['legacy_decision_label']
+                ?? $decision['ui_decision_label']
+                ?? $decision['decision_label']
+                ?? ''
+            );
+            if ($labelRaw === '') {
+                $labelRaw = null;
+            }
         }
 
         $tri = $this->mapTriState($labelRaw);
@@ -59,11 +69,17 @@ class DecisionSummaryService {
             return 'ITERATE';
         }
         $l = strtolower(trim($label));
-        if (in_array($l, ['go', 'ship', 'approve'], true)) {
+        if (in_array($l, ['go', 'go_fragile', 'ship', 'approve'], true)) {
             return 'GO';
         }
-        if (in_array($l, ['no-go', 'no_go', 'reject', 'stop'], true) || str_contains($l, 'no-go')) {
+        if (in_array($l, ['no-go', 'no_go', 'no_go_fragile', 'reject', 'stop'], true) || str_contains($l, 'no-go')) {
             return 'NO-GO';
+        }
+        if ($l === 'no_consensus') {
+            return 'ITERATE';
+        }
+        if ($l === 'insufficient_context') {
+            return 'ITERATE';
         }
         return 'ITERATE';
     }
@@ -80,7 +96,7 @@ class DecisionSummaryService {
             return max(0.0, min(1.0, (float)$decision['decision_score']));
         }
         if ($votes !== [] && $decision) {
-            $vs = (float)($decision['decision_score'] ?? 0.55);
+            $vs = (float)($decision['decision_score'] ?? ReliabilityConfig::DEFAULT_DECISION_THRESHOLD);
             return $vs;
         }
         return 0.45;

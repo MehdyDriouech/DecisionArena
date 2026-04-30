@@ -256,6 +256,13 @@ Les **endpoints « classiques »** restent disponibles sous le même préfixe : 
 
 Visualise qui parle à qui, l'influence relative des agents et la structure du débat.
 
+Les arêtes (`interaction_edges`) sont enregistrées lorsque les messages des modes structurés (Decision Room, Confrontation rounds, Stress Test, Jury…) portent une **cible identifiable** :
+
+- bloc **`## Target Agent`** — id d’agent (priorité aux déclarations explicites du LLM lorsqu’elles sont valides pour le tour concerné),
+- puis **assignation round-robin** par agent et par tour lorsque le bloc est absent (répartit les défis entre plusieurs interlocuteurs au lieu que tout converge vers « le dernier qui a parlé »).
+
+Sans cible résolue pour un message donné, aucune arête n’est créée pour ce message.
+
 ### Heatmap des arguments
 `GET /api/sessions/{id}/argument-heatmap`
 
@@ -374,6 +381,13 @@ Fichiers i18n : `frontend/i18n.js` (traductions embarquées **fr** / **en** ; cl
 | **Timeline de confiance** | Évolution de la « confiance » et de la position dominante par tour (analyse sans LLM) |
 | **Rapport de biais** | Détection heuristique de biais cognitifs dans la structure du débat (sans LLM) |
 | **Post-mortem** | Bilan utilisateur sur l’issue réelle d’une décision (correct / partiel / incorrect) |
+| **Cible d’interaction (`## Target Agent`)** | Marqueur en tête de réponse agent utilisé backend pour rattacher défis et arêtes du graphe ; peut être combiné avec une assignation automatique si le LLM ne le produit pas |
+
+---
+
+## UX / rendu SPA
+
+À chaque `render()`, le bloc principal `#main-content` est reconstruit par `innerHTML`. Pour éviter que les clics (équipes, toggles panneaux, actions in-page) ne **remontent la page tout en haut**, tout en conservant une remise à zéro du défilement lors d’un **changement de vue**, `renderer.js` préserve lorsque pertinent la position de `#main-content` et celle du conteneur interne `.dr-content` ou `.chat-messages` pour les vues pleine hauteur.
 
 ---
 
@@ -482,3 +496,26 @@ decision-room-ai/
 ## Licence
 
 MIT
+
+## Validation manuelle — Fiabilité décisionnelle
+
+Scénario A — contexte faible
+- Input: `Should we launch this?`
+- Attendu: `context_quality.level = weak`
+- Attendu: `adjusted_decision.decision_label = INSUFFICIENT_CONTEXT` ou `GO_FRAGILE`/`NO_GO_FRAGILE`
+- Attendu: `reliability_warnings` non vide et `false_consensus_risk` potentiellement `medium/high`
+
+Scénario B — contexte moyen
+- Input: objectif clair sans critères de succès explicites
+- Attendu: `context_quality.level = medium`
+- Attendu: décision possible, avec plafonnement (`raw_decision.decision_score > adjusted_decision.decision_score` si cap atteint)
+
+Scénario C — contexte fort
+- Input: objectif avec marché, contraintes, critères, risques et données
+- Attendu: `context_quality.level = strong`
+- Attendu: pas de plafonnement abusif (`reliability_cap = 1.0`)
+
+Scénario D — consensus trop rapide
+- Précondition: convergence des agents dès le round 1 (ou round 2)
+- Attendu: `false_consensus_risk = medium/high`
+- Attendu: déclenchement Devil’s Advocate si activé (`message_type = devil_advocate`)

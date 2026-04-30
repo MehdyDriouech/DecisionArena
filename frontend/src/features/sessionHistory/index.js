@@ -3,7 +3,7 @@
  * Also exports renderTemplateCard (used by newSession) and renderActionPlanPanel.
  */
 
-import { renderConfrontationAgentCard, renderDebateInsightsPanels, renderWeightedVotePanel, renderVerdictCard, renderSessionMemoryPanel, renderSessionContextDocPanel } from '../confrontation/index.js';
+import { renderConfrontationAgentCard, renderDebateInsightsPanels, renderWeightedVotePanel, renderDecisionReliabilityCard, renderVerdictCard, renderSessionMemoryPanel, renderSessionContextDocPanel } from '../confrontation/index.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -611,7 +611,7 @@ function renderSessionHistory() {
           </div>
         </div>
         ${agents.length > 0 ? `<div class="session-agents" style="margin-top:12px;">${agents.map((id) => `<span class="agent-badge">${agentIcon(id)} ${escHtml(agentName(id))}</span>`).join('')}</div>` : ''}
-        ${session.initial_prompt || session.idea ? `<div style="margin-top:12px;padding:12px;background:var(--bg-secondary);border-radius:6px;font-size:13px;color:var(--text-secondary);">${escHtml(session.initial_prompt || session.idea)}</div>` : ''}
+        ${session.initial_prompt || session.idea ? `<div id="session-objective-preview" style="margin-top:12px;padding:12px;background:var(--bg-secondary);border-radius:6px;font-size:13px;color:var(--text-secondary);">${escHtml(session.initial_prompt || session.idea)}</div>` : ''}
         <div class="export-actions" style="margin-top:16px;">
           ${(window.DecisionArena.views.shared.renderExportButtons || (() => ''))(session.id)}
         </div>
@@ -628,7 +628,24 @@ function renderSessionHistory() {
         dominance_indicator: data.dominance_indicator || '',
       }) : ''}
 
-      ${mode !== 'chat' ? renderWeightedVotePanel({ votes: data.votes || [], automatic_decision: data.automatic_decision || null }, session.id) : ''}
+      ${mode !== 'chat' ? renderWeightedVotePanel({
+        votes: data.votes || [],
+        automatic_decision: data.automatic_decision || null,
+        raw_decision: data.raw_decision || null,
+        adjusted_decision: data.adjusted_decision || null,
+        decision_reliability_summary: data.decision_reliability_summary || null,
+        context_clarification: data.context_clarification || null,
+      }, session.id) : ''}
+      ${mode !== 'chat' ? renderDecisionReliabilityCard({
+        context_quality: data.context_quality || null,
+        reliability_cap: data.reliability_cap || null,
+        raw_decision: data.raw_decision || data.automatic_decision || null,
+        adjusted_decision: data.adjusted_decision || null,
+        false_consensus_risk: data.false_consensus_risk || null,
+        false_consensus: data.false_consensus || null,
+        reliability_warnings: data.reliability_warnings || [],
+        decision_reliability_summary: data.decision_reliability_summary || null,
+      }) : ''}
 
       ${mode !== 'chat' ? renderThresholdPanel(session) : ''}
 

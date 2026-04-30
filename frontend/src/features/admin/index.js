@@ -1,7 +1,8 @@
 /**
  * Admin feature – view registration.
- * Covers: administration, personas, souls, providers, templates, template-maker,
- *         persona-maker, persona-builder.
+ * Covers: administration (hub par sections + Bien démarrer), personas, souls, providers,
+ *         templates, template-maker, persona-maker, persona-builder, scenario-packs,
+ *         logs, retrospective.
  */
 
 import { renderTooltip } from '../../ui/components.js';
@@ -16,35 +17,170 @@ function getCtx() {
   return { state, escHtml, renderMarkdown, agentIcon, agentName, t };
 }
 
-/* ── Administration hub ── */
+/* ── Administration hub (sections + cartes intentionnelles) ─────────────── */
+
+const ADMIN_HOME_SECTIONS = [
+  {
+    id: 'agents',
+    titleKey: 'admin.section.agents',
+    sectionIcon: '🧠',
+    items: [
+      { nav: 'personas',        titleKey: 'admin.personas',        icon: '🎭', descKey: 'admin.card.personas.desc',        usageKey: 'admin.card.personas.usage',        badgeKey: null },
+      { nav: 'persona-maker',   titleKey: 'admin.personaMaker',    icon: '🤖', descKey: 'admin.card.personaMaker.desc',    usageKey: 'admin.card.personaMaker.usage',    badgeKey: 'admin.badge.recommended' },
+      { nav: 'persona-builder', titleKey: 'admin.personaBuilder',  icon: '🔧', descKey: 'admin.card.personaBuilder.desc',  usageKey: 'admin.card.personaBuilder.usage',  badgeKey: 'admin.badge.advanced' },
+      { nav: 'souls',           titleKey: 'admin.souls',           icon: '✨', descKey: 'admin.card.souls.desc',           usageKey: 'admin.card.souls.usage',           badgeKey: 'admin.badge.advanced' },
+    ],
+  },
+  {
+    id: 'experiences',
+    titleKey: 'admin.section.experiences',
+    sectionIcon: '🧩',
+    items: [
+      { nav: 'templates',        titleKey: 'admin.templates',         icon: '📋', descKey: 'admin.card.templates.desc',        usageKey: 'admin.card.templates.usage',        badgeKey: 'admin.badge.recommended' },
+      { nav: 'template-maker',   titleKey: 'admin.templateMaker',     icon: '🧩', descKey: 'admin.card.templateMaker.desc',    usageKey: 'admin.card.templateMaker.usage',    badgeKey: 'admin.badge.advanced' },
+      { nav: 'scenario-packs',   titleKey: 'scenario.admin.title',    icon: '🎯', descKey: 'admin.card.scenarios.desc',        usageKey: 'admin.card.scenarios.usage',        badgeKey: 'admin.badge.recommended' },
+    ],
+  },
+  {
+    id: 'engine',
+    titleKey: 'admin.section.engine',
+    sectionIcon: '⚙️',
+    items: [
+      {
+        nav: 'providers',
+        titleKey: 'admin.providers',
+        icon: '⚙️',
+        descKey: 'admin.card.providers.desc',
+        usageKey: 'admin.card.providers.usage',
+        badgeKey: 'admin.badge.technical',
+        noteKey: 'admin.card.providers.noteRouting',
+      },
+    ],
+  },
+  {
+    id: 'monitoring',
+    titleKey: 'admin.section.monitoring',
+    sectionIcon: '📊',
+    items: [
+      { nav: 'logs', titleKey: 'admin.logs', icon: '🧾', descKey: 'admin.card.logs.desc', usageKey: 'admin.card.logs.usage', badgeKey: 'admin.badge.technical' },
+    ],
+  },
+  {
+    id: 'intelligence',
+    titleKey: 'admin.section.intelligence',
+    sectionIcon: '✨',
+    items: [
+      {
+        nav: 'retrospective',
+        titleKey: 'admin.retrospective',
+        icon: '🔮',
+        descKey: 'admin.card.retrospective.desc',
+        usageKey: 'admin.card.retrospective.usage',
+        badgeKey: 'admin.badge.analysis',
+        featured: true,
+      },
+    ],
+  },
+];
+
+function renderAdminCard(item, t, escHtml) {
+  const badge = item.badgeKey
+    ? `<span class="admin-card-badge" aria-label="${escHtml(t(item.badgeKey))}">${escHtml(t(item.badgeKey))}</span>`
+    : '';
+  const note = item.noteKey
+    ? `<div class="admin-card-note">${escHtml(t(item.noteKey))}</div>`
+    : '';
+  const feat = item.featured ? ' admin-card-featured' : '';
+  const label = `${t(item.titleKey)} — ${t(item.descKey)}`;
+  return `
+    <div class="admin-card${feat}" data-nav="${escHtml(item.nav)}" tabindex="0" role="link" aria-label="${escHtml(label)}">
+      ${badge}
+      <span class="admin-card-icon" aria-hidden="true">${item.icon}</span>
+      <div class="admin-card-title">${escHtml(t(item.titleKey))}</div>
+      <div class="admin-card-description">${escHtml(t(item.descKey))}</div>
+      <div class="admin-card-usage">
+        <span class="admin-card-usage-label">${escHtml(t('admin.card.usageLabel'))}</span>
+        ${escHtml(t(item.usageKey))}
+      </div>
+      ${note}
+    </div>`;
+}
+
+function renderAdminSection(section, t, escHtml) {
+  return `
+    <section class="admin-section" aria-labelledby="admin-section-${escHtml(section.id)}">
+      <h2 class="admin-section-title" id="admin-section-${escHtml(section.id)}">
+        <span class="admin-section-emoji" aria-hidden="true">${section.sectionIcon}</span>
+        ${escHtml(t(section.titleKey))}
+      </h2>
+      <div class="admin-card-grid">
+        ${section.items.map((it) => renderAdminCard(it, t, escHtml)).join('')}
+      </div>
+    </section>`;
+}
+
+function renderGetStarted(t, escHtml) {
+  return `
+    <div class="admin-get-started" aria-labelledby="admin-get-started-title">
+      <div class="admin-get-started-title" id="admin-get-started-title">${escHtml(t('admin.home.getStarted.title'))}</div>
+      <p class="admin-get-started-lead">${escHtml(t('admin.home.getStarted.lead'))}</p>
+      <ol class="admin-get-started-list">
+        <li>
+          <button type="button" class="admin-get-started-link" data-nav="providers">
+            <span class="admin-get-started-num">1.</span>
+            <span>${escHtml(t('admin.home.getStarted.step.provider'))}</span>
+          </button>
+        </li>
+        <li>
+          <button type="button" class="admin-get-started-link" data-nav="personas">
+            <span class="admin-get-started-num">2.</span>
+            <span>${escHtml(t('admin.home.getStarted.step.agents'))}</span>
+          </button>
+        </li>
+        <li class="admin-get-started-li-split">
+          <span class="admin-get-started-num" aria-hidden="true">3.</span>
+          <div class="admin-get-started-split-body">
+            <div class="admin-get-started-split-intro">${escHtml(t('admin.home.getStarted.step.templatesIntro'))}</div>
+            <div class="admin-get-started-split-actions">
+              <button type="button" class="admin-get-started-chip" data-nav="templates" aria-label="${escHtml(t('admin.home.getStarted.step.templatesAria.templates'))}">
+                📋 ${escHtml(t('admin.templates'))}
+              </button>
+              <button type="button" class="admin-get-started-chip" data-nav="scenario-packs" aria-label="${escHtml(t('admin.home.getStarted.step.templatesAria.scenarios'))}">
+                🎯 ${escHtml(t('scenario.admin.title'))}
+              </button>
+            </div>
+          </div>
+        </li>
+        <li class="admin-get-started-li-split">
+          <span class="admin-get-started-num" aria-hidden="true">4.</span>
+          <div class="admin-get-started-split-body">
+            <div class="admin-get-started-split-intro">${escHtml(t('admin.home.getStarted.step.analyzeIntro'))}</div>
+            <div class="admin-get-started-split-actions">
+              <button type="button" class="admin-get-started-chip" data-nav="new-session" aria-label="${escHtml(t('admin.home.getStarted.step.analyzeAria.launch'))}">
+                ✨ ${escHtml(t('nav.newSession'))}
+              </button>
+              <button type="button" class="admin-get-started-chip" data-nav="sessions" aria-label="${escHtml(t('admin.home.getStarted.step.analyzeAria.history'))}">
+                📁 ${escHtml(t('nav.sessions'))}
+              </button>
+            </div>
+          </div>
+        </li>
+      </ol>
+    </div>`;
+}
 
 function renderAdministration() {
   const { t, escHtml } = getCtx();
-  const cards = [
-    { id: 'personas',        icon: '🎭', title: t('admin.personas'),       desc: t('admin.personasDesc') },
-    { id: 'persona-maker',   icon: '🤖', title: t('admin.personaMaker'),   desc: t('admin.personaMakerDesc') },
-    { id: 'persona-builder', icon: '🔧', title: t('admin.personaBuilder'), desc: t('admin.personaBuilderDesc') },
-    { id: 'souls',           icon: '✨', title: t('admin.souls'),           desc: t('admin.soulsDesc') },
-    { id: 'providers',       icon: '⚙️', title: t('admin.providers'),       desc: t('admin.providersDesc') },
-    { id: 'logs',            icon: '🧾', title: t('admin.logs'),            desc: t('admin.logsDesc') },
-    { id: 'templates',         icon: '📋', title: t('admin.templates'),         desc: t('admin.templatesDesc') },
-    { id: 'template-maker',    icon: '🧩', title: t('admin.templateMaker'),    desc: t('admin.templateMakerDesc') },
-    { id: 'scenario-packs',    icon: '🎯', title: t('scenario.admin.title'),   desc: t('scenario.admin.desc') },
-    { id: 'retrospective',     icon: '🔮', title: t('admin.retrospective'),    desc: t('admin.retrospectiveDesc') },
-  ];
   return `
     <div class="page-header">
       <div class="page-title">${t('admin.title')}</div>
-      <div class="page-subtitle">${t('admin.subtitle')}</div>
+      <div class="page-subtitle">${t('admin.home.subtitle')}</div>
     </div>
-    <div class="admin-cards-grid">
-      ${cards.map((c) => `
-        <div class="admin-card" data-nav="${escHtml(c.id)}">
-          <span class="admin-card-icon">${c.icon}</span>
-          <div class="admin-card-title">${c.title}</div>
-          <div class="admin-card-desc">${c.desc}</div>
-        </div>
-      `).join('')}
+    <div class="admin-home">
+      ${renderGetStarted(t, escHtml)}
+      <div class="admin-sections">
+        ${ADMIN_HOME_SECTIONS.map((sec) => renderAdminSection(sec, t, escHtml)).join('')}
+      </div>
     </div>
   `;
 }
@@ -1153,10 +1289,16 @@ function renderScenarioPacks() {
 function renderRetrospective() {
   const { state, t, escHtml } = getCtx();
   const stats = state.postmortemStats;
+  const loading = state.postmortemStatsLoading;
+  const loadErr = state.postmortemStatsError;
 
-  const loadBtn = `<button class="btn btn-secondary btn-sm" data-action="load-postmortem-stats">📊 Charger les stats</button>`;
+  const loadBtn = `<button type="button" class="btn btn-secondary btn-sm" data-action="load-postmortem-stats" ${loading ? 'disabled' : ''}>📊 ${loading ? '…' : t('postmortem.stats.load')}</button>`;
 
-  if (!stats) {
+  const errBlock = loadErr
+    ? `<div class="error-banner" style="margin-bottom:12px;">⚠️ ${escHtml(t('postmortem.stats.loadError'))} <span style="opacity:0.85;font-size:12px;">${escHtml(loadErr)}</span></div>`
+    : '';
+
+  if (!stats && !loadErr && !loading) {
     return `
       <div class="page-header">
         <div class="page-title">🔮 ${t('postmortem.stats.title')}</div>
@@ -1164,13 +1306,39 @@ function renderRetrospective() {
       <div class="card" style="padding:20px;text-align:center;">${loadBtn}</div>`;
   }
 
-  if (stats.total === 0) {
+  if (loading && !stats) {
+    return `
+      <div class="page-header">
+        <div class="page-title">🔮 ${t('postmortem.stats.title')}</div>
+      </div>
+      <div class="card" style="padding:20px;text-align:center;">
+        ${errBlock}
+        <div style="margin-bottom:12px;"><span class="spinner"></span> ${t('postmortem.stats.loading')}</div>
+        ${loadBtn}
+      </div>`;
+  }
+
+  const total = Number(stats?.total ?? 0);
+  if (stats && total === 0 && !loading) {
     return `
       <div class="page-header">
         <div class="page-title">🔮 ${t('postmortem.stats.title')}</div>
       </div>
       <div class="card" style="padding:20px;">
+        ${errBlock}
         <div style="color:var(--text-muted);font-size:13px;">${t('postmortem.stats.empty')}</div>
+        <div style="color:var(--text-muted);font-size:12px;margin:10px 0;">${t('postmortem.stats.emptyHint')}</div>
+        ${loadBtn}
+      </div>`;
+  }
+
+  if (!stats || loadErr) {
+    return `
+      <div class="page-header">
+        <div class="page-title">🔮 ${t('postmortem.stats.title')}</div>
+      </div>
+      <div class="card" style="padding:20px;">
+        ${errBlock}
         ${loadBtn}
       </div>`;
   }

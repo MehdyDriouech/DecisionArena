@@ -1,6 +1,8 @@
 <?php
 namespace Infrastructure\Persistence;
 
+use Domain\DecisionReliability\ReliabilityConfig;
+
 class ScenarioPackRepository {
     private \PDO $pdo;
 
@@ -45,7 +47,7 @@ class ScenarioPackRepository {
             ':persona_ids'        => is_array($data['persona_ids']) ? json_encode($data['persona_ids']) : ($data['persona_ids'] ?? '[]'),
             ':rounds'             => (int)($data['rounds'] ?? 2),
             ':force_disagreement' => $data['force_disagreement'] ? 1 : 0,
-            ':decision_threshold' => (float)($data['decision_threshold'] ?? 0.55),
+            ':decision_threshold' => ReliabilityConfig::normalizeThreshold($data['decision_threshold'] ?? null),
             ':prompt_starter'     => $data['prompt_starter'] ?? null,
             ':max_personas'       => isset($data['max_personas']) ? (int)$data['max_personas'] : null,
             ':enabled'            => isset($data['enabled']) ? ($data['enabled'] ? 1 : 0) : 1,

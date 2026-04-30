@@ -4,7 +4,7 @@
 
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
 import { renderExportButtons, renderAgentChatPanel } from '../chat/view.js';
-import { renderConfrontationAgentCard, renderWeightedVotePanel, renderVerdictCard } from '../confrontation/index.js';
+import { renderConfrontationAgentCard, renderWeightedVotePanel, renderDecisionReliabilityCard, renderVerdictCard } from '../confrontation/index.js';
 import { renderDebateAuditPanel } from '../debateAudit/index.js';
 import { renderGraphViewPanel } from '../graphView/index.js';
 import { renderArgumentHeatmapPanel } from '../argumentHeatmap/index.js';
@@ -71,6 +71,7 @@ function renderQuickDecision() {
           ` : ''}
 
           ${renderWeightedVotePanel(results, session.id)}
+          ${renderDecisionReliabilityCard(results)}
           ${results.verdict ? renderVerdictCard(results.verdict) : ''}
           ${renderGraphViewPanel(session.id)}
           ${renderDebateAuditPanel(session.id)}

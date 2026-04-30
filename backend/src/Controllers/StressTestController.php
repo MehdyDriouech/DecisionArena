@@ -1,6 +1,7 @@
 <?php
 namespace Controllers;
 
+use Domain\DecisionReliability\ReliabilityConfig;
 use Http\Request;
 use Http\Response;
 use Infrastructure\Persistence\SessionRepository;
@@ -44,6 +45,7 @@ class StressTestController {
 
         $language   = $session['language'] ?? 'en';
         $contextDoc = $this->docRepo->findBySession($sessionId);
+        $decisionThreshold = ReliabilityConfig::normalizeThreshold($session['decision_threshold'] ?? null);
 
         // Feature 3 & 4
         $daEnabled      = (bool)($session['devil_advocate_enabled']   ?? false);
@@ -60,10 +62,18 @@ class StressTestController {
             $contextDoc,
             $daEnabled,
             $daThreshold,
-            $agentProviders
+            $agentProviders,
+            $decisionThreshold
         );
 
-        $this->sessionRepo->update($sessionId, ['status' => 'completed', 'mode' => 'stress-test']);
+        $this->sessionRepo->update($sessionId, [
+            'status' => 'completed',
+            'mode' => 'stress-test',
+            'context_quality_score' => (float)($result['context_quality']['score'] ?? 0.0),
+            'context_quality_level' => (string)($result['context_quality']['level'] ?? 'weak'),
+            'context_quality_report' => json_encode($result['context_quality'] ?? [], JSON_UNESCAPED_UNICODE),
+            'reliability_cap' => (float)($result['reliability_cap'] ?? 1.0),
+        ]);
 
         return [
             'session_id'   => $sessionId,
@@ -76,6 +86,13 @@ class StressTestController {
             'dominance_indicator' => $result['dominance_indicator'] ?? '',
             'votes' => $result['votes'] ?? [],
             'automatic_decision' => $result['automatic_decision'] ?? null,
+            'raw_decision' => $result['raw_decision'] ?? null,
+            'adjusted_decision' => $result['adjusted_decision'] ?? null,
+            'context_quality' => $result['context_quality'] ?? null,
+            'reliability_cap' => $result['reliability_cap'] ?? null,
+            'false_consensus_risk' => $result['false_consensus_risk'] ?? 'low',
+            'false_consensus' => $result['false_consensus'] ?? null,
+            'reliability_warnings' => $result['reliability_warnings'] ?? [],
         ];
     }
 }
