@@ -44,6 +44,10 @@ class Migration {
         $this->createPostmortemsTable();
         $this->createSessionAgentProvidersTable();
         $this->addMissingColumnsV2();
+        $this->createSocialDynamicsTables();
+        $this->createEvidenceTables();
+        $this->createRiskProfileTable();
+        $this->createLearningInsightsCacheTable();
         $this->seedDefaultTemplates();
         $this->seedStressTestTemplate();
         $this->seedDefaultScenarioPacks();
@@ -852,12 +856,132 @@ class Migration {
         } catch (\Throwable $e) {}
     }
 
+    private function createSocialDynamicsTables(): void {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS agent_relationships (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id TEXT NOT NULL,
+              source_agent_id TEXT NOT NULL,
+              target_agent_id TEXT NOT NULL,
+              affinity REAL DEFAULT 0,
+              trust REAL DEFAULT 0.5,
+              conflict REAL DEFAULT 0,
+              support_count INTEGER DEFAULT 0,
+              challenge_count INTEGER DEFAULT 0,
+              alliance_count INTEGER DEFAULT 0,
+              attack_count INTEGER DEFAULT 0,
+              last_interaction_type TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              UNIQUE(session_id, source_agent_id, target_agent_id)
+            )
+        ");
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS relationship_events (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id TEXT NOT NULL,
+              round_index INTEGER,
+              source_agent_id TEXT NOT NULL,
+              target_agent_id TEXT,
+              event_type TEXT NOT NULL,
+              intensity REAL DEFAULT 0.5,
+              evidence TEXT,
+              created_at TEXT NOT NULL
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_agent_rel_sessions ON agent_relationships(session_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_rel_events_session ON relationship_events(session_id)');
+        } catch (\Throwable $e) {
+        }
+    }
+
     private function addMissingColumnsV2(): void {
         // Devil's Advocate session config
         $this->addColumnIfMissing('sessions', 'devil_advocate_enabled',   'INTEGER DEFAULT 0');
         $this->addColumnIfMissing('sessions', 'devil_advocate_threshold', 'REAL DEFAULT 0.65');
         // Message type for devil advocate
         $this->addColumnIfMissing('messages', 'is_devil_advocate', 'INTEGER DEFAULT 0');
+        // LLM metadata — provider name, requested vs used, fallback tracking
+        $this->addColumnIfMissing('messages', 'provider_name',           'TEXT NULL');
+        $this->addColumnIfMissing('messages', 'requested_provider_id',   'TEXT NULL');
+        $this->addColumnIfMissing('messages', 'requested_model',         'TEXT NULL');
+        $this->addColumnIfMissing('messages', 'provider_fallback_used',  'INTEGER DEFAULT 0');
+        $this->addColumnIfMissing('messages', 'provider_fallback_reason','TEXT NULL');
+        // Session team agent assignments (for Confrontation LLM assignment)
+        $this->addColumnIfMissing('sessions', 'blue_team_agents', 'TEXT NULL');
+        $this->addColumnIfMissing('sessions', 'red_team_agents',  'TEXT NULL');
+        // Reactive Chat thread metadata
+        $this->addColumnIfMissing('messages', 'thread_type',        'TEXT NULL');
+        $this->addColumnIfMissing('messages', 'thread_turn',        'INTEGER NULL');
+        $this->addColumnIfMissing('messages', 'reaction_role',      'TEXT NULL');
+        $this->addColumnIfMissing('messages', 'reactive_thread_id', 'TEXT NULL');
+    }
+
+    private function createEvidenceTables(): void
+    {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS evidence_claims (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id TEXT NOT NULL,
+              message_id TEXT,
+              agent_id TEXT,
+              claim_text TEXT NOT NULL,
+              claim_type TEXT NOT NULL,
+              status TEXT DEFAULT 'unsupported',
+              confidence REAL DEFAULT 0.5,
+              evidence_text TEXT,
+              source_reference TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
+        ");
+        $this->pdo->exec("
+            CREATE INDEX IF NOT EXISTS idx_evidence_claims_session
+            ON evidence_claims(session_id)
+        ");
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS evidence_reports (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id TEXT NOT NULL UNIQUE,
+              report_json TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
+        ");
+    }
+
+    private function createRiskProfileTable(): void
+    {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS session_risk_profiles (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id TEXT NOT NULL UNIQUE,
+              risk_level TEXT NOT NULL,
+              reversibility TEXT NOT NULL,
+              risk_categories_json TEXT,
+              estimated_error_cost TEXT,
+              recommended_threshold REAL,
+              required_process TEXT,
+              report_json TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
+        ");
+    }
+
+    private function createLearningInsightsCacheTable(): void
+    {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS learning_insights_cache (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              scope TEXT NOT NULL,
+              scope_id TEXT,
+              report_json TEXT NOT NULL,
+              computed_at TEXT NOT NULL,
+              UNIQUE(scope, scope_id)
+            )
+        ");
     }
 
     private function addColumnIfMissing(string $table, string $column, string $definition): void {

@@ -40,10 +40,38 @@ const createInitialState = () => ({
   drRunning: false,
   confrontationResults: null,
   confrontationRunning: false,
+  reactiveChat: {
+    enabled:                      false,
+    primaryAgentId:               '',
+    reactorAgentIds:              [],
+    turnsMin:                     2,
+    turnsMax:                     4,
+    earlyStopEnabled:             true,
+    earlyStopConfidenceThreshold: 0.85,
+    noNewArgumentsThreshold:      2,
+    reactorMode:                  'independent',
+    debateIntensity:              'medium',
+    reactionStyle:                'critical',
+    includeFinalSynthesis:        true,
+    running:                      false,
+    error:                        null,
+  },
+  reactiveChatResults: null,
   snapshotStatus: null,
   error: null,
-  /** "simple" | "expert" — progressive disclosure */
+  /** "simple" | "expert" — progressive disclosure (legacy) */
   uiMode: 'simple',
+  /** "basic" | "advanced" | "expert" — persisted in localStorage */
+  uiComplexity: (() => {
+    try { return localStorage.getItem('da_ui_complexity') || 'advanced'; } catch (_) { return 'advanced'; }
+  })(),
+  /** Set of panel keys currently collapsed in session history */
+  collapsedPanels: (() => {
+    try {
+      const saved = localStorage.getItem('da_collapsed_panels');
+      return saved ? new Set(JSON.parse(saved)) : new Set(['social-dynamics', 'bias-detection', 'llm-used', 'evidence', 'risk', 'persona-scores']);
+    } catch (_) { return new Set(); }
+  })(),
   sessionHistory: null,
   newSession: {
     title: '',

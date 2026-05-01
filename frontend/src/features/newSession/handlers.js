@@ -27,6 +27,9 @@ function resetNewSessionState() {
     devilAdvocateEnabled: false,
     devilAdvocateThreshold: 0.65,
     agentProviders: {},
+    // LLM Assignment
+    llmAssignmentMode: 'global',
+    teamProviderAssignments: { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } },
   };
 }
 
@@ -131,9 +134,8 @@ function registerNewSessionHandlers() {
         // Feature 3 — Devil's Advocate
         devil_advocate_enabled:   ns.devilAdvocateEnabled ? 1 : 0,
         devil_advocate_threshold: ns.devilAdvocateThreshold || 0.65,
-        // Feature 4 — Per-agent provider overrides (sent as separate field, stored by SessionController)
-        agent_providers: (ns.agentProviders && Object.keys(ns.agentProviders).length > 0)
-          ? ns.agentProviders : undefined,
+        // LLM Assignment — build agent_providers based on current mode
+        ..._buildLlmPayload(ns),
       };
 
       const session = await SessionService.create(body);
@@ -378,8 +380,34 @@ function registerScenarioHandlers() {
   });
 
   /* ══════════════════════════════════════════════════════════════════════
-     Feature 4 — Per-agent provider overrides
+     LLM Assignment — mode toggle + team + per-agent
   ═══════════════════════════════════════════════════════════════════════ */
+  registerAction('set-llm-assignment-mode', ({ element }) => {
+    const { state, render } = getCtx();
+    const mode = element.dataset.mode;
+    if (!mode) return;
+    state.newSession.llmAssignmentMode = mode;
+    render();
+  });
+
+  registerAction('set-team-provider', ({ element }) => {
+    const { state } = getCtx();
+    const team = element.dataset.team;
+    if (!team) return;
+    state.newSession.teamProviderAssignments = state.newSession.teamProviderAssignments || {};
+    state.newSession.teamProviderAssignments[team] = state.newSession.teamProviderAssignments[team] || {};
+    state.newSession.teamProviderAssignments[team].provider_id = element.value;
+  });
+
+  registerAction('set-team-model', ({ element }) => {
+    const { state } = getCtx();
+    const team = element.dataset.team;
+    if (!team) return;
+    state.newSession.teamProviderAssignments = state.newSession.teamProviderAssignments || {};
+    state.newSession.teamProviderAssignments[team] = state.newSession.teamProviderAssignments[team] || {};
+    state.newSession.teamProviderAssignments[team].model = element.value;
+  });
+
   registerAction('set-agent-provider', ({ element }) => {
     const { state } = getCtx();
     const agentId = element.dataset.agentId;
@@ -397,6 +425,44 @@ function registerScenarioHandlers() {
     state.newSession.agentProviders[agentId] = state.newSession.agentProviders[agentId] || {};
     state.newSession.agentProviders[agentId].model = element.value;
   });
+}
+
+/**
+ * Build the LLM-related fields for the POST /api/sessions payload.
+ * Returns partial body object: { agent_providers, team_provider_assignments, blue_team_agents, red_team_agents }
+ */
+function _buildLlmPayload(ns) {
+  const mode = ns.llmAssignmentMode || 'global';
+
+  if (mode === 'global') {
+    return {};
+  }
+
+  if (mode === 'team') {
+    const tpa = ns.teamProviderAssignments || {};
+    const hasBlue = tpa.blue?.provider_id;
+    const hasRed  = tpa.red?.provider_id;
+    if (!hasBlue && !hasRed) return {};
+    return {
+      team_provider_assignments: {
+        blue: { provider_id: tpa.blue?.provider_id || '', model: tpa.blue?.model || '' },
+        red:  { provider_id: tpa.red?.provider_id  || '', model: tpa.red?.model  || '' },
+      },
+      blue_team_agents: ns.blueTeam || [],
+      red_team_agents:  ns.redTeam  || [],
+    };
+  }
+
+  if (mode === 'agent') {
+    const ap = ns.agentProviders || {};
+    const filtered = {};
+    Object.entries(ap).forEach(([agId, ov]) => {
+      if (ov.provider_id) filtered[agId] = ov;
+    });
+    return Object.keys(filtered).length > 0 ? { agent_providers: filtered } : {};
+  }
+
+  return {};
 }
 
 export { registerNewSessionHandlers, registerScenarioHandlers, _applyTemplate, _applyScenarioPack };

@@ -43,7 +43,7 @@ import { registerStressTestHandlers } from './features/stressTest/handlers.js';
 import { registerSessionHistoryHandlers } from './features/sessionHistory/handlers.js';
 import { registerComparisonsHandlers } from './features/comparisons/handlers.js';
 import { registerLaunchAssistantHandlers } from './features/launchAssistant/handlers.js';
-import { registerAdminHandlers, registerScenarioPackAdminHandlers, registerRetrospectiveHandlers } from './features/admin/handlers.js';
+import { registerAdminHandlers, registerScenarioPackAdminHandlers, registerRetrospectiveHandlers, registerPromptPolicyHandlers, registerLearningHandlers } from './features/admin/handlers.js';
 import { registerDebateAuditHandlers } from './features/debateAudit/handlers.js';
 import { registerGraphViewHandlers } from './features/graphView/handlers.js';
 import { registerJuryHandlers } from './features/jury/handlers.js';
@@ -120,6 +120,8 @@ function bootstrapModuleArchitecture() {
   registerAdminHandlers();
   registerScenarioPackAdminHandlers();
   registerRetrospectiveHandlers();
+  registerPromptPolicyHandlers();
+  registerLearningHandlers();
   registerDebateAuditHandlers();
   registerGraphViewHandlers();
   registerJuryHandlers();
@@ -139,6 +141,9 @@ async function init() {
 
 async function startApp() {
   bootstrapModuleArchitecture();
+  // Restore uiComplexity body attribute from saved state
+  const savedComplexity = window.DecisionArena?.store?.state?.uiComplexity || 'advanced';
+  document.body.setAttribute('data-ui-complexity', savedComplexity);
   renderSidebarShell(window.i18n);
   await init();
 }

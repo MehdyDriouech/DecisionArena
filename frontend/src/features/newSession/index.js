@@ -302,30 +302,76 @@ function renderNewSession() {
         </div>
         </div>
 
-        <!-- Feature 4 — Per-agent provider override (expert mode only) -->
-        <div data-ui="expert-only" style="margin-top:16px;">
-          <div style="font-weight:600;font-size:12px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">
-            ⚙️ ${t('agent.provider.label')} ${tip(t('agent.provider.tooltip'))}
-          </div>
-          ${(() => {
-            const agents = ns.mode === 'confrontation'
-              ? [...new Set([...(ns.blueTeam||[]), ...(ns.redTeam||[])])]
-              : (ns.selectedAgents || []);
-            const providers = state.providers || [];
-            return agents.map((agId) => {
-              const override = (ns.agentProviders || {})[agId] || {};
-              return `
-                <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">
-                  <span style="font-size:12px;min-width:80px;">${agId}</span>
-                  <select class="input" style="flex:1;min-width:120px;padding:4px 6px;font-size:12px;" data-action="set-agent-provider" data-agent-id="${agId}">
-                    <option value="">${t('agent.provider.empty')}</option>
-                    ${providers.map((p) => `<option value="${p.id}" ${override.provider_id === p.id ? 'selected' : ''}>${p.name || p.id}</option>`).join('')}
-                  </select>
-                  <input class="input" type="text" placeholder="model" style="width:120px;padding:4px 6px;font-size:12px;" value="${override.model || ''}" data-action="set-agent-model" data-agent-id="${agId}">
-                </div>`;
-            }).join('') || `<div style="font-size:12px;color:var(--text-muted);">Sélectionnez des agents pour configurer leurs providers.</div>`;
-          })()}
-        </div>
+        ${(() => {
+          // LLM Assignment block — only if 2+ providers configured
+          const providers = state.providers || [];
+          const activeProviders = providers.filter((p) => p.enabled == 1 || p.enabled === true);
+          if (activeProviders.length < 2) return '';
+
+          const assignMode = ns.llmAssignmentMode || 'global';
+          const teamAssign = ns.teamProviderAssignments || { blue: {provider_id:'',model:''}, red: {provider_id:'',model:''} };
+          const agentsForLLM = ns.mode === 'confrontation'
+            ? [...new Set([...(ns.blueTeam||[]), ...(ns.redTeam||[])])]
+            : (ns.selectedAgents || []);
+
+          const providerOpts = (selectedId) => [
+            `<option value="">${t('newSession.llmAssignment.provider')} (${t('newSession.llmAssignment.global')})</option>`,
+            ...activeProviders.map((p) => `<option value="${escHtml(p.id)}" ${selectedId === p.id ? 'selected' : ''}>${escHtml(p.name || p.id)}</option>`)
+          ].join('');
+
+          const modeTabStyle = (m) => assignMode === m
+            ? 'padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;background:var(--accent);color:#fff;border:none;cursor:pointer;'
+            : 'padding:6px 14px;font-size:12px;border-radius:6px;background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border);cursor:pointer;';
+
+          const teamRows = ns.mode === 'confrontation' ? `
+            <div class="llm-assignment-grid" style="margin-top:10px;">
+              <div class="llm-agent-row" style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+                <span style="font-size:12px;font-weight:600;min-width:90px;color:#3b82f6;">🔵 ${t('newSession.llmAssignment.blueTeam')}</span>
+                <select class="input" style="flex:1;min-width:120px;padding:4px 6px;font-size:12px;" data-action="set-team-provider" data-team="blue">
+                  ${providerOpts(teamAssign.blue?.provider_id || '')}
+                </select>
+                <input class="input" type="text" placeholder="${t('newSession.llmAssignment.model')}" style="width:130px;padding:4px 6px;font-size:12px;" value="${escHtml(teamAssign.blue?.model || '')}" data-action="set-team-model" data-team="blue">
+              </div>
+              <div class="llm-agent-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <span style="font-size:12px;font-weight:600;min-width:90px;color:#ef4444;">🔴 ${t('newSession.llmAssignment.redTeam')}</span>
+                <select class="input" style="flex:1;min-width:120px;padding:4px 6px;font-size:12px;" data-action="set-team-provider" data-team="red">
+                  ${providerOpts(teamAssign.red?.provider_id || '')}
+                </select>
+                <input class="input" type="text" placeholder="${t('newSession.llmAssignment.model')}" style="width:130px;padding:4px 6px;font-size:12px;" value="${escHtml(teamAssign.red?.model || '')}" data-action="set-team-model" data-team="red">
+              </div>
+            </div>
+          ` : `<div style="font-size:12px;color:var(--text-muted);margin-top:8px;">${t('newSession.llmAssignment.teamNotAvailable')}</div>`;
+
+          const agentRows = agentsForLLM.length === 0
+            ? `<div style="font-size:12px;color:var(--text-muted);margin-top:8px;">${t('newSession.llmAssignment.selectAgentsFirst')}</div>`
+            : agentsForLLM.map((agId) => {
+                const override = (ns.agentProviders || {})[agId] || {};
+                return `
+                  <div class="llm-agent-row" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+                    <span style="font-size:12px;min-width:90px;color:var(--text-secondary);">${escHtml(agId)}</span>
+                    <select class="input" style="flex:1;min-width:120px;padding:4px 6px;font-size:12px;" data-action="set-agent-provider" data-agent-id="${escHtml(agId)}">
+                      ${providerOpts(override.provider_id || '')}
+                    </select>
+                    <input class="input" type="text" placeholder="${t('newSession.llmAssignment.model')}" style="width:130px;padding:4px 6px;font-size:12px;" value="${escHtml(override.model || '')}" data-action="set-agent-model" data-agent-id="${escHtml(agId)}">
+                  </div>`;
+              }).join('');
+
+          return `
+            <div class="llm-assignment-panel" style="margin-top:16px;padding:16px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border);">
+              <div style="font-weight:600;font-size:13px;color:var(--text-secondary);margin-bottom:10px;letter-spacing:.03em;">
+                🤖 ${t('newSession.llmAssignment.title')}
+              </div>
+              <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">${t('newSession.llmAssignment.desc')}</div>
+              <div class="llm-assignment-mode" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;">
+                <button type="button" style="${modeTabStyle('global')}" data-action="set-llm-assignment-mode" data-mode="global">${t('newSession.llmAssignment.global')}</button>
+                <button type="button" style="${modeTabStyle('team')}"   data-action="set-llm-assignment-mode" data-mode="team">${t('newSession.llmAssignment.team')}</button>
+                <button type="button" style="${modeTabStyle('agent')}"  data-action="set-llm-assignment-mode" data-mode="agent">${t('newSession.llmAssignment.agent')}</button>
+              </div>
+              ${assignMode === 'global' ? `<div style="font-size:12px;color:var(--text-muted);">${t('newSession.llmAssignment.globalDesc')}</div>` : ''}
+              ${assignMode === 'team'  ? teamRows : ''}
+              ${assignMode === 'agent' ? `<div class="llm-assignment-grid" style="margin-top:10px;">${agentRows}</div>` : ''}
+            </div>`;
+        })()}
       ` : ''}
 
       <button class="btn btn-primary" data-action="launch-session" ${state.isLoading ? 'disabled' : ''}>

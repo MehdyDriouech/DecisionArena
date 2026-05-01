@@ -104,11 +104,21 @@
   border-radius: 8px;
   padding: 12px 14px;
   cursor: pointer;
-  transition: border-color .15s, background .15s;
+  transition: border-color .15s, background .15s, box-shadow .15s;
   display: flex;
   flex-direction: column;
   gap: 4px;
   position: relative;
+}
+
+.scenario-pack-card:focus {
+  outline: none;
+}
+
+.scenario-pack-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-color: var(--accent);
 }
 
 .scenario-pack-card:hover {

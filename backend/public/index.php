@@ -103,7 +103,8 @@ $router->get('/api/sessions/{id}/export', [Controllers\ExportController::class, 
 $router->post('/api/sessions/{id}/snapshot', [Controllers\ExportController::class, 'snapshot']);
 
 // Chat
-$router->post('/api/chat/send', [Controllers\ChatController::class, 'send']);
+$router->post('/api/chat/send',     [Controllers\ChatController::class, 'send']);
+$router->post('/api/chat/reactive', [Controllers\ChatController::class, 'reactive']);
 
 // Decision Room
 $router->post('/api/decision-room/run', [Controllers\DecisionRoomController::class, 'run']);
@@ -159,6 +160,8 @@ $router->post('/api/sessions/from-scenario-pack', [Controllers\ScenarioPackContr
 $router->get('/api/sessions/{id}/persona-scores',       [Controllers\PersonaScoreController::class,      'show']);
 $router->get('/api/sessions/{id}/confidence-timeline',  [Controllers\ConfidenceTimelineController::class, 'show']);
 $router->get('/api/sessions/{id}/bias-report',          [Controllers\BiasDetectionController::class,      'show']);
+$router->get('/api/sessions/{id}/relationships',        [Controllers\SocialDynamicsController::class,     'relationships']);
+$router->get('/api/sessions/{id}/relationship-events',[Controllers\SocialDynamicsController::class,     'relationshipEvents']);
 $router->get('/api/sessions/{id}/agent-providers',      [Controllers\SessionController::class,            'agentProviders']);
 $router->post('/api/sessions/{id}/devil-advocate/run',  [Controllers\DevilAdvocateController::class,      'run']);
 $router->get('/api/sessions/{id}/postmortem',           [Controllers\PostmortemController::class,         'show']);
@@ -166,6 +169,29 @@ $router->post('/api/sessions/{id}/postmortem',          [Controllers\PostmortemC
 
 // Post-mortem stats (global — no session id)
 $router->get('/api/postmortems/stats', [Controllers\PostmortemController::class, 'stats']);
+
+// Evidence Layer
+$router->get('/api/sessions/{id}/evidence-report',             [Controllers\EvidenceController::class, 'report']);
+$router->get('/api/sessions/{id}/evidence-claims',             [Controllers\EvidenceController::class, 'claims']);
+$router->post('/api/sessions/{id}/evidence/recompute',         [Controllers\EvidenceController::class, 'recompute']);
+
+// Risk & Reversibility Layer
+$router->get('/api/sessions/{id}/risk-profile',                [Controllers\RiskProfileController::class, 'show']);
+$router->post('/api/sessions/{id}/risk-profile/recompute',     [Controllers\RiskProfileController::class, 'recompute']);
+
+// Learning Layer
+$router->get('/api/learning/overview',    [Controllers\LearningController::class, 'overview']);
+$router->get('/api/learning/agents',      [Controllers\LearningController::class, 'agents']);
+$router->get('/api/learning/modes',       [Controllers\LearningController::class, 'modes']);
+$router->get('/api/learning/calibration', [Controllers\LearningController::class, 'calibration']);
+$router->post('/api/learning/recompute',  [Controllers\LearningController::class, 'recompute']);
+$router->get('/api/learning/export',      [Controllers\LearningController::class, 'export']);
+$router->post('/api/learning/export',     [Controllers\LearningController::class, 'export']);
+
+// Prompt policies (admin — whitelisted files only)
+$router->get('/api/prompt-policies',       [Controllers\PromptPolicyController::class, 'index']);
+$router->get('/api/prompt-policies/{id}',  [Controllers\PromptPolicyController::class, 'show']);
+$router->put('/api/prompt-policies/{id}',  [Controllers\PromptPolicyController::class, 'update']);
 
 // Templates — specific routes BEFORE parameterized routes
 $router->post('/api/templates/make', [Controllers\TemplateMakerController::class, 'make']);

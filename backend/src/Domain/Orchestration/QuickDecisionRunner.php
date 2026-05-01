@@ -4,6 +4,10 @@ namespace Domain\Orchestration;
 use Domain\Agents\AgentAssembler;
 use Domain\DecisionReliability\DecisionReliabilityService;
 use Domain\DecisionReliability\ReliabilityConfig;
+use Domain\Evidence\EvidenceReportService;
+use Domain\Risk\RiskProfileAnalyzer;
+use Domain\SocialDynamics\SocialDynamicsService;
+use Domain\SocialDynamics\SocialPromptContextBuilder;
 use Domain\Providers\ProviderRouter;
 use Domain\Verdict\VerdictParser;
 use Domain\Vote\VoteAggregator;
@@ -22,6 +26,10 @@ class QuickDecisionRunner {
     private VoteParser $voteParser;
     private VoteAggregator $voteAggregator;
     private DecisionReliabilityService $reliabilityService;
+    private SocialDynamicsService $socialDynamics;
+    private SocialPromptContextBuilder $socialPrompt;
+    private EvidenceReportService $evidenceService;
+    private RiskProfileAnalyzer $riskAnalyzer;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -33,6 +41,10 @@ class QuickDecisionRunner {
         $this->voteParser    = new VoteParser();
         $this->voteAggregator = new VoteAggregator($this->voteRepo);
         $this->reliabilityService = new DecisionReliabilityService();
+        $this->socialDynamics = new SocialDynamicsService();
+        $this->socialPrompt   = new SocialPromptContextBuilder();
+        $this->evidenceService = new EvidenceReportService();
+        $this->riskAnalyzer    = new RiskProfileAnalyzer();
     }
 
     public function run(
@@ -47,6 +59,7 @@ class QuickDecisionRunner {
         $warning = null;
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($decisionThreshold);
         $this->voteRepo->clearSession($sessionId);
+        $this->socialDynamics->clearSession($sessionId);
 
         $nonSynth = array_values(array_filter($selectedAgents, fn($a) => $a !== 'synthesizer'));
         if (count($nonSynth) > 3) {
@@ -64,26 +77,38 @@ class QuickDecisionRunner {
             if (!$agent) continue;
 
             try {
+                $votesSnap   = $this->voteRepo->findVotesBySession($sessionId);
+                $maj         = SocialDynamicsService::summarizeMajority($votesSnap, []);
+                $socialBlock = null;
+                if (count($roundMessages) >= 1) {
+                    $socialBlock = $this->socialPrompt->buildUserBlock($sessionId, $agentId, $maj);
+                }
+
                 $messages = $this->promptBuilder->buildQuickDecisionMessages(
-                    $agent, $objective, $roundMessages, $language, $forceDisagreement, $contextDoc
+                    $agent, $objective, $roundMessages, $language, $forceDisagreement, $contextDoc, $socialBlock
                 );
 
                 $routed  = $this->providerRouter->chat($messages, $agent);
                 $content = $routed['content'];
 
                 $msg = $this->messageRepo->create([
-                    'id'           => $this->uuid(),
-                    'session_id'   => $sessionId,
-                    'role'         => 'assistant',
-                    'agent_id'     => $agentId,
-                    'provider_id'  => $routed['provider_id'] ?? null,
-                    'model'        => $routed['model'] ?? null,
-                    'round'        => 1,
-                    'phase'        => 'analysis',
-                    'mode_context' => 'quick-decision',
-                    'message_type' => 'analysis',
-                    'content'      => $content,
-                    'created_at'   => date('c'),
+                    'id'                       => $this->uuid(),
+                    'session_id'               => $sessionId,
+                    'role'                     => 'assistant',
+                    'agent_id'                 => $agentId,
+                    'provider_id'              => $routed['provider_id'] ?? null,
+                    'provider_name'            => $routed['provider_name'] ?? null,
+                    'model'                    => $routed['model'] ?? null,
+                    'requested_provider_id'    => $routed['requested_provider_id'] ?? null,
+                    'requested_model'          => $routed['requested_model'] ?? null,
+                    'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
+                    'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                    'round'                    => 1,
+                    'phase'                    => 'analysis',
+                    'mode_context'             => 'quick-decision',
+                    'message_type'             => 'analysis',
+                    'content'                  => $content,
+                    'created_at'               => date('c'),
                 ]);
                 $roundMessages[] = $msg;
                 $parsedVote = $this->voteParser->parse($content);
@@ -105,20 +130,36 @@ class QuickDecisionRunner {
                     error_log('[QuickDecisionRunner] Final vote parse failed for agent ' . $agentId);
                 }
 
+                $this->socialDynamics->ingestAgentResponse(
+                    $sessionId,
+                    1,
+                    $agentId,
+                    $content,
+                    null,
+                    $nonSynth,
+                    $this->voteRepo->findVotesBySession($sessionId),
+                    []
+                );
+
             } catch (\Throwable $e) {
                 $msg = $this->messageRepo->create([
-                    'id'           => $this->uuid(),
-                    'session_id'   => $sessionId,
-                    'role'         => 'assistant',
-                    'agent_id'     => $agentId,
-                    'provider_id'  => null,
-                    'model'        => null,
-                    'round'        => 1,
-                    'phase'        => 'analysis',
-                    'mode_context' => 'quick-decision',
-                    'message_type' => 'analysis',
-                    'content'      => '[Error] ' . $e->getMessage(),
-                    'created_at'   => date('c'),
+                    'id'                       => $this->uuid(),
+                    'session_id'               => $sessionId,
+                    'role'                     => 'assistant',
+                    'agent_id'                 => $agentId,
+                    'provider_id'              => null,
+                    'provider_name'            => null,
+                    'model'                    => null,
+                    'requested_provider_id'    => null,
+                    'requested_model'          => null,
+                    'provider_fallback_used'   => 0,
+                    'provider_fallback_reason' => null,
+                    'round'                    => 1,
+                    'phase'                    => 'analysis',
+                    'mode_context'             => 'quick-decision',
+                    'message_type'             => 'analysis',
+                    'content'                  => '[Error] ' . $e->getMessage(),
+                    'created_at'               => date('c'),
                 ]);
                 $roundMessages[] = $msg;
             }
@@ -132,24 +173,29 @@ class QuickDecisionRunner {
         if ($synthAgent) {
             try {
                 $messages = $this->promptBuilder->buildQuickDecisionMessages(
-                    $synthAgent, $objective, $roundMessages, $language, $forceDisagreement, $contextDoc
+                    $synthAgent, $objective, $roundMessages, $language, $forceDisagreement, $contextDoc, null
                 );
                 $routed  = $this->providerRouter->chat($messages, $synthAgent);
                 $content = $routed['content'];
 
                 $msg = $this->messageRepo->create([
-                    'id'           => $this->uuid(),
-                    'session_id'   => $sessionId,
-                    'role'         => 'assistant',
-                    'agent_id'     => 'synthesizer',
-                    'provider_id'  => $routed['provider_id'] ?? null,
-                    'model'        => $routed['model'] ?? null,
-                    'round'        => 2,
-                    'phase'        => 'synthesis',
-                    'mode_context' => 'quick-decision',
-                    'message_type' => 'synthesis',
-                    'content'      => $content,
-                    'created_at'   => date('c'),
+                    'id'                       => $this->uuid(),
+                    'session_id'               => $sessionId,
+                    'role'                     => 'assistant',
+                    'agent_id'                 => 'synthesizer',
+                    'provider_id'              => $routed['provider_id'] ?? null,
+                    'provider_name'            => $routed['provider_name'] ?? null,
+                    'model'                    => $routed['model'] ?? null,
+                    'requested_provider_id'    => $routed['requested_provider_id'] ?? null,
+                    'requested_model'          => $routed['requested_model'] ?? null,
+                    'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
+                    'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                    'round'                    => 2,
+                    'phase'                    => 'synthesis',
+                    'mode_context'             => 'quick-decision',
+                    'message_type'             => 'synthesis',
+                    'content'                  => $content,
+                    'created_at'               => date('c'),
                 ]);
                 $synthesis[] = $msg;
 
@@ -164,14 +210,19 @@ class QuickDecisionRunner {
                 }
             } catch (\Throwable $e) {
                 $msg = $this->messageRepo->create([
-                    'id'           => $this->uuid(),
-                    'session_id'   => $sessionId,
-                    'role'         => 'assistant',
-                    'agent_id'     => 'synthesizer',
-                    'provider_id'  => null,
-                    'model'        => null,
-                    'round'        => 2,
-                    'phase'        => 'synthesis',
+                    'id'                       => $this->uuid(),
+                    'session_id'               => $sessionId,
+                    'role'                     => 'assistant',
+                    'agent_id'                 => 'synthesizer',
+                    'provider_id'              => null,
+                    'provider_name'            => null,
+                    'model'                    => null,
+                    'requested_provider_id'    => null,
+                    'requested_model'          => null,
+                    'provider_fallback_used'   => 0,
+                    'provider_fallback_reason' => null,
+                    'round'                    => 2,
+                    'phase'                    => 'synthesis',
                     'mode_context' => 'quick-decision',
                     'message_type' => 'synthesis',
                     'content'      => '[Error] ' . $e->getMessage(),
@@ -181,6 +232,24 @@ class QuickDecisionRunner {
             }
         }
 
+        $allSessionMessages = $this->messageRepo->findBySession($sessionId);
+        $evidenceReport = null;
+        try {
+            $evidenceReport = $this->evidenceService->generateAndPersist(
+                $sessionId, $allSessionMessages, $contextDoc
+            );
+        } catch (\Throwable $e) {
+            error_log('[QuickDecisionRunner] Evidence generation failed: ' . $e->getMessage());
+        }
+        $riskProfile = null;
+        try {
+            $riskProfile = $this->riskAnalyzer->analyzeAndPersist(
+                $sessionId, $objective, 'quick-decision',
+                $allSessionMessages, $contextDoc, $decisionThreshold, $evidenceReport
+            );
+        } catch (\Throwable $e) {
+            error_log('[QuickDecisionRunner] Risk analysis failed: ' . $e->getMessage());
+        }
         $reliability = $this->reliabilityService->buildEnvelope(
             $objective,
             $contextDoc,
@@ -188,7 +257,12 @@ class QuickDecisionRunner {
             $this->voteRepo->findVotesBySession($sessionId),
             [],
             [],
-            $decisionThreshold
+            $decisionThreshold,
+            null,
+            null,
+            null,
+            $evidenceReport,
+            $riskProfile
         );
 
         return [
@@ -207,6 +281,9 @@ class QuickDecisionRunner {
             'reliability_warnings' => $reliability['reliability_warnings'],
             'decision_reliability_summary' => $reliability['decision_reliability_summary'] ?? null,
             'context_clarification' => $reliability['context_clarification'] ?? null,
+            'evidence_report' => $evidenceReport,
+            'risk_profile' => $riskProfile,
+            'risk_threshold_info' => $reliability['risk_threshold_info'] ?? null,
         ];
     }
 

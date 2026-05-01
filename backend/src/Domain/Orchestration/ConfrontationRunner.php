@@ -5,6 +5,11 @@ use Domain\Agents\AgentAssembler;
 use Domain\DecisionReliability\DecisionReliabilityService;
 use Domain\DecisionReliability\DevilAdvocateTriggerPolicy;
 use Domain\DecisionReliability\ReliabilityConfig;
+use Domain\Evidence\EvidenceReportService;
+use Domain\Risk\RiskProfileAnalyzer;
+use Domain\SocialDynamics\SocialDynamicsService;
+use Domain\SocialDynamics\SocialPromptContextBuilder;
+use Domain\DecisionReliability\FalseConsensusDetector;
 use Domain\Providers\ProviderRouter;
 use Domain\Verdict\VerdictParser;
 use Domain\Vote\VoteAggregator;
@@ -26,6 +31,11 @@ class ConfrontationRunner {
     private VoteAggregator $voteAggregator;
     private DevilAdvocateTriggerPolicy $daTriggerPolicy;
     private DecisionReliabilityService $reliabilityService;
+    private SocialDynamicsService $socialDynamics;
+    private SocialPromptContextBuilder $socialPrompt;
+    private FalseConsensusDetector $falseConsensusDetector;
+    private EvidenceReportService $evidenceService;
+    private RiskProfileAnalyzer $riskAnalyzer;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -39,6 +49,11 @@ class ConfrontationRunner {
         $this->voteAggregator = new VoteAggregator($this->voteRepo);
         $this->daTriggerPolicy = new DevilAdvocateTriggerPolicy();
         $this->reliabilityService = new DecisionReliabilityService();
+        $this->socialDynamics = new SocialDynamicsService();
+        $this->socialPrompt   = new SocialPromptContextBuilder();
+        $this->falseConsensusDetector = new FalseConsensusDetector();
+        $this->evidenceService = new EvidenceReportService();
+        $this->riskAnalyzer    = new RiskProfileAnalyzer();
     }
 
     /**
@@ -73,6 +88,7 @@ class ConfrontationRunner {
         $prevMessages = [];
         $state        = $this->debateMemory->loadState($sessionId);
         $this->voteRepo->clearSession($sessionId);
+        $this->socialDynamics->clearSession($sessionId);
         $daPartialHistory = [];
         $contextQuality = $this->reliabilityService->buildEnvelope(
             $objective,
@@ -87,13 +103,17 @@ class ConfrontationRunner {
         $daPromptPath = __DIR__ . '/../../../storage/prompts/devil_advocate.md';
         $daPrompt     = file_exists($daPromptPath) ? file_get_contents($daPromptPath) : '';
 
+        $forceStrongNext = false;
+
         for ($round = 1; $round <= $rounds; $round++) {
             $memoryContext = $this->debateMemory->buildPromptContext($state);
             $roundMessages = $this->runRound(
                 $sessionId, $objective, $activeAgents,
                 $prevMessages, $round, $rounds,
                 $interactionStyle, $replyPolicy, $language, $forceDisagreement, $contextDoc, $memoryContext, $state,
-                $agentProviders
+                $agentProviders,
+                $contextQuality,
+                $forceStrongNext
             );
 
             // Devil's Advocate: inject after all agents have spoken in this round
@@ -132,18 +152,23 @@ class ConfrontationRunner {
                         $daRouted  = $this->providerRouter->chat($daMessages, null, null, null, null);
                         $daContent = $daRouted['content'];
                         $daMsg     = $this->messageRepo->create([
-                            'id'           => $this->uuid(),
-                            'session_id'   => $sessionId,
-                            'role'         => 'assistant',
-                            'agent_id'     => 'devil_advocate',
-                            'provider_id'  => $daRouted['provider_id'] ?? null,
-                            'model'        => $daRouted['model'] ?? null,
-                            'round'        => $round,
-                            'phase'        => 'devil-advocate',
-                            'mode_context' => 'confrontation',
-                            'message_type' => 'devil_advocate',
-                            'content'      => $daContent,
-                            'created_at'   => date('c'),
+                            'id'                       => $this->uuid(),
+                            'session_id'               => $sessionId,
+                            'role'                     => 'assistant',
+                            'agent_id'                 => 'devil_advocate',
+                            'provider_id'              => $daRouted['provider_id'] ?? null,
+                            'provider_name'            => $daRouted['provider_name'] ?? null,
+                            'model'                    => $daRouted['model'] ?? null,
+                            'requested_provider_id'    => null,
+                            'requested_model'          => null,
+                            'provider_fallback_used'   => 0,
+                            'provider_fallback_reason' => null,
+                            'round'                    => $round,
+                            'phase'                    => 'devil-advocate',
+                            'mode_context'             => 'confrontation',
+                            'message_type'             => 'devil_advocate',
+                            'content'                  => $daContent,
+                            'created_at'               => date('c'),
                         ]);
                         $roundMessages[] = $daMsg;
                     } catch (\Throwable $e) {
@@ -178,6 +203,24 @@ class ConfrontationRunner {
         }
 
         $weighted = $this->debateMemory->buildWeightedAnalysis($state);
+        $allSessionMessages = $this->messageRepo->findBySession($sessionId);
+        $evidenceReport = null;
+        try {
+            $evidenceReport = $this->evidenceService->generateAndPersist(
+                $sessionId, $allSessionMessages, $contextDoc
+            );
+        } catch (\Throwable $e) {
+            error_log('[ConfrontationRunner] Evidence generation failed: ' . $e->getMessage());
+        }
+        $riskProfile = null;
+        try {
+            $riskProfile = $this->riskAnalyzer->analyzeAndPersist(
+                $sessionId, $objective, 'confrontation',
+                $allSessionMessages, $contextDoc, $decisionThreshold, $evidenceReport
+            );
+        } catch (\Throwable $e) {
+            error_log('[ConfrontationRunner] Risk analysis failed: ' . $e->getMessage());
+        }
         $reliability = $this->reliabilityService->buildEnvelope(
             $objective,
             $contextDoc,
@@ -185,7 +228,12 @@ class ConfrontationRunner {
             $this->voteRepo->findVotesBySession($sessionId),
             $state['positions'],
             $state['edges'],
-            $decisionThreshold
+            $decisionThreshold,
+            null,
+            null,
+            null,
+            $evidenceReport,
+            $riskProfile
         );
         return [
             'rounds'            => $allRounds,
@@ -210,6 +258,9 @@ class ConfrontationRunner {
             'reliability_warnings' => $reliability['reliability_warnings'],
             'decision_reliability_summary' => $reliability['decision_reliability_summary'] ?? null,
             'context_clarification' => $reliability['context_clarification'] ?? null,
+            'evidence_report' => $evidenceReport,
+            'risk_profile' => $riskProfile,
+            'risk_threshold_info' => $reliability['risk_threshold_info'] ?? null,
         ];
     }
 
@@ -229,7 +280,9 @@ class ConfrontationRunner {
         ?array $contextDoc = null,
         ?array $memoryContext = null,
         array  &$state,
-        array  $agentProviders = []
+        array  $agentProviders,
+        array  $contextQuality,
+        bool   &$forceStrongNextFlag
     ): array {
         $roundMessages = [];
         $respondingAgents = $this->selectRespondingAgents($agents, $prevMessages, $currentRound, $interactionStyle, $replyPolicy);
@@ -242,12 +295,21 @@ class ConfrontationRunner {
                 ? $this->computeAssignedTarget($agents, $agentId, $currentRound)
                 : null;
 
+            $votesSnap    = $this->voteRepo->findVotesBySession($sessionId);
+            $maj          = SocialDynamicsService::summarizeMajority($votesSnap, $state['positions'] ?? []);
+            $socialBlock  = null;
+            if ($currentRound > 1 && $totalRounds > 1) {
+                $socialBlock = $this->socialPrompt->buildUserBlock($sessionId, $agentId, $maj);
+            }
+
             try {
                 $messages = $this->promptBuilder->buildConfrontationRoundMessages(
                     $agent, $objective, $prevMessages,
                     $currentRound, $totalRounds,
                     $interactionStyle, $language, $forceDisagreement, $contextDoc, $memoryContext,
-                    $assignedTarget
+                    $assignedTarget,
+                    $socialBlock,
+                    $forceStrongNextFlag
                 );
 
                 $routed        = $this->providerRouter->chat($messages, $agent, null, null, $agentProviders[$agentId] ?? null);
@@ -260,19 +322,24 @@ class ConfrontationRunner {
                 $msgType = $this->resolveMessageType($currentRound, $totalRounds, $interactionStyle);
 
                 $msg = $this->messageRepo->create([
-                    'id'              => $this->uuid(),
-                    'session_id'      => $sessionId,
-                    'role'            => 'assistant',
-                    'agent_id'        => $agentId,
-                    'provider_id'     => $routed['provider_id'] ?? null,
-                    'model'           => $routed['model'] ?? null,
-                    'round'           => $currentRound,
-                    'phase'           => 'round-' . $currentRound,
-                    'target_agent_id' => $targetAgentId,
-                    'mode_context'    => 'confrontation',
-                    'message_type'    => $msgType,
-                    'content'         => $content,
-                    'created_at'      => date('c'),
+                    'id'                       => $this->uuid(),
+                    'session_id'               => $sessionId,
+                    'role'                     => 'assistant',
+                    'agent_id'                 => $agentId,
+                    'provider_id'              => $routed['provider_id'] ?? null,
+                    'provider_name'            => $routed['provider_name'] ?? null,
+                    'model'                    => $routed['model'] ?? null,
+                    'requested_provider_id'    => $routed['requested_provider_id'] ?? null,
+                    'requested_model'          => $routed['requested_model'] ?? null,
+                    'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
+                    'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                    'round'                    => $currentRound,
+                    'phase'                    => 'round-' . $currentRound,
+                    'target_agent_id'          => $targetAgentId,
+                    'mode_context'             => 'confrontation',
+                    'message_type'             => $msgType,
+                    'content'                  => $content,
+                    'created_at'               => date('c'),
                 ]);
                 $roundMessages[] = $msg;
                 $this->debateMemory->processMessage(
@@ -282,6 +349,16 @@ class ConfrontationRunner {
                     $content,
                     $targetAgentId,
                     $state
+                );
+                $this->socialDynamics->ingestAgentResponse(
+                    $sessionId,
+                    $currentRound,
+                    $agentId,
+                    $content,
+                    $targetAgentId,
+                    $agents,
+                    $this->voteRepo->findVotesBySession($sessionId),
+                    $state['positions'] ?? []
                 );
                 if ($currentRound === $totalRounds) {
                     $parsedVote = $this->voteParser->parse($content);
@@ -307,22 +384,39 @@ class ConfrontationRunner {
             } catch (\Throwable $e) {
                 $msgType = $this->resolveMessageType($currentRound, $totalRounds, $interactionStyle);
                 $msg = $this->messageRepo->create([
-                    'id'              => $this->uuid(),
-                    'session_id'      => $sessionId,
-                    'role'            => 'assistant',
-                    'agent_id'        => $agentId,
-                    'provider_id'     => null,
-                    'model'           => null,
-                    'round'           => $currentRound,
-                    'phase'           => 'round-' . $currentRound,
-                    'target_agent_id' => null,
-                    'mode_context'    => 'confrontation',
-                    'message_type'    => $msgType,
-                    'content'         => '[Error] ' . $e->getMessage(),
-                    'created_at'      => date('c'),
+                    'id'                       => $this->uuid(),
+                    'session_id'               => $sessionId,
+                    'role'                     => 'assistant',
+                    'agent_id'                 => $agentId,
+                    'provider_id'              => null,
+                    'provider_name'            => null,
+                    'model'                    => null,
+                    'requested_provider_id'    => isset($agentProviders[$agentId]) ? ($agentProviders[$agentId]['provider_id'] ?? null) : null,
+                    'requested_model'          => isset($agentProviders[$agentId]) ? ($agentProviders[$agentId]['model'] ?? null) : null,
+                    'provider_fallback_used'   => 0,
+                    'provider_fallback_reason' => null,
+                    'round'                    => $currentRound,
+                    'phase'                    => 'round-' . $currentRound,
+                    'target_agent_id'          => null,
+                    'mode_context'             => 'confrontation',
+                    'message_type'             => $msgType,
+                    'content'                  => '[Error] ' . $e->getMessage(),
+                    'created_at'               => date('c'),
                 ]);
                 $roundMessages[] = $msg;
             }
+        }
+
+        if ($currentRound < $totalRounds) {
+            $votesEnd = $this->voteRepo->findVotesBySession($sessionId);
+            $forceStrongNextFlag = $this->falseConsensusDetector->shouldForceChallengeNextRound(
+                $contextQuality,
+                $state['positions'] ?? [],
+                $state['edges'] ?? [],
+                $votesEnd
+            );
+        } else {
+            $forceStrongNextFlag = false;
         }
 
         return $roundMessages;
@@ -350,18 +444,23 @@ class ConfrontationRunner {
             $content = $routed['content'];
 
             $msg = $this->messageRepo->create([
-                'id'           => $this->uuid(),
-                'session_id'   => $sessionId,
-                'role'         => 'assistant',
-                'agent_id'     => 'synthesizer',
-                'provider_id'  => $routed['provider_id'] ?? null,
-                'model'        => $routed['model'] ?? null,
-                'round'        => $synthRound,
-                'phase'        => 'synthesis',
-                'mode_context' => 'confrontation',
-                'message_type' => 'synthesis',
-                'content'      => $content,
-                'created_at'   => date('c'),
+                'id'                       => $this->uuid(),
+                'session_id'               => $sessionId,
+                'role'                     => 'assistant',
+                'agent_id'                 => 'synthesizer',
+                'provider_id'              => $routed['provider_id'] ?? null,
+                'provider_name'            => $routed['provider_name'] ?? null,
+                'model'                    => $routed['model'] ?? null,
+                'requested_provider_id'    => $routed['requested_provider_id'] ?? null,
+                'requested_model'          => $routed['requested_model'] ?? null,
+                'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
+                'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                'round'                    => $synthRound,
+                'phase'                    => 'synthesis',
+                'mode_context'             => 'confrontation',
+                'message_type'             => 'synthesis',
+                'content'                  => $content,
+                'created_at'               => date('c'),
             ]);
 
             $verdict = null;
@@ -379,18 +478,23 @@ class ConfrontationRunner {
 
         } catch (\Throwable $e) {
             $msg = $this->messageRepo->create([
-                'id'           => $this->uuid(),
-                'session_id'   => $sessionId,
-                'role'         => 'assistant',
-                'agent_id'     => 'synthesizer',
-                'provider_id'  => null,
-                'model'        => null,
-                'round'        => $synthRound,
-                'phase'        => 'synthesis',
-                'mode_context' => 'confrontation',
-                'message_type' => 'synthesis',
-                'content'      => '[Error] ' . $e->getMessage(),
-                'created_at'   => date('c'),
+                'id'                       => $this->uuid(),
+                'session_id'               => $sessionId,
+                'role'                     => 'assistant',
+                'agent_id'                 => 'synthesizer',
+                'provider_id'              => null,
+                'provider_name'            => null,
+                'model'                    => null,
+                'requested_provider_id'    => null,
+                'requested_model'          => null,
+                'provider_fallback_used'   => 0,
+                'provider_fallback_reason' => null,
+                'round'                    => $synthRound,
+                'phase'                    => 'synthesis',
+                'mode_context'             => 'confrontation',
+                'message_type'             => 'synthesis',
+                'content'                  => '[Error] ' . $e->getMessage(),
+                'created_at'               => date('c'),
             ]);
             return [[$msg], null];
         }

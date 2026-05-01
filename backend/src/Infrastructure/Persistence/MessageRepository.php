@@ -23,26 +23,45 @@ class MessageRepository {
     public function create(array $data): array {
         $stmt = $this->pdo->prepare('
             INSERT INTO messages
-                (id, session_id, role, agent_id, provider_id, model, round, phase,
-                 target_agent_id, mode_context, message_type, content, created_at)
+                (id, session_id, role, agent_id,
+                 provider_id, provider_name, model,
+                 requested_provider_id, requested_model,
+                 provider_fallback_used, provider_fallback_reason,
+                 round, phase, target_agent_id, mode_context, message_type,
+                 thread_type, thread_turn, reaction_role, reactive_thread_id,
+                 content, created_at)
             VALUES
-                (:id, :session_id, :role, :agent_id, :provider_id, :model, :round, :phase,
-                 :target_agent_id, :mode_context, :message_type, :content, :created_at)
+                (:id, :session_id, :role, :agent_id,
+                 :provider_id, :provider_name, :model,
+                 :requested_provider_id, :requested_model,
+                 :provider_fallback_used, :provider_fallback_reason,
+                 :round, :phase, :target_agent_id, :mode_context, :message_type,
+                 :thread_type, :thread_turn, :reaction_role, :reactive_thread_id,
+                 :content, :created_at)
         ');
         $stmt->execute([
-            ':id'              => $data['id'],
-            ':session_id'      => $data['session_id'],
-            ':role'            => $data['role'],
-            ':agent_id'        => $data['agent_id'] ?? null,
-            ':provider_id'     => $data['provider_id'] ?? null,
-            ':model'           => $data['model'] ?? null,
-            ':round'           => $data['round'] ?? null,
-            ':phase'           => $data['phase'] ?? null,
-            ':target_agent_id' => $data['target_agent_id'] ?? null,
-            ':mode_context'    => $data['mode_context'] ?? null,
-            ':message_type'    => $data['message_type'] ?? null,
-            ':content'         => $data['content'],
-            ':created_at'      => $data['created_at'],
+            ':id'                      => $data['id'],
+            ':session_id'              => $data['session_id'],
+            ':role'                    => $data['role'],
+            ':agent_id'                => $data['agent_id'] ?? null,
+            ':provider_id'             => $data['provider_id'] ?? null,
+            ':provider_name'           => $data['provider_name'] ?? null,
+            ':model'                   => $data['model'] ?? null,
+            ':requested_provider_id'   => $data['requested_provider_id'] ?? null,
+            ':requested_model'         => $data['requested_model'] ?? null,
+            ':provider_fallback_used'  => isset($data['provider_fallback_used']) ? (int)$data['provider_fallback_used'] : 0,
+            ':provider_fallback_reason'=> $data['provider_fallback_reason'] ?? null,
+            ':round'                   => $data['round'] ?? null,
+            ':phase'                   => $data['phase'] ?? null,
+            ':target_agent_id'         => $data['target_agent_id'] ?? null,
+            ':mode_context'            => $data['mode_context'] ?? null,
+            ':message_type'            => $data['message_type'] ?? null,
+            ':thread_type'             => $data['thread_type'] ?? null,
+            ':thread_turn'             => isset($data['thread_turn']) ? (int)$data['thread_turn'] : null,
+            ':reaction_role'           => $data['reaction_role'] ?? null,
+            ':reactive_thread_id'      => $data['reactive_thread_id'] ?? null,
+            ':content'                 => $data['content'],
+            ':created_at'              => $data['created_at'],
         ]);
         $stmt2 = $this->pdo->prepare('SELECT * FROM messages WHERE id = ?');
         $stmt2->execute([$data['id']]);

@@ -29,8 +29,14 @@ function renderTemplateCard(template) {
   };
   const modeLabel = modeLabels[template.mode] || template.mode;
   const agents = (template.selected_agents || []).slice(0, 4);
+  const aria = `${template.name} — ${t('template.use')}`;
   return `
-    <div class="template-card">
+    <div class="template-card"
+         data-action="use-template"
+         data-template-id="${escHtml(template.id)}"
+         role="button"
+         tabindex="0"
+         aria-label="${escHtml(aria)}">
       <div class="template-card-header">
         <span class="template-card-icon">${icon}</span>
         <div style="flex:1;min-width:0;">
@@ -44,9 +50,7 @@ function renderTemplateCard(template) {
         <span style="font-size:12px;color:var(--text-muted);">${t('template.rounds')}: ${template.rounds}</span>
       </div>
       ${agents.length > 0 ? `<div class="template-card-agents">${agents.map((id) => `<span class="agent-badge" style="font-size:11px;">${agentIcon(id)}</span>`).join('')}</div>` : ''}
-      <button class="btn btn-secondary btn-sm" style="margin-top:10px;width:100%;" data-action="use-template" data-template-id="${escHtml(template.id)}">
-        ${t('template.use')}
-      </button>
+      <div class="template-card-hint" aria-hidden="true">▶ ${t('template.use')}</div>
     </div>
   `;
 }
@@ -504,6 +508,299 @@ function renderBiasDetectionPanel(sessionId, biasReport) {
     </div>`;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Social dynamics (alliances / conflicts)
+════════════════════════════════════════════════════════════════════════ */
+
+function renderSocialDynamicsPanel(sessionId, payload) {
+  const { escHtml, t } = getCtx();
+  const tip = `<span class="info-tooltip" data-tooltip="${escHtml(t('socialDynamics.tooltip'))}" aria-label="${escHtml(t('socialDynamics.tooltip'))}">?</span>`;
+
+  if (payload == null) {
+    return `
+      <div class="card debate-card" style="margin-top:16px;" id="social-dynamics-panel-${escHtml(sessionId)}">
+        <div class="debate-card-title">🤝 ${t('socialDynamics.title')} ${tip}</div>
+        <button class="btn btn-secondary btn-sm" style="margin-top:8px;" data-action="load-social-dynamics" data-session-id="${escHtml(sessionId)}">
+          📊 ${t('socialDynamics.load')}
+        </button>
+      </div>`;
+  }
+
+  const h = payload.highlights || {};
+  const alliances = Array.isArray(h.alliances) ? h.alliances : [];
+  const conflicts = Array.isArray(h.conflicts) ? h.conflicts : [];
+  const ch = h.most_challenged || null;
+  const sp = h.most_supported || null;
+  const ul = (items) => (items.length
+    ? `<ul style="margin:6px 0 0 18px;padding:0;font-size:13px;color:var(--text-secondary);line-height:1.45;">${items.map((x) => `<li>${escHtml(String(x))}</li>`).join('')}</ul>`
+    : `<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">${escHtml(t('socialDynamics.none'))}</div>`);
+
+  return `
+    <div class="card debate-card" style="margin-top:16px;" id="social-dynamics-panel-${escHtml(sessionId)}">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+        <div class="debate-card-title" style="margin:0;">🤝 ${t('socialDynamics.title')}</div>
+        ${tip}
+        <button class="btn btn-secondary btn-sm" style="margin-left:auto;font-size:11px;" data-action="load-social-dynamics" data-session-id="${escHtml(sessionId)}">↺</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;" class="social-dyn-grid">
+        <div>
+          <div style="font-weight:600;font-size:12px;margin-bottom:4px;">${escHtml(t('socialDynamics.alliances'))}</div>
+          ${ul(alliances)}
+        </div>
+        <div>
+          <div style="font-weight:600;font-size:12px;margin-bottom:4px;">${escHtml(t('socialDynamics.conflicts'))}</div>
+          ${ul(conflicts)}
+        </div>
+      </div>
+      <div style="margin-top:12px;font-size:13px;color:var(--text-secondary);line-height:1.5;">
+        <div><strong>${escHtml(t('socialDynamics.challengedMost'))}:</strong> ${ch ? escHtml(ch) : escHtml(t('socialDynamics.none'))}</div>
+        <div style="margin-top:4px;"><strong>${escHtml(t('socialDynamics.supportedMost'))}:</strong> ${sp ? escHtml(sp) : escHtml(t('socialDynamics.none'))}</div>
+      </div>
+    </div>`;
+}
+
+/* ── Evidence panel ── */
+
+function renderEvidencePanel(sessionId, report) {
+  const { escHtml, t } = getCtx();
+  const tip = `<span class="info-tooltip" data-tooltip="${escHtml(t('evidence.tooltip'))}" aria-label="${escHtml(t('evidence.tooltip'))}">?</span>`;
+
+  if (report == null) {
+    return `
+      <div class="card debate-card" style="margin-top:16px;" id="evidence-panel-${escHtml(sessionId)}">
+        <div class="debate-card-title">🔎 ${t('evidence.title')} ${tip}</div>
+        <button class="btn btn-secondary btn-sm" style="margin-top:8px;" data-action="load-evidence" data-session-id="${escHtml(sessionId)}">
+          📋 ${t('evidence.load')}
+        </button>
+      </div>`;
+  }
+
+  const score         = typeof report.evidence_score === 'number' ? Math.round(report.evidence_score * 100) : '–';
+  const unsupported   = report.unsupported_claims_count ?? 0;
+  const contradicted  = report.contradicted_claims_count ?? 0;
+  const impact        = report.decision_impact ?? 'low';
+  const rec           = report.recommendation ?? '';
+  const unknowns      = Array.isArray(report.critical_unknowns) ? report.critical_unknowns : [];
+
+  const impactColor = impact === 'high' ? 'var(--danger)' : impact === 'medium' ? 'var(--warning)' : 'var(--success)';
+  const scoreColor  = score < 40 ? 'var(--danger)' : score < 70 ? 'var(--warning)' : 'var(--success)';
+
+  const unknownsHtml = unknowns.length
+    ? `<ul style="margin:6px 0 0 18px;padding:0;font-size:12px;color:var(--text-secondary);">${
+        unknowns.map((u) => `<li>${escHtml(String(u))}</li>`).join('')
+      }</ul>`
+    : '';
+
+  return `
+    <div class="card debate-card" style="margin-top:16px;" id="evidence-panel-${escHtml(sessionId)}">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+        <div class="debate-card-title" style="margin:0;">🔎 ${t('evidence.title')}</div>
+        ${tip}
+        <button class="btn btn-secondary btn-sm" style="margin-left:auto;font-size:11px;" data-action="recompute-evidence" data-session-id="${escHtml(sessionId)}"
+          title="${escHtml(t('evidence.recompute'))}">↺ ${t('evidence.recompute')}</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px;">
+        <div class="evidence-metric-cell">
+          <div class="evidence-metric-label">${escHtml(t('evidence.score'))}</div>
+          <div class="evidence-metric-value" style="color:${scoreColor};">${score}%</div>
+        </div>
+        <div class="evidence-metric-cell">
+          <div class="evidence-metric-label">${escHtml(t('evidence.unsupported'))}</div>
+          <div class="evidence-metric-value" style="color:${unsupported > 0 ? 'var(--warning)' : 'var(--text-secondary)'};">${unsupported}</div>
+        </div>
+        <div class="evidence-metric-cell">
+          <div class="evidence-metric-label">${escHtml(t('evidence.contradicted'))}</div>
+          <div class="evidence-metric-value" style="color:${contradicted > 0 ? 'var(--danger)' : 'var(--text-secondary)'};">${contradicted}</div>
+        </div>
+        <div class="evidence-metric-cell">
+          <div class="evidence-metric-label">${escHtml(t('evidence.impact'))}</div>
+          <div class="evidence-metric-value" style="color:${impactColor};text-transform:uppercase;font-size:12px;">${escHtml(impact)}</div>
+        </div>
+      </div>
+      ${unknowns.length ? `<div style="margin-bottom:10px;"><div style="font-weight:600;font-size:12px;margin-bottom:2px;">${escHtml(t('evidence.criticalUnknowns'))}</div>${unknownsHtml}</div>` : ''}
+      ${rec ? `<div style="font-size:13px;color:var(--text-secondary);line-height:1.45;border-top:1px solid var(--border);padding-top:10px;">${escHtml(rec)}</div>` : ''}
+    </div>`;
+}
+
+/* ── Risk & Reversibility panel ── */
+
+function renderLlmUsedPanel(messages) {
+  const { escHtml, t } = getCtx();
+
+  // Collect unique agents with provider info
+  const agentMap = {};
+  (messages || []).forEach((msg) => {
+    if (!msg.agent_id || msg.role !== 'assistant') return;
+    const aid = msg.agent_id;
+    if (!agentMap[aid]) {
+      agentMap[aid] = {
+        provider_id:           msg.provider_id           || null,
+        provider_name:         msg.provider_name         || null,
+        model:                 msg.model                 || null,
+        requested_provider_id: msg.requested_provider_id || null,
+        requested_model:       msg.requested_model       || null,
+        fallback_used:         msg.provider_fallback_used == 1 || msg.provider_fallback_used === true,
+        fallback_reason:       msg.provider_fallback_reason || null,
+      };
+    }
+  });
+
+  const agents = Object.keys(agentMap);
+  if (agents.length === 0) return '';
+
+  const hasAnyProviderInfo = agents.some((a) => agentMap[a].provider_id || agentMap[a].model);
+  if (!hasAnyProviderInfo) return '';
+
+  const rows = agents.map((aid) => {
+    const info = agentMap[aid];
+    const usedLabel   = [info.model, info.provider_name || info.provider_id].filter(Boolean).join(' via ') || t('message.llm.routingGlobal');
+    const reqLabel    = info.requested_provider_id ? [info.requested_model, info.requested_provider_id].filter(Boolean).join(' / ') : '—';
+    const fallbackCell= info.fallback_used
+      ? `<span style="color:#f59e0b;font-size:11px;" title="${escHtml(info.fallback_reason || '')}">⚠ ${t('message.llm.fallback')}</span>`
+      : `<span style="color:#22c55e;font-size:11px;">✓</span>`;
+    return `
+      <tr>
+        <td style="padding:4px 8px;font-size:12px;font-weight:600;">${escHtml(aid)}</td>
+        <td style="padding:4px 8px;font-size:12px;color:var(--text-muted);">${escHtml(reqLabel)}</td>
+        <td style="padding:4px 8px;font-size:12px;">${escHtml(usedLabel)}</td>
+        <td style="padding:4px 8px;text-align:center;">${fallbackCell}</td>
+      </tr>`;
+  }).join('');
+
+  return `
+    <div class="card session-llm-used-card debate-card" style="margin-top:16px;">
+      <div class="debate-card-title">🤖 ${t('session.llmUsed.title')}</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">${t('session.llmUsed.desc')}</div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border);">
+            <th style="padding:4px 8px;font-size:11px;text-align:left;color:var(--text-muted);text-transform:uppercase;">${t('session.llmUsed.agent')}</th>
+            <th style="padding:4px 8px;font-size:11px;text-align:left;color:var(--text-muted);text-transform:uppercase;">${t('session.llmUsed.requestedProvider')}</th>
+            <th style="padding:4px 8px;font-size:11px;text-align:left;color:var(--text-muted);text-transform:uppercase;">${t('session.llmUsed.usedProvider')}</th>
+            <th style="padding:4px 8px;font-size:11px;text-align:center;color:var(--text-muted);text-transform:uppercase;">${t('session.llmUsed.fallback')}</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+function renderRiskPanel(sessionId, profile, thresholdInfo) {
+  const { escHtml, t } = getCtx();
+  const tip = `<span class="info-tooltip" data-tooltip="${escHtml(t('risk.tooltip'))}" aria-label="${escHtml(t('risk.tooltip'))}">?</span>`;
+
+  if (profile == null) {
+    return `
+      <div class="card debate-card" style="margin-top:16px;" id="risk-panel-${escHtml(sessionId)}">
+        <div class="debate-card-title">⚠️ ${t('risk.title')} ${tip}</div>
+        <button class="btn btn-secondary btn-sm" style="margin-top:8px;" data-action="load-risk-profile" data-session-id="${escHtml(sessionId)}">
+          🔍 ${t('risk.load')}
+        </button>
+      </div>`;
+  }
+
+  const riskLevel    = profile.risk_level ?? 'medium';
+  const reversibility= profile.reversibility ?? 'moderate';
+  const categories   = Array.isArray(profile.risk_categories) ? profile.risk_categories : [];
+  const process      = profile.required_process ?? 'standard';
+  const recs         = Array.isArray(profile.recommendations) ? profile.recommendations : [];
+  const recThr       = typeof profile.recommended_threshold === 'number'
+    ? Math.round(profile.recommended_threshold * 100) + '%'
+    : '–';
+
+  const riskColors = {
+    low: 'var(--success)',
+    medium: 'var(--warning)',
+    high: 'var(--danger)',
+    critical: '#b91c1c',
+  };
+  const revColors = {
+    easy: 'var(--success)',
+    moderate: 'var(--warning)',
+    hard: 'var(--danger)',
+    irreversible: '#b91c1c',
+  };
+
+  const riskColor = riskColors[riskLevel] || 'var(--text-secondary)';
+  const revColor  = revColors[reversibility] || 'var(--text-secondary)';
+
+  // Threshold comparison block
+  let thrHtml = '';
+  const ti = thresholdInfo || {};
+  if (ti.configured_threshold != null && ti.risk_adjusted_threshold != null) {
+    const cfg = Math.round(ti.configured_threshold * 100);
+    const adj = Math.round(ti.risk_adjusted_threshold * 100);
+    const adjColor = ti.was_adjusted ? 'var(--warning)' : 'var(--text-secondary)';
+    thrHtml = `
+      <div style="display:flex;gap:16px;margin-top:12px;flex-wrap:wrap;">
+        <div class="evidence-metric-cell" style="flex:1;min-width:120px;">
+          <div class="evidence-metric-label">${escHtml(t('risk.configuredThreshold'))}</div>
+          <div class="evidence-metric-value" style="color:var(--text-secondary);font-size:18px;">${cfg}%</div>
+        </div>
+        <div class="evidence-metric-cell" style="flex:1;min-width:120px;">
+          <div class="evidence-metric-label">${escHtml(t('risk.adjustedThreshold'))}</div>
+          <div class="evidence-metric-value" style="color:${adjColor};font-size:18px;">${adj}%</div>
+        </div>
+      </div>`;
+  }
+
+  const recsHtml = recs.length
+    ? `<ul style="margin:8px 0 0 18px;padding:0;font-size:12px;color:var(--text-secondary);line-height:1.5;">${
+        recs.slice(0,3).map((r) => `<li>${escHtml(String(r))}</li>`).join('')
+      }</ul>`
+    : '';
+
+  return `
+    <div class="card debate-card" style="margin-top:16px;" id="risk-panel-${escHtml(sessionId)}">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+        <div class="debate-card-title" style="margin:0;">⚠️ ${t('risk.title')}</div>
+        ${tip}
+        <button class="btn btn-secondary btn-sm" style="margin-left:auto;font-size:11px;" data-action="recompute-risk-profile" data-session-id="${escHtml(sessionId)}"
+          title="${escHtml(t('risk.recompute'))}">↺ ${t('risk.recompute')}</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:8px;">
+        <div class="evidence-metric-cell">
+          <div class="evidence-metric-label">${escHtml(t('risk.level'))}</div>
+          <div class="evidence-metric-value" style="color:${riskColor};font-size:16px;text-transform:uppercase;">${escHtml(riskLevel)}</div>
+        </div>
+        <div class="evidence-metric-cell">
+          <div class="evidence-metric-label">${escHtml(t('risk.reversibility'))}</div>
+          <div class="evidence-metric-value" style="color:${revColor};font-size:14px;text-transform:capitalize;">${escHtml(reversibility)}</div>
+        </div>
+        <div class="evidence-metric-cell">
+          <div class="evidence-metric-label">${escHtml(t('risk.process'))}</div>
+          <div class="evidence-metric-value" style="font-size:14px;color:var(--text-secondary);text-transform:capitalize;">${escHtml(process)}</div>
+        </div>
+        <div class="evidence-metric-cell">
+          <div class="evidence-metric-label">${escHtml(t('risk.recommendedThreshold'))}</div>
+          <div class="evidence-metric-value" style="font-size:16px;color:var(--text-secondary);">${escHtml(recThr)}</div>
+        </div>
+      </div>
+      ${categories.length ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">${escHtml(t('risk.categories'))}: ${categories.map((c)=>escHtml(c)).join(' · ')}</div>` : ''}
+      ${thrHtml}
+      ${recsHtml ? `<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px;">${recsHtml}</div>` : ''}
+    </div>`;
+}
+
+/* ── Collapsible panel wrapper ── */
+
+function renderCollapsiblePanel(key, title, innerHtml, state) {
+  if (!innerHtml || innerHtml.trim() === '') return '';
+  const collapsed  = state?.collapsedPanels instanceof Set
+    ? state.collapsedPanels.has(key)
+    : false;
+  const { t } = getCtx();
+  return `
+    <div class="collapsible-panel" data-panel-key="${key}">
+      <div class="collapsible-panel-header" data-action="toggle-panel-collapse" data-panel-key="${key}" style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border);margin-bottom:${collapsed ? '0' : '8px'};">
+        <span style="font-size:13px;font-weight:600;color:var(--text-secondary);flex:1;">${title}</span>
+        <span style="font-size:11px;color:var(--text-muted);">${collapsed ? t('session.section.expand') : t('session.section.collapse')}</span>
+        <span style="color:var(--text-muted);font-size:12px;">${collapsed ? '▶' : '▼'}</span>
+      </div>
+      ${collapsed ? '' : `<div class="collapsible-panel-body">${innerHtml}</div>`}
+    </div>`;
+}
+
 /* ── Main session history view ── */
 
 function renderSessionHistory() {
@@ -548,7 +845,14 @@ function renderSessionHistory() {
     const isDA      = msg.agent_id === 'devil_advocate' || msg.message_type === 'devil_advocate';
     const daClass   = isDA ? ' devil-advocate-card' : '';
     const daBadge   = isDA ? `<span class="badge" style="background:rgba(220,38,38,0.12);color:#dc2626;font-size:10px;">😈 ${t('devil.advocate.badge')}</span>` : '';
-    const provBadge = (msg.provider_id || msg.model) ? `<span class="provider-badge" data-ui="expert-only">${msg.provider_id ? escHtml(msg.provider_id) : ''}${msg.model ? ` · ${escHtml(msg.model)}` : ''}</span>` : '';
+    const providerLabel = msg.provider_name || msg.provider_id || null;
+    const modelLabel    = msg.model || null;
+    const hasFallback   = msg.provider_fallback_used == 1 || msg.provider_fallback_used === true;
+    const provBadge = (providerLabel || modelLabel) ? `
+      <span class="message-llm-meta provider-badge" data-ui="expert-only">
+        ${modelLabel ? escHtml(modelLabel) : ''}${providerLabel ? ` via ${escHtml(providerLabel)}` : ''}
+        ${hasFallback ? `<span class="message-llm-fallback" title="${escHtml(msg.provider_fallback_reason || '')}">⚠ ${t('message.llm.fallback')}</span>` : ''}
+      </span>` : '';
     return `<div class="agent-card${daClass}" style="margin-bottom:12px;"><div class="agent-card-header"><span class="agent-icon">${icon}</span><div style="flex:1;min-width:0;"><div class="agent-name">${escHtml(name)}</div></div>${daBadge}${targetBadge}${typeBadge}</div><div class="agent-content md-content">${renderMarkdown(msg.content)}</div><div class="agent-card-footer" style="font-size:11px;color:var(--text-muted);">${provBadge}${msg.created_at ? `<span style="margin-left:auto;">${formatDate(msg.created_at)}</span>` : ''}</div></div>`;
   };
 
@@ -574,6 +878,10 @@ function renderSessionHistory() {
   const personaScores    = state.personaScores?.[session.id];
   const confidenceTimeline = state.confidenceTimeline?.[session.id];
   const biasReport       = state.biasReport?.[session.id];
+  const socialDynamics   = state.socialDynamics?.[session.id];
+  const evidenceReport   = state.evidenceReport?.[session.id] ?? (data.evidence_report || null);
+  const riskProfile      = state.riskProfile?.[session.id]   ?? (data.risk_profile || null);
+  const riskThresholdInfo = data.risk_threshold_info || null;
   const postmortem       = state.postmortem?.[session.id];
   const showPostmortemForm = state.postmortemFormOpen?.[session.id];
 
@@ -661,11 +969,15 @@ function renderSessionHistory() {
 
       ${mode !== 'chat' ? `
       <div class="session-history-analytics-panels">
-        ${(window.DecisionArena.views.shared.renderDebateAuditPanel || (() => ''))(session.id)}
-        ${renderPersonaScorePanel(session.id, personaScores || null)}
+        ${renderCollapsiblePanel('debate-audit', t('session.section.debateAudit'), (window.DecisionArena.views.shared.renderDebateAuditPanel || (() => ''))(session.id), state)}
+        ${renderCollapsiblePanel('persona-scores', t('session.section.personaScores'), renderPersonaScorePanel(session.id, personaScores || null), state)}
+        ${renderCollapsiblePanel('social-dynamics', t('session.section.socialDynamics'), renderSocialDynamicsPanel(session.id, socialDynamics ?? null), state)}
+        ${renderCollapsiblePanel('llm-used', t('session.section.llmUsed'), renderLlmUsedPanel(messages), state)}
+        ${renderCollapsiblePanel('evidence', t('session.section.evidence'), renderEvidencePanel(session.id, evidenceReport), state)}
+        ${renderCollapsiblePanel('risk', t('session.section.risk'), renderRiskPanel(session.id, riskProfile, riskThresholdInfo), state)}
         ${(window.DecisionArena.views.shared.renderGraphViewPanel || (() => ''))(session.id)}
         ${(window.DecisionArena.views.shared.renderArgumentHeatmapPanel || (() => ''))(session.id)}
-        ${renderBiasDetectionPanel(session.id, biasReport || null)}
+        ${renderCollapsiblePanel('bias-detection', t('session.section.biasDetection'), renderBiasDetectionPanel(session.id, biasReport || null), state)}
         ${(window.DecisionArena.views.shared.renderDebateReplayPanel || (() => ''))(session.id)}
       </div>
       ` : ''}
@@ -692,6 +1004,7 @@ function registerSessionHistoryFeature() {
   window.DecisionArena.views.shared.renderPersonaScorePanel  = renderPersonaScorePanel;
   window.DecisionArena.views.shared.renderConfidenceTimeline = renderConfidenceTimelinePanel;
   window.DecisionArena.views.shared.renderBiasDetectionPanel = renderBiasDetectionPanel;
+  window.DecisionArena.views.shared.renderSocialDynamicsPanel = renderSocialDynamicsPanel;
   window.DecisionArena.views.shared.renderPostmortemBanner   = renderPostmortemBanner;
   window.DecisionArena.views.shared.renderPostmortemForm     = renderPostmortemForm;
 }
@@ -702,6 +1015,10 @@ export {
   renderTemplateCard,
   renderActionPlanPanel,
   renderPersonaScorePanel,
+  renderSocialDynamicsPanel,
+  renderLlmUsedPanel,
+  renderEvidencePanel,
+  renderRiskPanel,
   renderConfidenceTimelinePanel,
   renderBiasDetectionPanel,
   renderPostmortemBanner,

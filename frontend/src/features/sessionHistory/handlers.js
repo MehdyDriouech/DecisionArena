@@ -317,10 +317,95 @@ function registerSessionHistoryHandlers() {
     }
   });
 
+  registerAction('load-social-dynamics', async ({ element }) => {
+    const { state, render, apiFetch } = getCtx();
+    const sessionId = element.dataset.sessionId;
+    if (!sessionId) return;
+    try {
+      const result = await apiFetch(`/api/sessions/${sessionId}/relationships`);
+      state.socialDynamics = state.socialDynamics || {};
+      state.socialDynamics[sessionId] = {
+        relationships: result.relationships || [],
+        highlights: result.highlights || {},
+      };
+      render();
+    } catch (err) {
+      console.error('social-dynamics', err);
+    }
+  });
+
   registerAction('open-persona-editor', ({ element }) => {
     const agentId = element.dataset.agentId;
     if (agentId) {
       window.DecisionArena.router.navigate('persona-builder');
+    }
+  });
+
+  /* ══════════════════════════════════════════════════════════════════════
+     Evidence Layer
+  ═══════════════════════════════════════════════════════════════════════ */
+  registerAction('load-evidence', async ({ element }) => {
+    const { state, render, apiFetch } = getCtx();
+    const sessionId = element.dataset.sessionId;
+    if (!sessionId) return;
+    try {
+      const result = await apiFetch(`/api/sessions/${sessionId}/evidence-report`);
+      state.evidenceReport = state.evidenceReport || {};
+      state.evidenceReport[sessionId] = result.evidence_report || null;
+      render();
+    } catch (err) {
+      console.error('[evidence] load failed', err);
+    }
+  });
+
+  /* ══════════════════════════════════════════════════════════════════════
+     Risk & Reversibility Layer
+  ═══════════════════════════════════════════════════════════════════════ */
+  registerAction('load-risk-profile', async ({ element }) => {
+    const { state, render, apiFetch } = getCtx();
+    const sessionId = element.dataset.sessionId;
+    if (!sessionId) return;
+    try {
+      const result = await apiFetch(`/api/sessions/${sessionId}/risk-profile`);
+      state.riskProfile = state.riskProfile || {};
+      state.riskProfile[sessionId] = result.risk_profile || null;
+      render();
+    } catch (err) {
+      console.error('[risk] load failed', err);
+    }
+  });
+
+  registerAction('recompute-risk-profile', async ({ element }) => {
+    const { state, render, apiFetch } = getCtx();
+    const sessionId = element.dataset.sessionId;
+    if (!sessionId) return;
+    element.disabled = true;
+    try {
+      const result = await apiFetch(`/api/sessions/${sessionId}/risk-profile/recompute`, { method: 'POST' });
+      state.riskProfile = state.riskProfile || {};
+      state.riskProfile[sessionId] = result.risk_profile || null;
+      render();
+    } catch (err) {
+      console.error('[risk] recompute failed', err);
+    } finally {
+      element.disabled = false;
+    }
+  });
+
+  registerAction('recompute-evidence', async ({ element }) => {
+    const { state, render, apiFetch, t } = getCtx();
+    const sessionId = element.dataset.sessionId;
+    if (!sessionId) return;
+    element.disabled = true;
+    try {
+      const result = await apiFetch(`/api/sessions/${sessionId}/evidence/recompute`, { method: 'POST' });
+      state.evidenceReport = state.evidenceReport || {};
+      state.evidenceReport[sessionId] = result.evidence_report || null;
+      render();
+    } catch (err) {
+      console.error('[evidence] recompute failed', err);
+    } finally {
+      element.disabled = false;
     }
   });
 

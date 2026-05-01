@@ -56,12 +56,14 @@ class PromptBuilder {
         bool $forceDisagreement = false,
         ?array $contextDoc = null,
         ?array $memoryContext = null,
-        ?string $assignedTarget = null
+        ?string $assignedTarget = null,
+        ?string $socialDynamicsBlock = null,
+        bool $forceStrongContradictionNext = false
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'decision-room', $language);
 
         $roundPolicy      = new RoundPolicy();
-        $roundInstruction = $roundPolicy->getRoundInstruction($round, $totalRounds);
+        $roundInstruction = $roundPolicy->getRoundInstruction($round, $totalRounds, $forceStrongContradictionNext);
 
         $userContent  = $this->buildContextDocumentContent($contextDoc);
         $userContent .= "**Objective:** $objective\n\n";
@@ -80,6 +82,13 @@ class PromptBuilder {
             $userContent .= "- Do not repeat existing arguments unless refining them.\n";
             $userContent .= "- Challenge or extend existing arguments.\n";
             $userContent .= "- Refer explicitly to previous arguments when relevant.\n\n";
+        }
+        $socialPolicy = $this->loadPrompt('social-dynamics-policy') ?? '';
+        if ($socialPolicy !== '') {
+            $userContent .= "---\n" . $socialPolicy . "\n---\n\n";
+        }
+        if ($socialDynamicsBlock !== null && $socialDynamicsBlock !== '') {
+            $userContent .= $socialDynamicsBlock;
         }
         $userContent .= "**Your Task:** $roundInstruction\n\n";
         if ($round > 1 && $agent->id !== 'synthesizer') {
@@ -147,9 +156,14 @@ class PromptBuilder {
 
         $userContent .= "**Your task for this phase:** $phaseInstruction";
 
-        $systemFull = $confrontationPolicy
-            ? $systemContent . "\n\n---\n\n" . $confrontationPolicy
-            : $systemContent;
+        $socialPolicy   = $this->loadPrompt('social-dynamics-policy') ?? '';
+        $systemFull = $systemContent;
+        if ($confrontationPolicy !== '') {
+            $systemFull .= "\n\n---\n\n" . $confrontationPolicy;
+        }
+        if ($socialPolicy !== '') {
+            $systemFull .= "\n\n---\n\n" . $socialPolicy;
+        }
 
         return [
             ['role' => 'system', 'content' => $systemFull],
@@ -171,12 +185,15 @@ class PromptBuilder {
         bool   $forceDisagreement = false,
         ?array $contextDoc = null,
         ?array $memoryContext = null,
-        ?string $assignedTarget = null
+        ?string $assignedTarget = null,
+        ?string $socialDynamicsBlock = null,
+        bool   $forceStrongContradictionNext = false
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'confrontation', $language);
 
         $instruction = $this->getConfrontationRoundInstruction(
-            $currentRound, $totalRounds, $interactionStyle, $agent->id, $previousMessages, $assignedTarget
+            $currentRound, $totalRounds, $interactionStyle, $agent->id, $previousMessages, $assignedTarget,
+            $forceStrongContradictionNext
         );
 
         $userContent  = $this->buildContextDocumentContent($contextDoc);
@@ -198,6 +215,10 @@ class PromptBuilder {
             $userContent .= "- Do not repeat existing arguments unless refining them.\n";
             $userContent .= "- Challenge or extend existing arguments.\n";
             $userContent .= "- Refer explicitly to previous arguments when relevant.\n\n";
+        }
+
+        if ($socialDynamicsBlock !== null && $socialDynamicsBlock !== '') {
+            $userContent .= $socialDynamicsBlock;
         }
 
         $userContent .= "**Your task:** $instruction";
@@ -322,12 +343,15 @@ class PromptBuilder {
         array  $previousMessages,
         string $language = 'en',
         bool   $forceDisagreement = false,
-        ?array $contextDoc = null
+        ?array $contextDoc = null,
+        ?string $socialDynamicsBlock = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'quick-decision', $language);
 
         $userContent  = $this->buildContextDocumentContent($contextDoc);
         $userContent .= "**Objective:** $objective\n\n";
+
+        $isSynthesizer = $agent->id === 'synthesizer';
 
         if (!empty($previousMessages)) {
             $userContent .= "**Other agents' analyses:**\n";
@@ -337,7 +361,12 @@ class PromptBuilder {
             $userContent .= "\n";
         }
 
-        $isSynthesizer = $agent->id === 'synthesizer';
+        if ($socialDynamicsBlock !== null && $socialDynamicsBlock !== '') {
+            $userContent .= $socialDynamicsBlock;
+        } elseif (!$isSynthesizer && count($previousMessages) >= 1) {
+            $userContent .= "> **Brief contradiction pass:** Respond to another agent explicitly — cite what you endorse or contest one concrete assumption.\n";
+            $userContent .= "> Keep it concise; **challenge reasoning, never the person**.\n\n";
+        }
 
         if ($isSynthesizer) {
             $userContent .= "**Your task:** Synthesize the analyses above into a final recommendation.\n";
@@ -385,9 +414,13 @@ class PromptBuilder {
         bool   $forceDisagreement = true,
         ?array $contextDoc = null,
         ?array $memoryContext = null,
-        ?string $assignedTarget = null
+        ?string $assignedTarget = null,
+        ?string $socialDynamicsBlock = null,
+        bool   $forceStrongContradictionNext = false
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'stress-test', $language);
+
+        $roundPolicy = new RoundPolicy();
 
         $userContent  = $this->buildContextDocumentContent($contextDoc);
         $userContent .= "**Objective to stress-test:** $objective\n\n";
@@ -403,6 +436,10 @@ class PromptBuilder {
         if (!empty($memoryContext['argument_memory_summary'])) {
             $userContent .= "# Argument Memory (summary)\n\n";
             $userContent .= $memoryContext['argument_memory_summary'] . "\n\n";
+        }
+
+        if ($socialDynamicsBlock !== null && $socialDynamicsBlock !== '') {
+            $userContent .= $socialDynamicsBlock;
         }
 
         $isSynthesizer = ($agent->id === 'synthesizer');
@@ -436,6 +473,11 @@ class PromptBuilder {
             $userContent .= "- De-risking actions that could be done before committing fully\n\n";
             $userContent .= "Be practical. Every action must be executable. Prefer small next steps.";
             $userContent .= $this->buildTargetAgentHint($agent->id, $previousRoundMessages, $assignedTarget);
+        }
+
+        if (!$isSynthesizer && $totalRounds > 1) {
+            $rType = $roundPolicy->getRoundType($round, $totalRounds);
+            $userContent .= "\n\n**Round mindset:** " . $roundPolicy->getRoundTypeDirective($rType, $forceStrongContradictionNext);
         }
 
         if ($forceDisagreement && !$isSynthesizer) {
@@ -655,14 +697,26 @@ class PromptBuilder {
         string  $interactionStyle,
         string  $agentId,
         array   $prevMessages,
-        ?string $assignedTarget = null
+        ?string $assignedTarget = null,
+        bool    $forceStrongContradictionNext = false
     ): string {
+        $policy = new RoundPolicy();
+        $suffix = '';
+        if ($totalRounds > 1) {
+            $suffix = "\n\n**Round mindset:** " . $policy->getRoundTypeDirective(
+                $policy->getRoundType($currentRound, $totalRounds),
+                $forceStrongContradictionNext
+            );
+        }
+
         if ($currentRound === 1) {
-            return "ROUND 1 — INITIAL POSITION: State your position clearly on the objective above. Present your strongest arguments, be specific and evidence-based. Use your default response format.";
+            return "ROUND 1 — INITIAL POSITION: State your position clearly on the objective above. Present your strongest arguments, be specific and evidence-based. Use your default response format."
+                . $suffix;
         }
 
         if ($currentRound === $totalRounds) {
-            return "FINAL ROUND — REVISED POSITION: Review all prior positions and objections. State your final, revised position. Indicate your confidence level (low / medium / high). Acknowledge what, if anything, changed your mind. Use your default response format.";
+            return "FINAL ROUND — REVISED POSITION: Review all prior positions and objections. State your final, revised position. Indicate your confidence level (low / medium / high). Acknowledge what, if anything, changed your mind. Use your default response format."
+                . $suffix;
         }
 
         // Middle challenge rounds
@@ -680,7 +734,8 @@ class PromptBuilder {
                 . "## Revised Position\n(your updated stance based on this exchange)\n\n"
                 . "Available targets: {$targetList}\n"
                 . "Do NOT choose yourself. Challenge specific claims, not vague generalities. "
-                . "Do not repeat your previous answer.";
+                . "Do not repeat your previous answer."
+                . $suffix;
         }
 
         $targetHint = $this->buildTargetAgentHint($agentId, $prevMessages, $assignedTarget);
@@ -688,7 +743,8 @@ class PromptBuilder {
             . "Challenge the weakest argument you see with specific counter-evidence. "
             . "Update your own position if warranted. Avoid generic agreement. "
             . "Use your default response format."
-            . $targetHint;
+            . $targetHint
+            . $suffix;
     }
 
     // ──────────────────────────────────────────────────────────────────────────

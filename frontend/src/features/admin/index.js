@@ -55,6 +55,14 @@ const ADMIN_HOME_SECTIONS = [
         badgeKey: 'admin.badge.technical',
         noteKey: 'admin.card.providers.noteRouting',
       },
+      {
+        nav: 'prompt-policies',
+        titleKey: 'admin.promptPolicies.title',
+        icon: '📝',
+        descKey: 'admin.promptPolicies.desc',
+        usageKey: 'admin.promptPolicies.usage',
+        badgeKey: 'admin.badge.advanced',
+      },
     ],
   },
   {
@@ -78,6 +86,14 @@ const ADMIN_HOME_SECTIONS = [
         usageKey: 'admin.card.retrospective.usage',
         badgeKey: 'admin.badge.analysis',
         featured: true,
+      },
+      {
+        nav: 'learning',
+        titleKey: 'admin.learning.title',
+        icon: '🧬',
+        descKey: 'admin.card.learning.desc',
+        usageKey: 'admin.card.learning.usage',
+        badgeKey: 'admin.badge.analysis',
       },
     ],
   },
@@ -169,17 +185,58 @@ function renderGetStarted(t, escHtml) {
     </div>`;
 }
 
+function getFilteredAdminSections(state) {
+  const uiC = state.uiComplexity || 'advanced';
+  if (uiC !== 'basic') return ADMIN_HOME_SECTIONS;
+
+  if (typeof state.adminShowAdvancedTools !== 'boolean') {
+    try {
+      state.adminShowAdvancedTools = localStorage.getItem('da_admin_show_advanced_tools') === '1';
+    } catch (_) {
+      state.adminShowAdvancedTools = false;
+    }
+  }
+  const showAdvanced = !!state.adminShowAdvancedTools;
+  if (showAdvanced) return ADMIN_HOME_SECTIONS;
+
+  const hiddenNavs = new Set(['logs', 'prompt-policies']);
+  return ADMIN_HOME_SECTIONS
+    .map((sec) => ({
+      ...sec,
+      items: (sec.items || []).filter((it) => !hiddenNavs.has(it.nav)),
+    }))
+    .filter((sec) => (sec.items || []).length > 0);
+}
+
 function renderAdministration() {
-  const { t, escHtml } = getCtx();
+  const { state, t, escHtml } = getCtx();
+  const uiC = state.uiComplexity || 'advanced';
+  const adminSections = getFilteredAdminSections(state);
+  const canToggleAdvanced = uiC === 'basic';
+  const showAdvanced = !!state.adminShowAdvancedTools;
+  const complexityBtn = (val, labelKey) =>
+    `<button class="btn ${uiC === val ? 'btn-primary' : 'btn-secondary'} btn-sm" style="font-size:11px;" data-action="set-ui-complexity" data-complexity="${val}">${t(labelKey)}</button>`;
   return `
     <div class="page-header">
       <div class="page-title">${t('admin.title')}</div>
       <div class="page-subtitle">${t('admin.home.subtitle')}</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap;">
+        <span style="font-size:12px;color:var(--text-muted);">${t('ui.complexity.label')} :</span>
+        ${complexityBtn('basic', 'ui.complexity.basic')}
+        ${complexityBtn('advanced', 'ui.complexity.advanced')}
+        ${complexityBtn('expert', 'ui.complexity.expert')}
+        ${canToggleAdvanced
+          ? `<button class="btn ${showAdvanced ? 'btn-primary' : 'btn-secondary'} btn-sm" style="font-size:11px;" data-action="toggle-admin-advanced-tools">
+              ${showAdvanced ? t('admin.hideAdvancedTools') : t('admin.showAdvancedTools')}
+            </button>`
+          : ''
+        }
+      </div>
     </div>
     <div class="admin-home">
       ${renderGetStarted(t, escHtml)}
       <div class="admin-sections">
-        ${ADMIN_HOME_SECTIONS.map((sec) => renderAdminSection(sec, t, escHtml)).join('')}
+        ${adminSections.map((sec) => renderAdminSection(sec, t, escHtml)).join('')}
       </div>
     </div>
   `;
@@ -291,8 +348,14 @@ function renderTemplateAdminCard(template) {
   const isSystem  = template.source === 'system';
   const agents    = (template.selected_agents || []).slice(0, 5);
   const modeIcons = { chat: '💬', 'decision-room': '🏛️', confrontation: '⚔️', 'quick-decision': '⚡' };
+  const aria = `${template.name} — ${t('template.use')}`;
   return `
-    <div class="session-card-full">
+    <div class="session-card-full session-card-full--template-select"
+         data-action="use-template"
+         data-template-id="${escHtml(template.id)}"
+         role="button"
+         tabindex="0"
+         aria-label="${escHtml(aria)}">
       <div class="session-card-full-header">
         <span style="font-size:22px;">${modeIcons[template.mode] || '📋'}</span>
         <div class="session-info" style="flex:1;">
@@ -306,11 +369,11 @@ function renderTemplateAdminCard(template) {
         </div>
       </div>
       ${agents.length > 0 ? `<div class="session-agents" style="margin:8px 0;">${agents.map((id) => `<span class="agent-badge">${agentIcon(id)} ${escHtml(agentName(id))}</span>`).join('')}</div>` : ''}
+      <div class="session-card-full-primary-hint" aria-hidden="true">▶ ${t('template.use')}</div>
       <div class="session-card-full-actions">
-        <button class="btn btn-primary btn-sm" data-action="use-template" data-template-id="${escHtml(template.id)}">${t('template.use')}</button>
-        ${!isSystem ? `<button class="btn btn-secondary btn-sm" data-action="edit-template" data-template-id="${escHtml(template.id)}">${t('template.edit')}</button>` : ''}
-        <button class="btn btn-secondary btn-sm" data-action="duplicate-template" data-template-id="${escHtml(template.id)}">${t('template.duplicate')}</button>
-        ${!isSystem ? `<button class="btn btn-danger btn-sm" data-action="delete-template" data-template-id="${escHtml(template.id)}" data-template-name="${escHtml(template.name)}">${t('template.delete')}</button>` : ''}
+        ${!isSystem ? `<button type="button" class="btn btn-secondary btn-sm" data-action="edit-template" data-template-id="${escHtml(template.id)}">${t('template.edit')}</button>` : ''}
+        <button type="button" class="btn btn-secondary btn-sm" data-action="duplicate-template" data-template-id="${escHtml(template.id)}">${t('template.duplicate')}</button>
+        ${!isSystem ? `<button type="button" class="btn btn-danger btn-sm" data-action="delete-template" data-template-id="${escHtml(template.id)}" data-template-name="${escHtml(template.name)}">${t('template.delete')}</button>` : ''}
       </div>
     </div>
   `;
@@ -1415,6 +1478,305 @@ function renderRetrospective() {
     </div>`;
 }
 
+/* ── Learning Layer (admin) ── */
+
+function renderLearning() {
+  const { state, escHtml, t } = getCtx();
+  const data    = state.learningReport;
+  const loading = !!state.learningLoading;
+  const loadErr = state.learningError || null;
+
+  const recomputeBtn = `<button type="button" class="btn btn-secondary btn-sm" data-action="recompute-learning" ${loading ? 'disabled' : ''}>🔄 ${loading ? '…' : t('learning.recompute')}</button>`;
+  const loadBtn = `<button type="button" class="btn btn-primary btn-sm" data-action="load-learning" ${loading ? 'disabled' : ''}>📊 ${loading ? '…' : t('learning.load')}</button>`;
+
+  const errBlock = loadErr
+    ? `<div class="error-banner" style="margin-bottom:12px;">⚠️ ${escHtml(t('learning.loadError'))} <span style="opacity:0.85;font-size:12px;">${escHtml(loadErr)}</span></div>`
+    : '';
+
+  if (!data && !loadErr && !loading) {
+    return `
+      <div class="page-header">
+        <div class="page-title">🧬 ${t('admin.learning.title')}</div>
+      </div>
+      <div class="card" style="padding:20px;text-align:center;">${loadBtn}</div>`;
+  }
+
+  if (loading && !data) {
+    return `
+      <div class="page-header">
+        <div class="page-title">🧬 ${t('admin.learning.title')}</div>
+      </div>
+      <div class="card" style="padding:20px;text-align:center;">
+        ${errBlock}
+        <div style="margin-bottom:12px;"><span class="spinner"></span> ${t('learning.loading')}</div>
+        ${loadBtn}
+      </div>`;
+  }
+
+  if (!data || loadErr) {
+    return `
+      <div class="page-header"><div class="page-title">🧬 ${t('admin.learning.title')}</div></div>
+      <div class="card" style="padding:20px;">${errBlock}${loadBtn}</div>`;
+  }
+
+  const total = data.postmortems_count ?? 0;
+  const minRequired = data.overview?.min_required ?? 5;
+  const sufficient  = !!data.sufficient_data;
+
+  const insufficientBanner = !sufficient
+    ? `<div class="card" style="padding:16px 20px;margin-bottom:16px;border:1px solid #f59e0b40;background:#f59e0b08;color:var(--text-secondary);font-size:13px;">
+        ⚠️ ${escHtml(t('learning.insufficientData').replace('{n}', String(minRequired)))}
+        <span style="font-size:11px;color:var(--text-muted);margin-left:8px;">(${total} ${t('learning.postmortemsFound')})</span>
+       </div>`
+    : '';
+
+  // ── Overview cards ─────────────────────────────────────────────────────────
+  const ov = data.overview || {};
+  const pct = (r) => Math.round((r || 0) * 100);
+
+  const overviewHtml = `
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:20px;">
+      <div class="card" style="padding:14px 18px;min-width:110px;text-align:center;">
+        <div style="font-size:24px;font-weight:700;">${ov.total_postmortems ?? 0}</div>
+        <div style="font-size:12px;color:var(--text-muted);">${t('learning.postmortems')}</div>
+      </div>
+      <div class="card" style="padding:14px 18px;min-width:110px;text-align:center;border:1px solid #22c55e30;">
+        <div style="font-size:24px;font-weight:700;color:#22c55e;">${pct(ov.correct_rate)}%</div>
+        <div style="font-size:12px;color:var(--text-muted);">${t('learning.correctRate')}</div>
+      </div>
+      <div class="card" style="padding:14px 18px;min-width:110px;text-align:center;border:1px solid #ef444430;">
+        <div style="font-size:24px;font-weight:700;color:#ef4444;">${pct(ov.incorrect_rate)}%</div>
+        <div style="font-size:12px;color:var(--text-muted);">${t('learning.incorrectRate')}</div>
+      </div>
+      <div class="card" style="padding:14px 18px;min-width:110px;text-align:center;">
+        <div style="font-size:14px;font-weight:600;color:var(--text-secondary);">${escHtml(ov.data_confidence ?? 'none')}</div>
+        <div style="font-size:12px;color:var(--text-muted);">${t('learning.dataConfidence')}</div>
+      </div>
+    </div>`;
+
+  // ── Mode performance ───────────────────────────────────────────────────────
+  const modes = Array.isArray(data.mode_performance) ? data.mode_performance : [];
+  const modeHtml = modes.length === 0 ? '' : `
+    <div class="card" style="padding:18px;margin-bottom:16px;">
+      <div style="font-weight:600;font-size:13px;margin-bottom:14px;">🗂️ ${t('learning.modePerformance')}</div>
+      ${modes.map((m) => {
+        const correct   = m.insufficient_data ? 'N/A' : `${pct(m.correct_rate)}%`;
+        const incorrect = m.insufficient_data ? 'N/A' : `${pct(m.incorrect_rate)}%`;
+        const barWidth  = m.insufficient_data ? 0 : Math.round((m.correct_rate || 0) * 100);
+        const badgeColor = m.insufficient_data ? '#9ca3af'
+          : m.correct_rate >= 0.7 ? '#22c55e'
+          : m.correct_rate >= 0.5 ? '#f59e0b' : '#ef4444';
+        return `
+          <div style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border);">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+              <span style="font-weight:600;font-size:12px;">${escHtml(m.mode_label || m.mode)}</span>
+              <span style="font-size:11px;color:var(--text-muted);">(${m.sessions_count} ${t('learning.sessions')})</span>
+              ${m.insufficient_data ? `<span style="font-size:10px;color:#9ca3af;font-style:italic;">${t('learning.lowData')}</span>` : ''}
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+              <div style="flex:1;height:8px;background:var(--border);border-radius:4px;overflow:hidden;">
+                <div style="height:100%;width:${barWidth}%;background:${badgeColor};border-radius:4px;"></div>
+              </div>
+              <span style="font-size:12px;color:var(--text-muted);min-width:80px;">${correct} ${t('learning.correct')}</span>
+            </div>
+            ${m.recommendation ? `<div style="font-size:11px;color:var(--text-secondary);font-style:italic;">${escHtml(m.recommendation)}</div>` : ''}
+          </div>`;
+      }).join('')}
+    </div>`;
+
+  // ── Agent performance ──────────────────────────────────────────────────────
+  const agents = Array.isArray(data.agent_performance) ? data.agent_performance : [];
+  const agentHtml = agents.length === 0 ? '' : `
+    <div class="card" style="padding:18px;margin-bottom:16px;">
+      <div style="font-weight:600;font-size:13px;margin-bottom:14px;">🎭 ${t('learning.agentPerformance')}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;">
+        ${agents.map((a) => {
+          const warnColor = a.calibration_warning === 'overconfident_when_wrong' ? '#ef4444'
+            : a.calibration_warning === 'high_incorrect_rate' ? '#f59e0b' : 'transparent';
+          const border = a.calibration_warning ? `border:1px solid ${warnColor}40` : '';
+          return `
+            <div style="padding:10px 14px;background:var(--bg-secondary);border-radius:8px;min-width:140px;${border}">
+              <div style="font-weight:600;font-size:12px;margin-bottom:4px;">${escHtml(a.agent_id)}</div>
+              ${a.insufficient_data
+                ? `<div style="font-size:11px;color:#9ca3af;font-style:italic;">${t('learning.insufficientDataShort')}</div>`
+                : `<div style="font-size:11px;color:var(--text-muted);">${t('learning.correct')}: <strong>${pct(a.correct_rate)}%</strong></div>
+                   <div style="font-size:11px;color:var(--text-muted);">${t('learning.incorrect')}: <strong style="color:#ef4444;">${pct(a.incorrect_rate)}%</strong></div>`
+              }
+              ${a.calibration_warning ? `<div style="font-size:10px;color:${warnColor};margin-top:4px;">⚠ ${escHtml(a.calibration_warning)}</div>` : ''}
+            </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+
+  // ── Calibration ────────────────────────────────────────────────────────────
+  const cal = data.calibration || {};
+  const calHtml = (cal.total_sessions_analyzed || 0) === 0 ? '' : `
+    <div class="card" style="padding:18px;margin-bottom:16px;">
+      <div style="font-weight:600;font-size:13px;margin-bottom:14px;">🎯 ${t('learning.calibration')}</div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px;">
+        <div style="min-width:140px;">
+          <div style="font-size:20px;font-weight:700;color:${(cal.overconfidence_rate||0)>0.2?'#ef4444':'#22c55e'};">${pct(cal.overconfidence_rate)}%</div>
+          <div style="font-size:11px;color:var(--text-muted);">${t('learning.overconfidenceRate')}</div>
+        </div>
+        <div style="min-width:140px;">
+          <div style="font-size:20px;font-weight:700;color:${(cal.go_failure_rate||0)>0.25?'#ef4444':'#22c55e'};">${pct(cal.go_failure_rate)}%</div>
+          <div style="font-size:11px;color:var(--text-muted);">${t('learning.goFailureRate')}</div>
+        </div>
+        <div style="min-width:140px;">
+          <div style="font-size:20px;font-weight:700;">${cal.weak_context_success_rate!=null?pct(cal.weak_context_success_rate)+'%':'N/A'}</div>
+          <div style="font-size:11px;color:var(--text-muted);">${t('learning.weakCtxSuccessRate')}</div>
+        </div>
+        <div style="min-width:140px;">
+          <div style="font-size:20px;font-weight:700;color:${(cal.false_consensus_failure_rate||0)>0.35?'#ef4444':'#22c55e'};">${pct(cal.false_consensus_failure_rate)}%</div>
+          <div style="font-size:11px;color:var(--text-muted);">${t('learning.falseConsensusFailureRate')}</div>
+        </div>
+      </div>
+      ${(cal.recommendations||[]).length>0
+        ? `<div style="font-size:12px;color:var(--text-secondary);">${cal.recommendations.map((r)=>`<div style="margin-bottom:6px;">• ${escHtml(r)}</div>`).join('')}</div>`
+        : ''}
+    </div>`;
+
+  // ── Insights ───────────────────────────────────────────────────────────────
+  const insights = Array.isArray(data.insights) ? data.insights : [];
+  const insightsHtml = insights.length === 0 ? '' : `
+    <div class="card" style="padding:18px;margin-bottom:16px;">
+      <div style="font-weight:600;font-size:13px;margin-bottom:12px;">💡 ${t('learning.insights')}</div>
+      ${insights.map((ins) => {
+        const ic = ins.level === 'warning' ? '#f59e0b' : '#3b82f6';
+        return `<div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:8px;">
+          <span style="color:${ic};font-size:14px;">${ins.level==='warning'?'⚠️':'ℹ️'}</span>
+          <span style="font-size:12px;color:var(--text-secondary);">${escHtml(ins.message)}</span>
+        </div>`;
+      }).join('')}
+    </div>`;
+
+  // ── Recommendations ────────────────────────────────────────────────────────
+  const recs = Array.isArray(data.recommendations) ? data.recommendations : [];
+  const recsHtml = recs.length === 0 ? '' : `
+    <div class="card" style="padding:18px;margin-bottom:16px;">
+      <div style="font-weight:600;font-size:13px;margin-bottom:12px;">📋 ${t('learning.recommendations')}</div>
+      ${recs.map((r) => `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;">• ${escHtml(r)}</div>`).join('')}
+    </div>`;
+
+  return `
+    <div class="page-header">
+      <div class="page-title">🧬 ${t('admin.learning.title')}</div>
+    </div>
+    <div style="max-width:860px;">
+      ${insufficientBanner}
+      ${overviewHtml}
+      ${modeHtml}
+      ${agentHtml}
+      ${calHtml}
+      ${insightsHtml}
+      ${recsHtml}
+      <div style="margin-top:12px;display:flex;gap:10px;">
+        ${loadBtn}
+        ${recomputeBtn}
+        <button class="btn btn-secondary btn-sm" data-action="export-learning" data-format="markdown">📥 ${t('learning.export')}</button>
+        <button class="btn btn-secondary btn-sm" data-action="export-learning" data-format="json">📥 JSON</button>
+        ${state.learningExportStatus === 'ok' ? `<span style="color:var(--success);font-size:12px;">✓ ${t('learning.exportDone')}</span>` : ''}
+        ${state.learningExportStatus === 'error' ? `<span style="color:var(--danger);font-size:12px;">⚠ ${t('learning.exportError')}</span>` : ''}
+      </div>
+    </div>`;
+}
+
+/* ── Prompt Policies (admin) ── */
+
+function renderPromptPolicies() {
+  const { state, escHtml, t } = getCtx();
+  const ps = state.promptPolicies || {};
+  const items  = Array.isArray(ps.items)  ? ps.items  : [];
+  const active = ps.activeId || null;
+  const draft  = ps.draft   ?? null;          // edited but not yet saved
+  const saved  = ps.savedId || null;
+  const saving = !!ps.saving;
+  const loadingId = ps.loadingId || null;
+  const error  = ps.error  || null;
+
+  const statusHtml = (() => {
+    if (error)  return `<span class="admin-policy-status admin-policy-status--error">⚠ ${escHtml(error)}</span>`;
+    if (saving) return `<span class="admin-policy-status admin-policy-status--saving"><span class="spinner"></span> ${t('admin.promptPolicies.saving')}</span>`;
+    if (saved === active && !draft && saved)
+      return `<span class="admin-policy-status admin-policy-status--saved">✓ ${t('admin.promptPolicies.saved')}</span>`;
+    if (draft !== null)
+      return `<span class="admin-policy-status admin-policy-status--unsaved">● ${t('admin.promptPolicies.unsaved')}</span>`;
+    return '';
+  })();
+
+  const textareaContent = draft !== null ? draft : (ps.content || '');
+
+  return `
+    <div class="page-header">
+      <div class="page-title">📝 ${t('admin.promptPolicies.title')}</div>
+      <div class="page-subtitle">${t('admin.promptPolicies.desc')}</div>
+      <button class="btn btn-secondary btn-sm" style="margin-top:8px;" data-nav="administration">${t('nav.backAdmin')}</button>
+    </div>
+
+    <div class="admin-policy-layout">
+      <!-- List -->
+      <div class="admin-policy-list" role="list">
+        <div class="admin-policy-list-title">${escHtml(t('admin.promptPolicies.listTitle'))}</div>
+        ${items.length === 0
+          ? `<div style="padding:12px;font-size:13px;color:var(--text-muted);">${t('loading')}</div>`
+          : items.map((item) => `
+            <div class="admin-policy-item${active === item.id ? ' admin-policy-item-active' : ''}"
+                 data-action="policy-select"
+                 data-policy-id="${escHtml(item.id)}"
+                 role="listitem"
+                 tabindex="0"
+                 aria-current="${active === item.id ? 'true' : 'false'}">
+              <div class="admin-policy-item-title">${escHtml(t('admin.promptPolicies.' + item.id.replace(/-([a-z])/g, (_, c) => c.toUpperCase())) || item.title)}</div>
+              <div class="admin-policy-item-filename">${escHtml(item.filename)}</div>
+            </div>
+          `).join('')
+        }
+      </div>
+
+      <!-- Editor -->
+      <div class="admin-policy-editor">
+        ${!active ? `
+          <div style="padding:32px;color:var(--text-muted);font-size:14px;">${t('admin.promptPolicies.selectHint')}</div>
+        ` : loadingId === active ? `
+          <div style="padding:32px;display:flex;align-items:center;gap:10px;"><span class="spinner"></span> ${t('loading')}</div>
+        ` : `
+          <div class="admin-policy-editor-header">
+            <div>
+              <div class="admin-policy-editor-title">${escHtml(ps.activeTitle || active)}</div>
+              <div class="admin-policy-editor-filename">${escHtml(ps.activeFilename || '')}</div>
+              ${ps.activeDescription ? `<div class="admin-policy-editor-desc">${escHtml(ps.activeDescription)}</div>` : ''}
+            </div>
+            <div class="admin-policy-status-area">${statusHtml}</div>
+          </div>
+          <textarea
+            class="admin-policy-textarea"
+            id="policy-textarea-${escHtml(active)}"
+            data-action="policy-draft"
+            data-policy-id="${escHtml(active)}"
+            spellcheck="false"
+            autocomplete="off"
+            aria-label="${escHtml(t('admin.promptPolicies.editorTitle'))}"
+          >${escHtml(textareaContent)}</textarea>
+          <div class="admin-policy-actions">
+            <button class="btn btn-primary btn-sm"
+                    data-action="policy-save"
+                    data-policy-id="${escHtml(active)}"
+                    ${saving ? 'disabled' : ''}>
+              💾 ${t('admin.promptPolicies.save')}
+            </button>
+            <button class="btn btn-secondary btn-sm"
+                    data-action="policy-reset"
+                    data-policy-id="${escHtml(active)}"
+                    ${saving ? 'disabled' : ''}>
+              ↺ ${t('admin.promptPolicies.reset')}
+            </button>
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+}
+
 /* ── Registration ── */
 
 function registerAdminFeature() {
@@ -1429,6 +1791,8 @@ function registerAdminFeature() {
   window.DecisionArena.views['persona-builder'] = renderPersonaBuilder;
   window.DecisionArena.views['scenario-packs']  = renderScenarioPacks;
   window.DecisionArena.views.retrospective      = renderRetrospective;
+  window.DecisionArena.views.learning           = renderLearning;
+  window.DecisionArena.views['prompt-policies'] = renderPromptPolicies;
   window.DecisionArena.views.shared.showPersonaModal             = showPersonaModal;
   window.DecisionArena.views.shared.buildPersonaMarkdownPreview  = buildPersonaMarkdownPreview;
   window.DecisionArena.views.shared.buildSoulMarkdownPreview     = buildSoulMarkdownPreview;
@@ -1445,4 +1809,5 @@ export {
   renderPersonaMaker,
   renderPersonaBuilder,
   renderProviders,
+  renderLearning,
 };

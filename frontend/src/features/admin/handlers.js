@@ -86,6 +86,15 @@ function readProviderRoutingFromDom() {
 }
 
 function registerAdminHandlers() {
+  registerAction('toggle-admin-advanced-tools', () => {
+    const { state, render } = getCtx();
+    state.adminShowAdvancedTools = !state.adminShowAdvancedTools;
+    try {
+      localStorage.setItem('da_admin_show_advanced_tools', state.adminShowAdvancedTools ? '1' : '0');
+    } catch (_) {}
+    render();
+  });
+
   /* ── Persona ──────────────────────────────────────────────────────────── */
   registerAction('show-persona', ({ element }) => {
     const fn = getViews().showPersonaModal;
@@ -962,4 +971,261 @@ function registerRetrospectiveHandlers() {
   });
 }
 
-export { registerAdminHandlers, registerScenarioPackAdminHandlers, registerRetrospectiveHandlers };
+/* ══════════════════════════════════════════════════════════════════════
+   Feature 6 — Prompt Policies editor
+═══════════════════════════════════════════════════════════════════════ */
+
+function registerPromptPolicyHandlers() {
+  const PromptPolicyService = window.DecisionArena?.services?.PromptPolicyService;
+
+  // Load list when entering the view
+  registerAction('nav-prompt-policies', async () => {
+    const { state, render, t } = getCtx();
+    if (!state.promptPolicies?.items?.length) {
+      await _loadPolicyList(state, render, t);
+    }
+  });
+
+  // Select a policy from the sidebar
+  registerAction('policy-select', async ({ element }) => {
+    const { state, render, t } = getCtx();
+    const id = element?.dataset?.policyId;
+    if (!id) return;
+
+    const ps = state.promptPolicies || {};
+    if (ps.activeId === id && ps.content !== undefined) return; // already loaded
+
+    // Warn if unsaved changes
+    if (ps.draft !== null && ps.draft !== undefined && ps.activeId && ps.activeId !== id) {
+      if (!window.confirm(t('admin.promptPolicies.confirmDiscard'))) return;
+    }
+
+    state.promptPolicies = { ...ps, loadingId: id, error: null };
+    render();
+
+    try {
+      const data = await _policyService().get(id);
+      state.promptPolicies = {
+        ...state.promptPolicies,
+        activeId:          id,
+        activeTitle:       data.title || id,
+        activeFilename:    data.filename || '',
+        activeDescription: data.description || '',
+        content:           data.content || '',
+        draft:             null,
+        savedId:           null,
+        loadingId:         null,
+        error:             null,
+      };
+    } catch (err) {
+      state.promptPolicies = { ...state.promptPolicies, loadingId: null, error: String(err.message || err) };
+    }
+    render();
+  });
+
+  // Track edits in textarea
+  registerAction('policy-draft', ({ element }) => {
+    const { state } = getCtx();
+    const id = element?.dataset?.policyId;
+    if (!id || !state.promptPolicies) return;
+    state.promptPolicies.draft  = element.value;
+    state.promptPolicies.savedId = null;
+    state.promptPolicies.error  = null;
+    // No full render — just update status badge in place
+    const statusEl = document.querySelector('.admin-policy-status-area');
+    if (statusEl) {
+      const t = (k) => window.i18n?.t(k) ?? k;
+      statusEl.innerHTML = `<span class="admin-policy-status admin-policy-status--unsaved">● ${t('admin.promptPolicies.unsaved')}</span>`;
+    }
+  });
+
+  // Save
+  registerAction('policy-save', async ({ element }) => {
+    const { state, render, t } = getCtx();
+    const id = element?.dataset?.policyId || state.promptPolicies?.activeId;
+    if (!id) return;
+    const ps = state.promptPolicies || {};
+    const content = ps.draft !== null && ps.draft !== undefined ? ps.draft : ps.content || '';
+
+    state.promptPolicies = { ...ps, saving: true, error: null };
+    render();
+
+    try {
+      await _policyService().update(id, content);
+      state.promptPolicies = {
+        ...state.promptPolicies,
+        saving:  false,
+        savedId: id,
+        content: content,
+        draft:   null,
+        error:   null,
+      };
+    } catch (err) {
+      state.promptPolicies = { ...state.promptPolicies, saving: false, error: String(err.message || err) };
+    }
+    render();
+  });
+
+  // Reset local draft
+  registerAction('policy-reset', ({ element }) => {
+    const { state, render } = getCtx();
+    const id = element?.dataset?.policyId || state.promptPolicies?.activeId;
+    if (!id || !state.promptPolicies) return;
+    state.promptPolicies.draft  = null;
+    state.promptPolicies.savedId = null;
+    state.promptPolicies.error  = null;
+    render();
+  });
+
+  // Auto-load list when navigating to prompt-policies
+  const _origNavigate = window.DecisionArena?.router?.navigate;
+
+  async function _loadPolicyList(state, render, t) {
+    try {
+      const data = await _policyService().list();
+      const items = Array.isArray(data.items) ? data.items : [];
+      state.promptPolicies = state.promptPolicies || {};
+      state.promptPolicies.items = items;
+      render();
+      // Auto-select first
+      if (items.length && !state.promptPolicies.activeId) {
+        const firstId = items[0].id;
+        state.promptPolicies.loadingId = firstId;
+        render();
+        try {
+          const detail = await _policyService().get(firstId);
+          state.promptPolicies = {
+            ...state.promptPolicies,
+            activeId:          firstId,
+            activeTitle:       detail.title || firstId,
+            activeFilename:    detail.filename || '',
+            activeDescription: detail.description || '',
+            content:           detail.content || '',
+            draft:             null,
+            savedId:           null,
+            loadingId:         null,
+          };
+        } catch (_) {
+          state.promptPolicies.loadingId = null;
+        }
+        render();
+      }
+    } catch (err) {
+      console.error('prompt-policy-list', err);
+    }
+  }
+
+  // Patch router to auto-load on view activation
+  const arena = window.DecisionArena;
+  if (arena?.router) {
+    const origDispatch = arena.router._dispatch || null;
+    const _patchRouterOnce = () => {
+      if (arena.router._policyPatchDone) return;
+      arena.router._policyPatchDone = true;
+      const origNavigate = arena.router.navigate.bind(arena.router);
+      arena.router.navigate = async (view, ...args) => {
+        origNavigate(view, ...args);
+        if (view === 'prompt-policies') {
+          const { state, render, t: _t } = getCtx();
+          state.promptPolicies = state.promptPolicies || {};
+          if (!state.promptPolicies.items?.length) {
+            await _loadPolicyList(state, render, _t);
+          }
+        }
+      };
+    };
+    _patchRouterOnce();
+  }
+
+  function _policyService() {
+    return window.DecisionArena?.services?.PromptPolicyService
+      || window.DecisionArena?.services?.promptPolicyService
+      || (window.DecisionArena?.services?.apiFetch
+        ? {
+            list:   () => window.DecisionArena.services.apiFetch('/api/prompt-policies'),
+            get:    (id) => window.DecisionArena.services.apiFetch(`/api/prompt-policies/${encodeURIComponent(id)}`),
+            update: (id, content) => window.DecisionArena.services.apiFetch(`/api/prompt-policies/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ content }) }),
+          }
+        : null);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   Learning Layer — handlers
+═══════════════════════════════════════════════════════════════════════ */
+
+function registerLearningHandlers() {
+  registerAction('load-learning', async () => {
+    const { state, render, apiFetch } = getCtx();
+    state.learningLoading = true;
+    state.learningError = null;
+    render();
+    try {
+      const result = await apiFetch('/api/learning/overview');
+      state.learningReport = result || null;
+      state.learningError  = null;
+    } catch (err) {
+      console.error('[learning] load', err);
+      state.learningError = err?.message || String(err);
+    } finally {
+      state.learningLoading = false;
+      render();
+    }
+  });
+
+  registerAction('recompute-learning', async () => {
+    const { state, render, apiFetch } = getCtx();
+    state.learningLoading = true;
+    state.learningError = null;
+    render();
+    try {
+      const result = await apiFetch('/api/learning/recompute', { method: 'POST' });
+      state.learningReport = result?.report || result || null;
+      state.learningError  = null;
+    } catch (err) {
+      console.error('[learning] recompute', err);
+      state.learningError = err?.message || String(err);
+    } finally {
+      state.learningLoading = false;
+      render();
+    }
+  });
+
+  registerAction('export-learning', async ({ element }) => {
+    const { state, render, apiFetch } = getCtx();
+    const format = element?.dataset?.format || 'markdown';
+    state.learningExportStatus = 'loading';
+    render();
+    try {
+      const result = await apiFetch(`/api/learning/export?format=${format}`);
+      if (result?.error) {
+        state.learningExportStatus = 'error';
+        state.learningError = result.message || 'Export failed';
+        render();
+        return;
+      }
+      const content  = result.content || (format === 'json' ? JSON.stringify(result, null, 2) : '');
+      const filename = result.filename || `learning-report.${format === 'json' ? 'json' : 'md'}`;
+      const mime     = format === 'json' ? 'application/json' : 'text/markdown;charset=utf-8';
+      const blob     = new Blob([content], { type: mime });
+      const url      = URL.createObjectURL(blob);
+      const a        = document.createElement('a');
+      a.href         = url;
+      a.download     = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      state.learningExportStatus = 'ok';
+    } catch (err) {
+      console.error('[learning] export', err);
+      state.learningExportStatus = 'error';
+      state.learningError = err?.message || String(err);
+    } finally {
+      setTimeout(() => { state.learningExportStatus = null; render(); }, 3000);
+      render();
+    }
+  });
+}
+
+export { registerAdminHandlers, registerScenarioPackAdminHandlers, registerRetrospectiveHandlers, registerPromptPolicyHandlers, registerLearningHandlers };

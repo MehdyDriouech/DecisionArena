@@ -491,6 +491,22 @@ decision-room-ai/
 5. Documenter précisément le schéma SQLite (exporter `Migration.php` en doc)
 6. Ajouter le streaming optionnel via SSE (impact important sur le backend)
 
+## Mise à jour corrective (2026-05-01)
+
+Ce lot corrige les points prioritaires issus de l’audit, sans refactor massif ni ajout de dépendances.
+
+- `LearningController` aligné sur la convention routeur (`Request $request` partout), avec réponses cohérentes en `array` et export stabilisé.
+- Persistance **Reactive Chat** corrigée dans `MessageRepository::create()` : `thread_type`, `thread_turn`, `reaction_role`, `reactive_thread_id` (compatibilité arrière conservée).
+- Export Learning aligné côté API/UI : `GET /api/learning/export?format=markdown|json` (POST conservé pour compatibilité).
+- Ouverture des sessions `mode=jury` corrigée dans `sessions/handlers.js` (navigation vers la vue Jury dédiée).
+- Export session sécurisé ajouté : `redacted=1` (masquage secrets) et `redacted=strong` (messages/context docs remplacés par `[REDACTED]`).
+- UX progressive introduite via `uiComplexity=basic|advanced|expert` (persisté localStorage), presets Reactive Chat et sections repliables dans Session History.
+
+Scripts de vérification ajoutés :
+- `backend/tools/test_learning_routes_signature.php`
+- `backend/tools/test_reactive_thread_persistence.php`
+- `backend/tools/test_learning_export.php`
+
 ---
 
 ## Licence

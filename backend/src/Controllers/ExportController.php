@@ -17,6 +17,9 @@ use Infrastructure\Persistence\ProviderRoutingSettingsRepository;
 use Infrastructure\Persistence\ConfidenceTimelineRepository;
 use Infrastructure\Persistence\PersonaScoreRepository;
 use Infrastructure\Persistence\BiasReportRepository;
+use Infrastructure\Persistence\EvidenceRepository;
+use Infrastructure\Persistence\RiskProfileRepository;
+use Infrastructure\Persistence\SessionAgentProvidersRepository;
 use Domain\Orchestration\DebateMemoryService;
 
 class ExportController {
@@ -34,6 +37,9 @@ class ExportController {
     private ConfidenceTimelineRepository $timelineRepo;
     private PersonaScoreRepository $personaScoreRepo;
     private BiasReportRepository $biasRepo;
+    private EvidenceRepository $evidenceRepo;
+    private RiskProfileRepository $riskRepo;
+    private SessionAgentProvidersRepository $agentProvidersRepo;
 
     public function __construct() {
         $this->sessionRepo  = new SessionRepository();
@@ -50,11 +56,20 @@ class ExportController {
         $this->timelineRepo = new ConfidenceTimelineRepository();
         $this->personaScoreRepo = new PersonaScoreRepository();
         $this->biasRepo = new BiasReportRepository();
+        $this->evidenceRepo = new EvidenceRepository();
+        $this->riskRepo     = new RiskProfileRepository();
+        $this->agentProvidersRepo = new SessionAgentProvidersRepository();
     }
 
     public function export(Request $req): array {
-        $id     = $req->param('id');
-        $format = $req->get('format', 'markdown');
+        $id            = $req->param('id');
+        $format        = $req->get('format', 'markdown');
+        $redactedParam = (string)($req->query('redacted') ?? $req->get('redacted', '0'));
+        $redactionLevel = match(true) {
+            $redactedParam === 'strong' => 'strong',
+            $redactedParam === '1' || $redactedParam === 'true' || $redactedParam === 'standard' => 'standard',
+            default => null,
+        };
 
         $session = $this->sessionRepo->findById($id);
         if (!$session) {
@@ -84,14 +99,31 @@ class ExportController {
             $this->biasRepo->findBySession($id)
         );
 
-        $actionPlan = $this->planRepo->findBySession($id);
+        $actionPlan    = $this->planRepo->findBySession($id);
+        $evidenceReport = $this->evidenceRepo->findReportBySession($id);
+        $evidenceClaims = $evidenceReport !== null ? $this->evidenceRepo->findClaimsBySession($id) : [];
+        $riskProfile    = $this->riskRepo->findBySession($id);
+
+        // Apply redaction
+        if ($redactionLevel !== null) {
+            $session    = $this->redactSession($session, $redactionLevel);
+            $messages   = $this->redactMessages($messages, $redactionLevel);
+            $contextDoc = $this->redactContextDoc($contextDoc, $redactionLevel);
+        }
+
+        $suffix   = $redactionLevel ? '-redacted' : '';
+        $ext      = $format === 'json' ? 'json' : 'md';
+        $filename = 'session-' . $id . $suffix . '.' . $ext;
 
         if ($format === 'json') {
             $verdict  = $this->verdictRepo->findBySession($id);
             $routing  = null;
             try { $routing = $this->providerRoutingRepo->get(); } catch (\Throwable $e) { $routing = null; }
+            if ($redactionLevel !== null && $routing !== null) {
+                $routing = $this->redactProviderRouting($routing, $redactionLevel);
+            }
             $debateState = ['arguments' => $arguments, 'positions' => $positions, 'edges' => $edges];
-            return [
+            $payload = [
                 'format'               => 'json',
                 'session'              => $session,
                 'messages'             => $messages,
@@ -116,23 +148,103 @@ class ExportController {
                 'weighted_analysis'    => $this->debateMemory->buildWeightedAnalysis($debateState),
                 'dominance_indicator'  => $this->debateMemory->buildDominanceIndicator($debateState),
                 'action_plan'          => $actionPlan,
+                'evidence_report'      => $evidenceReport,
+                'evidence_claims'      => $evidenceClaims,
+                'risk_profile'         => $riskProfile,
                 'memory'               => [
                     'decision_taken'   => $session['decision_taken']    ?? null,
                     'user_learnings'   => $session['user_learnings']    ?? null,
                     'follow_up_notes'  => $session['follow_up_notes']   ?? null,
                 ],
-                'filename'             => 'session-' . $id . '.json',
+                'filename' => $filename,
             ];
+            if ($redactionLevel !== null) {
+                $payload['redacted']         = true;
+                $payload['redaction_level']  = $redactionLevel;
+            }
+            return $payload;
         }
 
         $routing = null;
         try { $routing = $this->providerRoutingRepo->get(); } catch (\Throwable $e) { $routing = null; }
-        $content = $this->buildMarkdown($session, $messages, $contextDoc, $actionPlan, $arguments, $positions, $edges, $votes, $decision, $routing, $reliability);
+        if ($redactionLevel !== null && $routing !== null) {
+            $routing = $this->redactProviderRouting($routing, $redactionLevel);
+        }
+        $content = $this->buildMarkdown($session, $messages, $contextDoc, $actionPlan, $arguments, $positions, $edges, $votes, $decision, $routing, $reliability, $evidenceReport, $evidenceClaims, $riskProfile);
+        if ($redactionLevel !== null) {
+            $content = "<!-- redacted={$redactionLevel} -->\n\n" . $content;
+        }
         return [
             'format'   => 'markdown',
             'content'  => $content,
-            'filename' => 'session-' . $id . '.md',
+            'filename' => $filename,
         ];
+    }
+
+    // ── Redaction helpers ────────────────────────────────────────────────────
+
+    /** Sensitive field name patterns to mask at standard level. */
+    private const SENSITIVE_KEYS = ['api_key', 'apikey', 'api-key', 'token', 'secret', 'password', 'authorization', 'auth', 'bearer'];
+
+    private function isSensitiveKey(string $key): bool
+    {
+        $lower = strtolower($key);
+        foreach (self::SENSITIVE_KEYS as $pattern) {
+            if (str_contains($lower, $pattern)) return true;
+        }
+        return false;
+    }
+
+    private function redactSession(array $session, string $level): array
+    {
+        foreach ($session as $k => $v) {
+            if ($this->isSensitiveKey($k)) {
+                $session[$k] = '[REDACTED]';
+            }
+        }
+        return $session;
+    }
+
+    private function redactMessages(array $messages, string $level): array
+    {
+        return array_map(function (array $msg) use ($level): array {
+            if ($level === 'strong') {
+                $msg['content'] = '[REDACTED]';
+            }
+            foreach ($msg as $k => $v) {
+                if ($this->isSensitiveKey($k)) $msg[$k] = '[REDACTED]';
+            }
+            return $msg;
+        }, $messages);
+    }
+
+    private function redactContextDoc(?array $doc, string $level): ?array
+    {
+        if ($doc === null) return null;
+        if ($level === 'strong') {
+            $doc['content'] = '[REDACTED]';
+        }
+        return $doc;
+    }
+
+    private function redactProviderRouting(?array $routing, string $level): ?array
+    {
+        if ($routing === null) return null;
+        $redacted = [];
+        foreach ($routing as $k => $v) {
+            if ($this->isSensitiveKey($k)) {
+                $redacted[$k] = '[REDACTED]';
+            } elseif (is_array($v)) {
+                $inner = [];
+                foreach ($v as $ik => $iv) {
+                    $inner[$ik] = $this->isSensitiveKey((string)$ik) ? '[REDACTED]' : $iv;
+                }
+                $redacted[$k] = $inner;
+            } else {
+                $redacted[$k] = $v;
+            }
+        }
+        return $redacted;
     }
 
     public function snapshot(Request $req): array {
@@ -166,10 +278,13 @@ class ExportController {
             $this->personaScoreRepo->findBySession($id),
             $this->biasRepo->findBySession($id)
         );
+        $snapshotEvidence       = $this->evidenceRepo->findReportBySession($id);
+        $snapshotEvidenceClaims = $snapshotEvidence !== null ? $this->evidenceRepo->findClaimsBySession($id) : [];
+        $snapshotRisk           = $this->riskRepo->findBySession($id);
         $routing     = null;
         try { $routing = $this->providerRoutingRepo->get(); } catch (\Throwable $e) { $routing = null; }
         $debateState = ['arguments' => $arguments, 'positions' => $positions, 'edges' => $edges];
-        $md          = $this->buildMarkdown($session, $messages, $contextDoc, null, $arguments, $positions, $edges, $votes, $decision, $routing, $reliability);
+        $md          = $this->buildMarkdown($session, $messages, $contextDoc, null, $arguments, $positions, $edges, $votes, $decision, $routing, $reliability, $snapshotEvidence, $snapshotEvidenceClaims, $snapshotRisk);
         $json        = json_encode([
             'session'             => $session,
             'messages'            => $messages,
@@ -192,6 +307,10 @@ class ExportController {
             'context_clarification' => $reliability['context_clarification'] ?? null,
             'weighted_analysis'   => $this->debateMemory->buildWeightedAnalysis($debateState),
             'dominance_indicator' => $this->debateMemory->buildDominanceIndicator($debateState),
+            'agent_providers'     => $this->agentProvidersRepo->findBySession($id),
+            'evidence_report'     => $snapshotEvidence,
+            'evidence_claims'     => $snapshotEvidenceClaims,
+            'risk_profile'        => $snapshotRisk,
             'action_plan'         => null,
             'memory'              => [
                 'decision_taken'  => $session['decision_taken']  ?? null,
@@ -224,7 +343,10 @@ class ExportController {
         array  $votes             = [],
         ?array $automaticDecision = null,
         ?array $routing           = null,
-        ?array $reliability       = null
+        ?array $reliability       = null,
+        ?array $evidenceReport    = null,
+        array  $evidenceClaims    = [],
+        ?array $riskProfile       = null
     ): string {
         $agents = is_array($session['selected_agents'])
             ? implode(', ', $session['selected_agents'])
@@ -276,17 +398,60 @@ class ExportController {
             if ($msg['role'] === 'user') {
                 $md .= '**User:** ' . $msg['content'] . "\n\n";
             } else {
-                $agentLabel = $msg['agent_id'] ?? 'Agent';
-                $modelInfo  = '';
-                if (!empty($msg['model'])) {
-                    $provider  = !empty($msg['provider_id']) ? $msg['provider_id'] . ' / ' : '';
-                    $modelInfo = ' *(' . $provider . $msg['model'] . ')*';
+                $agentLabel   = $msg['agent_id'] ?? 'Agent';
+                $providerName = $msg['provider_name'] ?? $msg['provider_id'] ?? null;
+                $model        = $msg['model'] ?? null;
+                $modelInfo    = '';
+                if ($model || $providerName) {
+                    $parts = array_filter([$model, $providerName ? 'via ' . $providerName : null]);
+                    $modelInfo = ' *(' . implode(' ', $parts) . ')*';
                 }
-                $md .= '**' . $agentLabel . '**' . $modelInfo . " :\n\n" . $msg['content'] . "\n\n---\n\n";
+                $fallbackNote = '';
+                if (!empty($msg['provider_fallback_used'])) {
+                    $reqParts = array_filter([
+                        $msg['requested_model'] ?? null,
+                        $msg['requested_provider_id'] ?? null,
+                    ]);
+                    if (!empty($reqParts)) {
+                        $fallbackNote = ' ⚠ *Fallback depuis ' . implode(' / ', $reqParts) . '*';
+                    }
+                }
+                // Reactive Chat metadata
+                $reactiveMeta = '';
+                if (!empty($msg['thread_type']) && $msg['thread_type'] === 'reactive_chat') {
+                    $roleLbl  = ucfirst($msg['reaction_role'] ?? 'agent');
+                    $turnLbl  = isset($msg['thread_turn']) ? " · Tour " . $msg['thread_turn'] : '';
+                    $threadLbl = !empty($msg['reactive_thread_id']) ? ' · thread:' . substr($msg['reactive_thread_id'], 0, 8) : '';
+                    $reactiveMeta = " `[RC:{$roleLbl}{$turnLbl}{$threadLbl}]`";
+                }
+                $md .= '**' . $agentLabel . '**' . $modelInfo . $fallbackNote . $reactiveMeta . " :\n\n" . $msg['content'] . "\n\n---\n\n";
             }
         }
         if (empty($messages)) {
             $md .= "_No messages recorded._\n\n";
+        }
+
+        // ── 4b. LLM utilisés ─────────────────────────────────────────────────
+        $agentLlmMap = [];
+        foreach ($messages as $msg) {
+            if (($msg['role'] ?? '') !== 'assistant') continue;
+            $aid = $msg['agent_id'] ?? null;
+            if (!$aid || isset($agentLlmMap[$aid])) continue;
+            $agentLlmMap[$aid] = $msg;
+        }
+        if (!empty($agentLlmMap)) {
+            $md .= "## LLM utilisés\n\n";
+            $md .= "| Agent | Provider demandé | Modèle demandé | Provider utilisé | Modèle utilisé | Fallback |\n";
+            $md .= "|---|---|---|---|---|---|\n";
+            foreach ($agentLlmMap as $aid => $msg) {
+                $reqProvider = $msg['requested_provider_id'] ?? '—';
+                $reqModel    = $msg['requested_model']       ?? '—';
+                $useProvider = $msg['provider_name'] ?? $msg['provider_id'] ?? '—';
+                $useModel    = $msg['model']         ?? '—';
+                $fallback    = !empty($msg['provider_fallback_used']) ? ('⚠ ' . ($msg['provider_fallback_reason'] ?? 'yes')) : 'non';
+                $md .= "| {$aid} | {$reqProvider} | {$reqModel} | {$useProvider} | {$useModel} | {$fallback} |\n";
+            }
+            $md .= "\n";
         }
 
         // ── 5. Argument Memory ────────────────────────────────────────────
@@ -474,8 +639,95 @@ class ExportController {
             $md .= "_No action plan generated._\n\n";
         }
 
-        // ── 10. Provider Routing ──────────────────────────────────────────
-        $md .= "## 10. Provider Routing\n\n";
+        // ── 10. Evidence Layer ────────────────────────────────────────────
+        $md .= "## 10. Evidence Assessment\n\n";
+        if (!empty($evidenceReport)) {
+            $evScore    = round((float)($evidenceReport['evidence_score']            ?? 1.0) * 100, 1);
+            $evUnsup    = (int)($evidenceReport['unsupported_claims_count']           ?? 0);
+            $evContra   = (int)($evidenceReport['contradicted_claims_count']          ?? 0);
+            $evImpact   = (string)($evidenceReport['decision_impact']                ?? 'low');
+            $evRec      = (string)($evidenceReport['recommendation']                 ?? '');
+            $evUnknowns = (array)($evidenceReport['critical_unknowns']               ?? []);
+            $md .= "- **Evidence coverage score:** {$evScore}%\n";
+            $md .= "- **Unsupported claims:** {$evUnsup}\n";
+            $md .= "- **Contradicted claims:** {$evContra}\n";
+            $md .= "- **Decision impact of evidence gaps:** {$evImpact}\n";
+            if (!empty($evUnknowns)) {
+                $md .= "- **Critical unknowns:**\n";
+                foreach ($evUnknowns as $u) {
+                    $md .= "  - " . $u . "\n";
+                }
+            }
+            if ($evRec !== '') {
+                $md .= "- **Recommendation:** {$evRec}\n";
+            }
+            $md .= "\n";
+            // Top unsupported claims
+            $topUnsupported = array_filter($evidenceClaims, fn($c) => in_array($c['status'] ?? '', ['unsupported', 'needs_source'], true));
+            if (!empty($topUnsupported)) {
+                $md .= "### Top Unsupported Claims\n\n";
+                foreach (array_slice(array_values($topUnsupported), 0, 5) as $c) {
+                    $md .= "- [{$c['claim_type']}] {$c['claim_text']}\n";
+                }
+                $md .= "\n";
+            }
+            // Contradicted claims
+            $contradictedList = array_filter($evidenceClaims, fn($c) => ($c['status'] ?? '') === 'contradicted');
+            if (!empty($contradictedList)) {
+                $md .= "### Contradicted Claims\n\n";
+                foreach (array_values($contradictedList) as $c) {
+                    $md .= "- [{$c['claim_type']}] {$c['claim_text']}\n";
+                    if (!empty($c['evidence_text'])) {
+                        $md .= "  _Context: " . mb_substr((string)$c['evidence_text'], 0, 200) . "_\n";
+                    }
+                }
+                $md .= "\n";
+            }
+        } else {
+            $md .= "_No evidence report available for this session._\n\n";
+        }
+
+        // ── 11. Risk & Reversibility ──────────────────────────────────────
+        $md .= "## 11. Risk & Reversibility\n\n";
+        if (!empty($riskProfile)) {
+            $rl    = (string)($riskProfile['risk_level']            ?? 'unknown');
+            $rev   = (string)($riskProfile['reversibility']         ?? 'unknown');
+            $cost  = (string)($riskProfile['estimated_error_cost']  ?? 'unknown');
+            $proc  = (string)($riskProfile['required_process']      ?? 'standard');
+            $rthr  = isset($riskProfile['recommended_threshold'])
+                ? round((float)$riskProfile['recommended_threshold'] * 100, 1) . '%'
+                : '–';
+            $cats  = (array)($riskProfile['risk_categories']        ?? []);
+            $recs  = (array)($riskProfile['recommendations']        ?? []);
+            $md .= "- **Risk level:** {$rl}\n";
+            $md .= "- **Reversibility:** {$rev}\n";
+            $md .= "- **Estimated error cost:** {$cost}\n";
+            $md .= "- **Required process:** {$proc}\n";
+            $md .= "- **Recommended threshold:** {$rthr}\n";
+            if (!empty($cats)) {
+                $md .= "- **Categories:** " . implode(', ', $cats) . "\n";
+            }
+            if (!empty($recs)) {
+                $md .= "- **Recommendations:**\n";
+                foreach ($recs as $r) {
+                    $md .= "  - {$r}\n";
+                }
+            }
+            if ($reliability !== null && isset($reliability['risk_threshold_info'])) {
+                $rti = $reliability['risk_threshold_info'];
+                $md .= "- **Configured threshold:** " . round((float)($rti['configured_threshold'] ?? 0) * 100, 1) . "%\n";
+                $md .= "- **Risk-adjusted threshold:** " . round((float)($rti['risk_adjusted_threshold'] ?? 0) * 100, 1) . "%\n";
+                if (!empty($rti['threshold_reason'])) {
+                    $md .= "- **Adjustment reason:** " . $rti['threshold_reason'] . "\n";
+                }
+            }
+            $md .= "\n";
+        } else {
+            $md .= "_No risk profile available for this session._\n\n";
+        }
+
+        // ── 12. Provider Routing ──────────────────────────────────────────
+        $md .= "## 12. Provider Routing\n\n";
         if (!empty($routing)) {
             $mode        = $routing['routing_mode']    ?? 'single-primary';
             $primaryId   = $routing['primary_provider_id'] ?? null;
@@ -495,8 +747,8 @@ class ExportController {
             $md .= "_No provider routing settings recorded._\n\n";
         }
 
-        // ── 11. User Notes ────────────────────────────────────────────────
-        $md .= "## 11. User Notes\n\n";
+        // ── 13. User Notes ────────────────────────────────────────────────
+        $md .= "## 13. User Notes\n\n";
         $hasNotes = false;
         if (!empty($session['decision_taken'])) {
             $md .= "**Decision taken:** " . $session['decision_taken'] . "\n\n";

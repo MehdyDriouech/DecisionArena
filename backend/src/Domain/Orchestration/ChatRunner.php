@@ -52,29 +52,39 @@ class ChatRunner {
                 $content = $routed['content'];
 
                 $msg = $this->messageRepo->create([
-                    'id'          => $this->uuid(),
-                    'session_id'  => $sessionId,
-                    'role'        => 'assistant',
-                    'agent_id'    => $agentId,
-                    'provider_id' => $routed['provider_id'] ?? null,
-                    'model'       => $routed['model'] ?? null,
-                    'round'       => null,
-                    'content'     => $content,
-                    'created_at'  => date('c'),
+                    'id'                       => $this->uuid(),
+                    'session_id'               => $sessionId,
+                    'role'                     => 'assistant',
+                    'agent_id'                 => $agentId,
+                    'provider_id'              => $routed['provider_id'] ?? null,
+                    'provider_name'            => $routed['provider_name'] ?? null,
+                    'model'                    => $routed['model'] ?? null,
+                    'requested_provider_id'    => $routed['requested_provider_id'] ?? null,
+                    'requested_model'          => $routed['requested_model'] ?? null,
+                    'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
+                    'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                    'round'                    => null,
+                    'content'                  => $content,
+                    'created_at'               => date('c'),
                 ]);
                 $newMessages[] = $msg;
 
             } catch (\Throwable $e) {
                 $msg = $this->messageRepo->create([
-                    'id'          => $this->uuid(),
-                    'session_id'  => $sessionId,
-                    'role'        => 'assistant',
-                    'agent_id'    => $agentId,
-                    'provider_id' => null,
-                    'model'       => null,
-                    'round'       => null,
-                    'content'     => '[Error] ' . $e->getMessage(),
-                    'created_at'  => date('c'),
+                    'id'                       => $this->uuid(),
+                    'session_id'               => $sessionId,
+                    'role'                     => 'assistant',
+                    'agent_id'                 => $agentId,
+                    'provider_id'              => null,
+                    'provider_name'            => null,
+                    'model'                    => null,
+                    'requested_provider_id'    => null,
+                    'requested_model'          => null,
+                    'provider_fallback_used'   => 0,
+                    'provider_fallback_reason' => null,
+                    'round'                    => null,
+                    'content'                  => '[Error] ' . $e->getMessage(),
+                    'created_at'               => date('c'),
                 ]);
                 $newMessages[] = $msg;
             }

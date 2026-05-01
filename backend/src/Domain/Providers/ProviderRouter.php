@@ -45,61 +45,84 @@ class ProviderRouter {
         $explicitProviderId = $explicitProviderId !== null ? trim($explicitProviderId) : null;
         $explicitModel      = $explicitModel !== null ? trim($explicitModel) : null;
 
-        // 1. Session-agent override (highest priority)
+        // 1. Session-agent override (highest priority) — with graceful fallback to global routing
+        $requestedProviderId = null;
+        $requestedModel      = null;
+        $fallbackReason      = null;
+
         if ($sessionAgentOverride && !empty($sessionAgentOverride['provider_id'])) {
-            $providerData = $this->providerRepo->findById($sessionAgentOverride['provider_id']);
-            if (!$providerData || (int)($providerData['enabled'] ?? 0) !== 1) {
-                throw new \RuntimeException('Session agent override provider is not enabled or does not exist.');
-            }
-            $overrideModel = !empty($sessionAgentOverride['model']) ? trim($sessionAgentOverride['model']) : null;
-            $model = $this->resolveModel($overrideModel ?? $explicitModel, $agent, $providerData);
-            $provider = ProviderFactory::create($providerData);
+            $requestedProviderId = (string)$sessionAgentOverride['provider_id'];
+            $requestedModel      = !empty($sessionAgentOverride['model']) ? trim($sessionAgentOverride['model']) : null;
 
-            $start = (int)floor(microtime(true) * 1000);
-            $this->logger->logLlmRequest([
-                'level'    => 'debug',
-                'category' => 'llm_request',
-                'agent_id' => $agent?->id,
-                'provider_id' => (string)$providerData['id'],
-                'model'    => $model,
-                'action'   => 'llm_request',
-                'request_payload' => [
-                    'routing_mode' => 'session_agent_override',
-                    'messages'     => $messages,
-                    'options'      => ['temperature' => null, 'max_tokens' => null, 'stream' => false],
-                    'prompt_size'  => [
-                        'message_count'   => count($messages),
-                        'character_count' => $this->countChars($messages),
+            try {
+                $providerData = $this->providerRepo->findById($requestedProviderId);
+                if (!$providerData || (int)($providerData['enabled'] ?? 0) !== 1) {
+                    throw new \RuntimeException('Override provider not enabled or not found: ' . $requestedProviderId);
+                }
+                $model = $this->resolveModel($requestedModel ?? $explicitModel, $agent, $providerData);
+                $provider = ProviderFactory::create($providerData);
+
+                $start = (int)floor(microtime(true) * 1000);
+                $this->logger->logLlmRequest([
+                    'level'    => 'debug',
+                    'category' => 'llm_request',
+                    'agent_id' => $agent?->id,
+                    'provider_id' => $requestedProviderId,
+                    'model'    => $model,
+                    'action'   => 'llm_request',
+                    'request_payload' => [
+                        'routing_mode' => 'session_agent_override',
+                        'messages'     => $messages,
+                        'options'      => ['temperature' => null, 'max_tokens' => null, 'stream' => false],
+                        'prompt_size'  => [
+                            'message_count'   => count($messages),
+                            'character_count' => $this->countChars($messages),
+                        ],
                     ],
-                ],
-            ]);
+                ]);
 
-            $content  = $provider->chat($messages, $model);
-            $duration = (int)floor(microtime(true) * 1000) - $start;
+                $content  = $provider->chat($messages, $model);
+                $duration = (int)floor(microtime(true) * 1000) - $start;
 
-            $this->logger->logLlmResponse([
-                'level'    => 'debug',
-                'category' => 'llm_response',
-                'agent_id' => $agent?->id,
-                'provider_id' => (string)$providerData['id'],
-                'model'    => $model,
-                'action'   => 'llm_response',
-                'response_payload' => ['raw' => null, 'content' => $content, 'usage' => null],
-                'metadata' => ['duration_ms' => $duration, 'success' => true],
-            ]);
+                $this->logger->logLlmResponse([
+                    'level'    => 'debug',
+                    'category' => 'llm_response',
+                    'agent_id' => $agent?->id,
+                    'provider_id' => $requestedProviderId,
+                    'model'    => $model,
+                    'action'   => 'llm_response',
+                    'response_payload' => ['raw' => null, 'content' => $content, 'usage' => null],
+                    'metadata' => ['duration_ms' => $duration, 'success' => true],
+                ]);
 
-            return [
-                'content'       => $content,
-                'provider_id'   => (string)$providerData['id'],
-                'provider_name' => (string)($providerData['name'] ?? $providerData['id']),
-                'provider_type' => (string)($providerData['type'] ?? ''),
-                'model'         => $model,
-                'routing_mode'  => 'session_agent_override',
-            ];
+                return [
+                    'content'                => $content,
+                    'provider_id'            => (string)$providerData['id'],
+                    'provider_name'          => (string)($providerData['name'] ?? $providerData['id']),
+                    'provider_type'          => (string)($providerData['type'] ?? ''),
+                    'model'                  => $model,
+                    'routing_mode'           => 'session_agent_override',
+                    'requested_provider_id'  => $requestedProviderId,
+                    'requested_model'        => $requestedModel,
+                    'fallback_used'          => false,
+                    'fallback_reason'        => null,
+                ];
+
+            } catch (\Throwable $e) {
+                // Override failed — gracefully fall back to global routing
+                $fallbackReason = 'Override provider unavailable (' . $requestedProviderId . '): ' . $e->getMessage();
+                $this->logger->logProviderError('session_agent_override_fallback', [
+                    'agent_id'              => $agent?->id,
+                    'requested_provider_id' => $requestedProviderId,
+                    'error_message'         => $e->getMessage(),
+                    'metadata'              => ['action' => 'fallback_to_global_routing'],
+                ]);
+                // Fall through to global routing below
+            }
         }
 
         // 2. Explicit provider selection (no routing settings)
-        if ($explicitProviderId) {
+        if ($explicitProviderId && !$fallbackReason) {
             $providerData = $this->providerRepo->findById($explicitProviderId);
             if (!$providerData || (int)($providerData['enabled'] ?? 0) !== 1) {
                 throw new \RuntimeException('Selected provider is not enabled or does not exist.');
@@ -151,12 +174,16 @@ class ProviderRouter {
                 ],
             ]);
             return [
-                'content' => $content,
-                'provider_id' => (string)$providerData['id'],
-                'provider_name' => (string)($providerData['name'] ?? $providerData['id']),
-                'provider_type' => (string)($providerData['type'] ?? ''),
-                'model' => $model,
-                'routing_mode' => 'explicit',
+                'content'               => $content,
+                'provider_id'           => (string)$providerData['id'],
+                'provider_name'         => (string)($providerData['name'] ?? $providerData['id']),
+                'provider_type'         => (string)($providerData['type'] ?? ''),
+                'model'                 => $model,
+                'routing_mode'          => 'explicit',
+                'requested_provider_id' => null,
+                'requested_model'       => null,
+                'fallback_used'         => false,
+                'fallback_reason'       => null,
             ];
         }
 
@@ -218,12 +245,16 @@ class ProviderRouter {
                     ],
                 ]);
                 return [
-                    'content' => $content,
-                    'provider_id' => (string)$providerData['id'],
-                    'provider_name' => (string)($providerData['name'] ?? $providerData['id']),
-                    'provider_type' => (string)($providerData['type'] ?? ''),
-                    'model' => $model,
-                    'routing_mode' => $routingMode,
+                    'content'               => $content,
+                    'provider_id'           => (string)$providerData['id'],
+                    'provider_name'         => (string)($providerData['name'] ?? $providerData['id']),
+                    'provider_type'         => (string)($providerData['type'] ?? ''),
+                    'model'                 => $model,
+                    'routing_mode'          => $fallbackReason ? 'fallback_from_override' : $routingMode,
+                    'requested_provider_id' => $requestedProviderId,
+                    'requested_model'       => $requestedModel,
+                    'fallback_used'         => $fallbackReason !== null,
+                    'fallback_reason'       => $fallbackReason,
                 ];
             } catch (\Throwable $e) {
                 $lastErr = $e;

@@ -11,3 +11,6 @@ export { ContextDocService } from './contextDocService.js';
 export { LoaderService } from './loaderService.js';
 export { LogService } from './logService.js';
 export { ScenarioPackService } from './scenarioPackService.js';
+export { PromptPolicyService } from './promptPolicyService.js';
+export { EvidenceService } from './evidenceService.js';
+export { RiskProfileService } from './riskProfileService.js';

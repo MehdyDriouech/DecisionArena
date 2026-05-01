@@ -46,3 +46,23 @@ The Synthesizer moderates:
 - No repetition of arguments already made by teammates.
 - Focus on the STRONGEST argument, not the most obvious.
 - Synthesizer remains strictly neutral.
+
+## Social Interaction Rules (round-based confrontation)
+
+- You must explicitly react when prior-round contributions exist; reference at least one other agent's reasoning chain.
+- You may verbalize **temporary alliances** if you converge on identical premises — still defend your own conclusion.
+- You may press weak counter-arguments from named agents with direct, evidence-based challenges.
+- **Be forceful, not toxic:** attack reasoning, evidence and assumptions — never the person.
+
+Optional sections when signalling peer stance (omit if not needed):
+
+```
+## Alignment
+...
+## Opposition
+...
+## Challenge
+...
+## Alliance
+...
+```

@@ -7,6 +7,11 @@ use Domain\DecisionReliability\ReliabilityConfig;
 use Domain\Providers\ProviderRouter;
 use Domain\Vote\VoteAggregator;
 use Domain\Vote\VoteParser;
+use Domain\Evidence\EvidenceReportService;
+use Domain\Risk\RiskProfileAnalyzer;
+use Domain\SocialDynamics\SocialDynamicsService;
+use Domain\SocialDynamics\SocialPromptContextBuilder;
+use Domain\DecisionReliability\FalseConsensusDetector;
 use Infrastructure\Persistence\DebateRepository;
 use Infrastructure\Persistence\MessageRepository;
 use Infrastructure\Persistence\VoteRepository;
@@ -20,6 +25,11 @@ class JuryRunner {
     private VoteAggregator     $voteAggregator;
     private DebateMemoryService $debateMemory;
     private DecisionReliabilityService $reliabilityService;
+    private SocialDynamicsService $socialDynamics;
+    private SocialPromptContextBuilder $socialPrompt;
+    private FalseConsensusDetector $falseConsensusDetector;
+    private EvidenceReportService $evidenceService;
+    private RiskProfileAnalyzer $riskAnalyzer;
 
     public function __construct() {
         $this->assembler      = new AgentAssembler();
@@ -30,6 +40,11 @@ class JuryRunner {
         $this->voteAggregator = new VoteAggregator($this->voteRepo);
         $this->debateMemory   = new DebateMemoryService(new DebateRepository());
         $this->reliabilityService = new DecisionReliabilityService();
+        $this->socialDynamics = new SocialDynamicsService();
+        $this->socialPrompt   = new SocialPromptContextBuilder();
+        $this->falseConsensusDetector = new FalseConsensusDetector();
+        $this->evidenceService = new EvidenceReportService();
+        $this->riskAnalyzer    = new RiskProfileAnalyzer();
     }
 
     public function run(
@@ -58,11 +73,23 @@ class JuryRunner {
         }
 
         $this->voteRepo->clearSession($sessionId);
+        $this->socialDynamics->clearSession($sessionId);
 
         $state       = $this->debateMemory->loadState($sessionId);
         $allRounds   = [];
         $allVotes    = [];
         $prevMessages = [];
+
+        $contextQuality = $this->reliabilityService->buildEnvelope(
+            $objective,
+            $contextDoc,
+            null,
+            [],
+            [],
+            [],
+            $threshold
+        )['context_quality'];
+        $forceStrongNext = false;
 
         // Run debate rounds (all rounds except last)
         for ($round = 1; $round < $rounds; $round++) {
@@ -78,10 +105,18 @@ class JuryRunner {
                     : null;
 
                 try {
+                    $votesSnap = $this->voteRepo->findVotesBySession($sessionId);
+                    $majority  = SocialDynamicsService::summarizeMajority($votesSnap, $state['positions'] ?? []);
+                    $socialDynBlock = null;
+                    if ($round > 1) {
+                        $socialDynBlock = $this->socialPrompt->buildUserBlock($sessionId, $agentId, $majority);
+                    }
+
                     $messages = $this->buildJuryMessages(
                         $agent, $objective, $prevMessages,
                         $round, $rounds, $phase,
-                        $language, $forceDisagreement, $contextDoc, $assignedTarget
+                        $language, $forceDisagreement, $contextDoc, $assignedTarget,
+                        $socialDynBlock, $forceStrongNext
                     );
 
                     $routed  = $this->providerRouter->chat($messages, $agent);
@@ -92,24 +127,39 @@ class JuryRunner {
                         : null;
 
                     $msg = $this->messageRepo->create([
-                        'id'              => $this->uuid(),
-                        'session_id'      => $sessionId,
-                        'role'            => 'assistant',
-                        'agent_id'        => $agentId,
-                        'provider_id'     => $routed['provider_id'] ?? null,
-                        'model'           => $routed['model'] ?? null,
-                        'round'           => $round,
-                        'phase'           => $phase,
-                        'target_agent_id' => $targetAgentId,
-                        'mode_context'    => 'jury',
-                        'message_type'    => $phase,
-                        'content'         => $content,
-                        'created_at'      => date('c'),
+                        'id'                       => $this->uuid(),
+                        'session_id'               => $sessionId,
+                        'role'                     => 'assistant',
+                        'agent_id'                 => $agentId,
+                        'provider_id'              => $routed['provider_id'] ?? null,
+                        'provider_name'            => $routed['provider_name'] ?? null,
+                        'model'                    => $routed['model'] ?? null,
+                        'requested_provider_id'    => $routed['requested_provider_id'] ?? null,
+                        'requested_model'          => $routed['requested_model'] ?? null,
+                        'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
+                        'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                        'round'                    => $round,
+                        'phase'                    => $phase,
+                        'target_agent_id'          => $targetAgentId,
+                        'mode_context'             => 'jury',
+                        'message_type'             => $phase,
+                        'content'                  => $content,
+                        'created_at'               => date('c'),
                     ]);
                     $roundMessages[] = $msg;
 
                     $this->debateMemory->processMessage(
                         $sessionId, $round, $agentId, $content, $targetAgentId, $state
+                    );
+                    $this->socialDynamics->ingestAgentResponse(
+                        $sessionId,
+                        $round,
+                        $agentId,
+                        $content,
+                        $targetAgentId,
+                        $debateAgents,
+                        $this->voteRepo->findVotesBySession($sessionId),
+                        $state['positions'] ?? []
                     );
 
                     // Parse and save vote for every round
@@ -133,19 +183,24 @@ class JuryRunner {
 
                 } catch (\Throwable $e) {
                     $msg = $this->messageRepo->create([
-                        'id'              => $this->uuid(),
-                        'session_id'      => $sessionId,
-                        'role'            => 'assistant',
-                        'agent_id'        => $agentId,
-                        'provider_id'     => null,
-                        'model'           => null,
-                        'round'           => $round,
-                        'phase'           => $phase,
-                        'target_agent_id' => null,
-                        'mode_context'    => 'jury',
-                        'message_type'    => $phase,
-                        'content'         => '[Error] ' . $e->getMessage(),
-                        'created_at'      => date('c'),
+                        'id'                       => $this->uuid(),
+                        'session_id'               => $sessionId,
+                        'role'                     => 'assistant',
+                        'agent_id'                 => $agentId,
+                        'provider_id'              => null,
+                        'provider_name'            => null,
+                        'model'                    => null,
+                        'requested_provider_id'    => null,
+                        'requested_model'          => null,
+                        'provider_fallback_used'   => 0,
+                        'provider_fallback_reason' => null,
+                        'round'                    => $round,
+                        'phase'                    => $phase,
+                        'target_agent_id'          => null,
+                        'mode_context'             => 'jury',
+                        'message_type'             => $phase,
+                        'content'                  => '[Error] ' . $e->getMessage(),
+                        'created_at'               => date('c'),
                     ]);
                     $roundMessages[] = $msg;
                 }
@@ -153,6 +208,18 @@ class JuryRunner {
 
             $allRounds[$round] = $roundMessages;
             $prevMessages      = $roundMessages;
+
+            if ($round < $rounds - 1) {
+                $votesEnd = $this->voteRepo->findVotesBySession($sessionId);
+                $forceStrongNext = $this->falseConsensusDetector->shouldForceChallengeNextRound(
+                    $contextQuality,
+                    $state['positions'] ?? [],
+                    $state['edges'] ?? [],
+                    $votesEnd
+                );
+            } else {
+                $forceStrongNext = false;
+            }
         }
 
         // Final round: synthesizer produces Committee Verdict
@@ -164,44 +231,55 @@ class JuryRunner {
                 $messages = $this->buildJuryMessages(
                     $synthAgent, $objective, $allPrevMessages,
                     $rounds, $rounds, 'jury-verdict',
-                    $language, $forceDisagreement, $contextDoc
+                    $language, $forceDisagreement, $contextDoc,
+                    null, null, false, false
                 );
 
                 $routed  = $this->providerRouter->chat($messages, $synthAgent);
                 $content = $routed['content'];
 
                 $msg = $this->messageRepo->create([
-                    'id'              => $this->uuid(),
-                    'session_id'      => $sessionId,
-                    'role'            => 'assistant',
-                    'agent_id'        => 'synthesizer',
-                    'provider_id'     => $routed['provider_id'] ?? null,
-                    'model'           => $routed['model'] ?? null,
-                    'round'           => $rounds,
-                    'phase'           => 'jury-verdict',
-                    'target_agent_id' => null,
-                    'mode_context'    => 'jury',
-                    'message_type'    => 'jury-verdict',
-                    'content'         => $content,
-                    'created_at'      => date('c'),
+                    'id'                       => $this->uuid(),
+                    'session_id'               => $sessionId,
+                    'role'                     => 'assistant',
+                    'agent_id'                 => 'synthesizer',
+                    'provider_id'              => $routed['provider_id'] ?? null,
+                    'provider_name'            => $routed['provider_name'] ?? null,
+                    'model'                    => $routed['model'] ?? null,
+                    'requested_provider_id'    => $routed['requested_provider_id'] ?? null,
+                    'requested_model'          => $routed['requested_model'] ?? null,
+                    'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
+                    'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                    'round'                    => $rounds,
+                    'phase'                    => 'jury-verdict',
+                    'target_agent_id'          => null,
+                    'mode_context'             => 'jury',
+                    'message_type'             => 'jury-verdict',
+                    'content'                  => $content,
+                    'created_at'               => date('c'),
                 ]);
                 $verdictMessages[] = $msg;
 
             } catch (\Throwable $e) {
                 $msg = $this->messageRepo->create([
-                    'id'              => $this->uuid(),
-                    'session_id'      => $sessionId,
-                    'role'            => 'assistant',
-                    'agent_id'        => 'synthesizer',
-                    'provider_id'     => null,
-                    'model'           => null,
-                    'round'           => $rounds,
-                    'phase'           => 'jury-verdict',
-                    'target_agent_id' => null,
-                    'mode_context'    => 'jury',
-                    'message_type'    => 'jury-verdict',
-                    'content'         => '[Error] ' . $e->getMessage(),
-                    'created_at'      => date('c'),
+                    'id'                       => $this->uuid(),
+                    'session_id'               => $sessionId,
+                    'role'                     => 'assistant',
+                    'agent_id'                 => 'synthesizer',
+                    'provider_id'              => null,
+                    'provider_name'            => null,
+                    'model'                    => null,
+                    'requested_provider_id'    => null,
+                    'requested_model'          => null,
+                    'provider_fallback_used'   => 0,
+                    'provider_fallback_reason' => null,
+                    'round'                    => $rounds,
+                    'phase'                    => 'jury-verdict',
+                    'target_agent_id'          => null,
+                    'mode_context'             => 'jury',
+                    'message_type'             => 'jury-verdict',
+                    'content'                  => '[Error] ' . $e->getMessage(),
+                    'created_at'               => date('c'),
                 ]);
                 $verdictMessages[] = $msg;
             }
@@ -209,6 +287,24 @@ class JuryRunner {
         $allRounds[$rounds] = $verdictMessages;
 
         $automaticDecision = $this->voteAggregator->recompute($sessionId, $threshold);
+        $allSessionMessages = $this->messageRepo->findBySession($sessionId);
+        $evidenceReport = null;
+        try {
+            $evidenceReport = $this->evidenceService->generateAndPersist(
+                $sessionId, $allSessionMessages, $contextDoc
+            );
+        } catch (\Throwable $e) {
+            error_log('[JuryRunner] Evidence generation failed: ' . $e->getMessage());
+        }
+        $riskProfile = null;
+        try {
+            $riskProfile = $this->riskAnalyzer->analyzeAndPersist(
+                $sessionId, $objective, 'jury',
+                $allSessionMessages, $contextDoc, $threshold, $evidenceReport
+            );
+        } catch (\Throwable $e) {
+            error_log('[JuryRunner] Risk analysis failed: ' . $e->getMessage());
+        }
         $reliability = $this->reliabilityService->buildEnvelope(
             $objective,
             $contextDoc,
@@ -216,7 +312,12 @@ class JuryRunner {
             $allVotes,
             $state['positions'] ?? [],
             $state['edges'] ?? [],
-            $threshold
+            $threshold,
+            null,
+            null,
+            null,
+            $evidenceReport,
+            $riskProfile
         );
 
         return [
@@ -240,6 +341,9 @@ class JuryRunner {
             'reliability_warnings' => $reliability['reliability_warnings'],
             'decision_reliability_summary' => $reliability['decision_reliability_summary'] ?? null,
             'context_clarification' => $reliability['context_clarification'] ?? null,
+            'evidence_report' => $evidenceReport,
+            'risk_profile' => $riskProfile,
+            'risk_threshold_info' => $reliability['risk_threshold_info'] ?? null,
         ];
     }
 
@@ -261,7 +365,10 @@ class JuryRunner {
         string $language,
         bool   $forceDisagreement,
         ?array $contextDoc,
-        ?string $assignedTarget = null
+        ?string $assignedTarget = null,
+        ?string $socialDynamicsBlock = null,
+        bool   $forceStrongContradictionNext = false,
+        bool   $addRoundMindset = true
     ): array {
         $agentId = $agent->id;
 
@@ -292,6 +399,10 @@ class JuryRunner {
                 $userContent .= "\n**[$label]** *($phaseName)*: {$msg['content']}\n";
             }
             $userContent .= "\n";
+        }
+
+        if ($socialDynamicsBlock !== null && $socialDynamicsBlock !== '') {
+            $userContent .= $socialDynamicsBlock;
         }
 
         // Build list of potential targets from previous messages
@@ -325,6 +436,18 @@ class JuryRunner {
                     . "## Target Agent\n{$effectiveTarget}\n\n";
             }
             $instruction .= "State what has changed since your last contribution, your final concern, and your **Final Vote**.";
+        }
+
+        $debateTotal = max(1, $totalRounds - 1);
+        if ($addRoundMindset && $phase !== 'jury-verdict' && $agentId !== 'synthesizer' && $debateTotal > 1) {
+            $policy = new RoundPolicy();
+            $rType  = match ($phase) {
+                'jury-opening'           => RoundPolicy::ROUND_OPENING,
+                'jury-cross-examination' => RoundPolicy::ROUND_CHALLENGE,
+                default                   => $policy->getRoundType($round, $debateTotal),
+            };
+            $instruction .= "\n\n**Round mindset:** "
+                . $policy->getRoundTypeDirective($rType, $forceStrongContradictionNext);
         }
 
         $userContent .= "**Your task:** $instruction\n\n";

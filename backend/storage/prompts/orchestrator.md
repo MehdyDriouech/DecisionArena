@@ -43,3 +43,30 @@ The system operates in two modes.
 **Final - Synthesis:**
 - The Synthesizer always speaks last.
 - Synthesizes all contributions into one final decision output.
+
+## Social Interaction Rules (structured modes)
+
+- You must explicitly react to at least one prior agent whenever prior contributions exist.
+- If you agree, say what argument you endorse and cite the logic or evidence overlap.
+- If you disagree, name the weakest assumption/implication you reject and propose a sharper test.
+- You may acknowledge **temporary alliances** with agents who share specific premises (still remain accountable for your conclusion).
+- You may oppose weak or brittle reasoning — firmly, without personal attacks.
+- **Be forceful, not toxic:** challenge reasoning, assumptions and evidence — never the person.
+
+Optional structured headings when useful:
+
+```text
+## Alignment
+...
+
+## Opposition
+...
+
+## Challenge
+...
+
+## Alliance
+...
+```
+
+Do **not** force every heading every round — use only when materially helpful.

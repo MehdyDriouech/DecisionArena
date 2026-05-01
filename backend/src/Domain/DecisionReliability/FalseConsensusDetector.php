@@ -166,6 +166,90 @@ class FalseConsensusDetector {
     }
 
     /**
+     * Runtime hint for orchestrators — escalation is prompt-only (no extra rounds).
+     *
+     * @param array<string,mixed>               $contextQuality
+     * @param array<int,array<string,mixed>> $positions
+     * @param array<int,array<string,mixed>> $edges
+     * @param array<int,array<string,mixed>> $votes
+     */
+    public function shouldForceChallengeNextRound(
+        array $contextQuality,
+        array $positions,
+        array $edges,
+        array $votes = []
+    ): bool {
+        $syntheticVotes = $this->syntheticVotesForIncrementalCheck($votes, $positions);
+        $partial          = $this->detect($contextQuality, $positions, $edges, $syntheticVotes, null, null, null, null);
+        $diversity        = (float)($partial['diversity_score'] ?? 1.0);
+        $risk             = (string)($partial['false_consensus_risk'] ?? 'low');
+        if (count($syntheticVotes) >= 3 && $diversity < 0.30) {
+            return true;
+        }
+        if ($risk === 'high') {
+            return true;
+        }
+        foreach (($partial['signals'] ?? []) as $sig) {
+            $type = (string)($sig['type'] ?? '');
+            if ($type === 'low_argument_diversity' || $type === 'early_consensus_weak_context') {
+                return true;
+            }
+        }
+        $level = strtolower((string)($contextQuality['level'] ?? 'strong'));
+        if (($level === 'weak' || $level === 'medium') && count($syntheticVotes) >= 3) {
+            if ($risk !== 'low' || $diversity < 0.45) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $votes
+     * @param array<int,array<string,mixed>> $positions
+     * @return array<int,array{agent_id:string,rationale:string}>
+     */
+    private function syntheticVotesForIncrementalCheck(array $votes, array $positions): array {
+        $out = [];
+        foreach ($votes as $v) {
+            $ag = (string)($v['agent_id'] ?? '');
+            $t  = trim((string)($v['rationale'] ?? ''));
+            if ($ag !== '' && $t !== '') {
+                $out[] = ['agent_id' => $ag, 'rationale' => $t];
+            }
+        }
+        if (count($out) >= 3) {
+            return $out;
+        }
+
+        $latestByAgent = [];
+        foreach ($positions as $p) {
+            $agent = (string)($p['agent_id'] ?? '');
+            if ($agent === '' || $agent === 'devil_advocate') {
+                continue;
+            }
+            $round = (int)($p['round'] ?? 0);
+            if (!isset($latestByAgent[$agent]) || $round >= (int)($latestByAgent[$agent]['round'] ?? 0)) {
+                $latestByAgent[$agent] = $p;
+            }
+        }
+        $assembled = [];
+        foreach ($latestByAgent as $agent => $p) {
+            $text = trim(
+                ($p['main_argument'] ?? '') . ' '
+                . ($p['biggest_risk'] ?? '') . ' '
+                . ($p['change_since_last_round'] ?? '') . ' '
+                . ($p['stance'] ?? '')
+            );
+            $text = trim(preg_replace('/\s+/u', ' ', $text) ?: $text);
+            if ($agent !== '') {
+                $assembled[] = ['agent_id' => $agent, 'rationale' => $text ?: 'analysis'];
+            }
+        }
+        return $assembled;
+    }
+
+    /**
      * @param array<int,array> $votes
      * @param array<int,array> $positions
      * @return float 0..1 higher = more diverse rationales

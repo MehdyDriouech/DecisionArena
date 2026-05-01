@@ -61,6 +61,11 @@ function registerSessionsHandlers() {
         state.stResults = null;
         state.stRunning = false;
         navigate('stress-test');
+      } else if (mode === 'jury') {
+        state.currentMessages = messages;
+        state.juryResults     = null;
+        state.juryRunning     = false;
+        navigate('jury');
       } else {
         state.sessionHistory = {
           session,
@@ -154,9 +159,12 @@ function registerSessionsHandlers() {
   registerAction('export-session', async ({ element }) => {
     const { state, render, apiFetch } = getCtx();
     const sessionId = element.dataset.sessionId;
-    const format    = element.dataset.format;
+    const format    = element.dataset.format || 'markdown';
+    const redacted  = element.dataset.redacted || '';
     try {
-      const result = await apiFetch(`/api/sessions/${sessionId}/export?format=${format}`);
+      let url = `/api/sessions/${sessionId}/export?format=${format}`;
+      if (redacted) url += `&redacted=${redacted}`;
+      const result = await apiFetch(url);
       if (format === 'json') {
         const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
         downloadBlob(blob, result.filename || `session-${sessionId}.json`);

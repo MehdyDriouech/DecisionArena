@@ -129,10 +129,44 @@ class SessionController {
             'created_at'           => $now,
             'updated_at'           => $now,
         ];
+        // Persist blue_team_agents / red_team_agents if provided
+        if (!empty($data['blue_team_agents']) && is_array($data['blue_team_agents'])) {
+            $session['blue_team_agents'] = json_encode($data['blue_team_agents']);
+        }
+        if (!empty($data['red_team_agents']) && is_array($data['red_team_agents'])) {
+            $session['red_team_agents'] = json_encode($data['red_team_agents']);
+        }
+
         $created = $this->sessionRepo->create($session);
 
-        if (!empty($data['agent_providers']) && is_array($data['agent_providers'])) {
-            $this->agentProvidersRepo->saveForSession($id, $data['agent_providers']);
+        // Convert team_provider_assignments to agent_providers if present
+        $agentProviders = is_array($data['agent_providers'] ?? null) ? $data['agent_providers'] : [];
+        if (!empty($data['team_provider_assignments']) && is_array($data['team_provider_assignments'])) {
+            $blueAgents = is_array($data['blue_team_agents'] ?? null) ? $data['blue_team_agents'] : [];
+            $redAgents  = is_array($data['red_team_agents']  ?? null) ? $data['red_team_agents']  : [];
+            $blueAssign = $data['team_provider_assignments']['blue'] ?? [];
+            $redAssign  = $data['team_provider_assignments']['red']  ?? [];
+
+            foreach ($blueAgents as $agentId) {
+                if (!isset($agentProviders[$agentId]) && !empty($blueAssign['provider_id'])) {
+                    $agentProviders[(string)$agentId] = [
+                        'provider_id' => $blueAssign['provider_id'],
+                        'model'       => $blueAssign['model'] ?? null,
+                    ];
+                }
+            }
+            foreach ($redAgents as $agentId) {
+                if (!isset($agentProviders[$agentId]) && !empty($redAssign['provider_id'])) {
+                    $agentProviders[(string)$agentId] = [
+                        'provider_id' => $redAssign['provider_id'],
+                        'model'       => $redAssign['model'] ?? null,
+                    ];
+                }
+            }
+        }
+
+        if (!empty($agentProviders)) {
+            $this->agentProvidersRepo->saveForSession($id, $agentProviders);
         }
 
         return $created;

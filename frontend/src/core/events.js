@@ -23,17 +23,37 @@ async function dispatchAction(actionName, context = {}) {
 }
 
 function bindGlobalEventDelegation(root = document) {
-  /* ── keyboard: data-nav on non-button cards (div[tabindex], etc.) ───────── */
+  /* ── keyboard: data-nav cards, then data-action role=button|link (a11y) ─── */
   root.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
+
     const navEl = e.target.closest('[data-nav]');
-    if (!navEl || !root.contains(navEl)) return;
-    if (navEl.matches('button, a[href]')) return;
-    const tag = (e.target.tagName || '').toUpperCase();
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if (navEl && root.contains(navEl) && !navEl.matches('button, a[href]')) {
+      const tag = (e.target.tagName || '').toUpperCase();
+      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
+        e.preventDefault();
+        try { window.DecisionArena.services?.LogService?.logUiAction?.('nav', { to: navEl.dataset.nav }); } catch (_) {}
+        window.DecisionArena.router.navigate(navEl.dataset.nav);
+        return;
+      }
+    }
+
+    const actEl = e.target.closest('[data-action]');
+    if (!actEl || !root.contains(actEl)) return;
+    if (!actEl.matches('[role="button"], [role="link"]')) return;
+    if (actEl.matches('button, a[href]')) return;
+    const tag2 = (e.target.tagName || '').toUpperCase();
+    if (tag2 === 'INPUT' || tag2 === 'TEXTAREA' || tag2 === 'SELECT') return;
     e.preventDefault();
-    try { window.DecisionArena.services?.LogService?.logUiAction?.('nav', { to: navEl.dataset.nav }); } catch (_) {}
-    window.DecisionArena.router.navigate(navEl.dataset.nav);
+    void (async () => {
+      try {
+        try { window.DecisionArena.services?.LogService?.logUiAction?.('action', { name: actEl.dataset.action }); } catch (_) {}
+        await dispatchAction(actEl.dataset.action, { event: e, element: actEl });
+      } catch (err) {
+        console.error('[events] keydown action error:', actEl.dataset.action, err);
+        try { window.DecisionArena.services?.LogService?.logFrontendEvent?.('error', 'frontend', { action: 'action_error', metadata: { name: actEl.dataset.action }, error_message: err?.message || String(err) }); } catch (_) {}
+      }
+    })();
   });
 
   /* ── click: data-nav then data-action ─────────────────────────────────── */

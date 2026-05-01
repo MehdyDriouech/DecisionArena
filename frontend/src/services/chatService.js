@@ -8,6 +8,13 @@ const ChatService = {
       body: JSON.stringify(body),
     });
   },
+  sendReactive(body, signal) {
+    return apiFetch('/api/chat/reactive', {
+      method: 'POST',
+      signal,
+      body: JSON.stringify(body),
+    });
+  },
   runDecisionRoom(body) {
     return apiFetch('/api/decision-room/run', {
       method: 'POST',

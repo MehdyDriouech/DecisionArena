@@ -5,6 +5,11 @@ use Domain\Agents\AgentAssembler;
 use Domain\DecisionReliability\DecisionReliabilityService;
 use Domain\DecisionReliability\DevilAdvocateTriggerPolicy;
 use Domain\DecisionReliability\ReliabilityConfig;
+use Domain\Evidence\EvidenceReportService;
+use Domain\Risk\RiskProfileAnalyzer;
+use Domain\SocialDynamics\SocialDynamicsService;
+use Domain\SocialDynamics\SocialPromptContextBuilder;
+use Domain\DecisionReliability\FalseConsensusDetector;
 use Domain\Providers\ProviderRouter;
 use Domain\Verdict\VerdictParser;
 use Domain\Vote\VoteAggregator;
@@ -26,6 +31,11 @@ class DecisionRoomRunner {
     private VoteAggregator $voteAggregator;
     private DevilAdvocateTriggerPolicy $daTriggerPolicy;
     private DecisionReliabilityService $reliabilityService;
+    private SocialDynamicsService $socialDynamics;
+    private SocialPromptContextBuilder $socialPrompt;
+    private FalseConsensusDetector $falseConsensusDetector;
+    private EvidenceReportService $evidenceService;
+    private RiskProfileAnalyzer $riskAnalyzer;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -39,6 +49,11 @@ class DecisionRoomRunner {
         $this->voteAggregator = new VoteAggregator($this->voteRepo);
         $this->daTriggerPolicy = new DevilAdvocateTriggerPolicy();
         $this->reliabilityService = new DecisionReliabilityService();
+        $this->socialDynamics = new SocialDynamicsService();
+        $this->socialPrompt   = new SocialPromptContextBuilder();
+        $this->falseConsensusDetector = new FalseConsensusDetector();
+        $this->evidenceService = new EvidenceReportService();
+        $this->riskAnalyzer    = new RiskProfileAnalyzer();
     }
 
     public function run(
@@ -60,6 +75,7 @@ class DecisionRoomRunner {
         $previousRoundMessages = [];
         $state               = $this->debateMemory->loadState($sessionId);
         $this->voteRepo->clearSession($sessionId);
+        $this->socialDynamics->clearSession($sessionId);
         $daPartialHistory    = [];
         $contextQuality      = $this->reliabilityService->buildEnvelope(
             $objective,
@@ -73,6 +89,8 @@ class DecisionRoomRunner {
 
         $daPromptPath = __DIR__ . '/../../../storage/prompts/devil_advocate.md';
         $daPrompt     = file_exists($daPromptPath) ? file_get_contents($daPromptPath) : '';
+
+        $forceStrongNext = false;
 
         for ($round = 1; $round <= $rounds; $round++) {
             $roundMessages  = [];
@@ -97,6 +115,13 @@ class DecisionRoomRunner {
                     ? $this->computeAssignedTarget($agentsForRound, $agentId, $round)
                     : null;
 
+                $votesSnap      = $this->voteRepo->findVotesBySession($sessionId);
+                $maj            = SocialDynamicsService::summarizeMajority($votesSnap, $state['positions'] ?? []);
+                $socialDynamicsBlock = null;
+                if ($round > 1 && $rounds > 1 && $agentId !== 'synthesizer') {
+                    $socialDynamicsBlock = $this->socialPrompt->buildUserBlock($sessionId, $agentId, $maj);
+                }
+
                 try {
                     $messages = $this->promptBuilder->buildDecisionRoomMessages(
                         $agent,
@@ -108,25 +133,31 @@ class DecisionRoomRunner {
                         $forceDisagreement,
                         $contextDoc,
                         $this->debateMemory->buildPromptContext($state),
-                        $assignedTarget
+                        $assignedTarget,
+                        $socialDynamicsBlock,
+                        $forceStrongNext && $agentId !== 'synthesizer'
                     );
-
                     $routed  = $this->providerRouter->chat($messages, $agent, null, null, $agentProviders[$agentId] ?? null);
                     $content = $routed['content'];
 
                     $msg = $this->messageRepo->create([
-                        'id'           => $this->uuid(),
-                        'session_id'   => $sessionId,
-                        'role'         => 'assistant',
-                        'agent_id'     => $agentId,
-                        'provider_id'  => $routed['provider_id'] ?? null,
-                        'model'        => $routed['model'] ?? null,
-                        'round'        => $round,
-                        'phase'        => $agentId === 'synthesizer' ? 'synthesis' : 'analysis',
-                        'mode_context' => 'decision-room',
-                        'message_type' => $agentId === 'synthesizer' ? 'synthesis' : 'analysis',
-                        'content'      => $content,
-                        'created_at'   => date('c'),
+                        'id'                       => $this->uuid(),
+                        'session_id'               => $sessionId,
+                        'role'                     => 'assistant',
+                        'agent_id'                 => $agentId,
+                        'provider_id'              => $routed['provider_id'] ?? null,
+                        'provider_name'            => $routed['provider_name'] ?? null,
+                        'model'                    => $routed['model'] ?? null,
+                        'requested_provider_id'    => $routed['requested_provider_id'] ?? null,
+                        'requested_model'          => $routed['requested_model'] ?? null,
+                        'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
+                        'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                        'round'                    => $round,
+                        'phase'                    => $agentId === 'synthesizer' ? 'synthesis' : 'analysis',
+                        'mode_context'             => 'decision-room',
+                        'message_type'             => $agentId === 'synthesizer' ? 'synthesis' : 'analysis',
+                        'content'                  => $content,
+                        'created_at'               => date('c'),
                     ]);
                     $roundMessages[] = $msg;
                     $targetAgentId = $this->resolveTargetAgentId($content, $previousRoundMessages, $agentId, $assignedTarget);
@@ -137,6 +168,16 @@ class DecisionRoomRunner {
                         $content,
                         $targetAgentId,
                         $state
+                    );
+                    $this->socialDynamics->ingestAgentResponse(
+                        $sessionId,
+                        $round,
+                        $agentId,
+                        $content,
+                        $targetAgentId,
+                        array_values(array_filter($selectedAgents, fn($id) => $id !== 'devil_advocate')),
+                        $this->voteRepo->findVotesBySession($sessionId),
+                        $state['positions'] ?? []
                     );
                     if ($agentId !== 'synthesizer' && $round === $rounds) {
                         $parsedVote = $this->voteParser->parse($content);
@@ -174,18 +215,23 @@ class DecisionRoomRunner {
 
                 } catch (\Throwable $e) {
                     $msg = $this->messageRepo->create([
-                        'id'           => $this->uuid(),
-                        'session_id'   => $sessionId,
-                        'role'         => 'assistant',
-                        'agent_id'     => $agentId,
-                        'provider_id'  => null,
-                        'model'        => null,
-                        'round'        => $round,
-                        'phase'        => $agentId === 'synthesizer' ? 'synthesis' : 'analysis',
-                        'mode_context' => 'decision-room',
-                        'message_type' => $agentId === 'synthesizer' ? 'synthesis' : 'analysis',
-                        'content'      => '[Error] ' . $e->getMessage(),
-                        'created_at'   => date('c'),
+                        'id'                       => $this->uuid(),
+                        'session_id'               => $sessionId,
+                        'role'                     => 'assistant',
+                        'agent_id'                 => $agentId,
+                        'provider_id'              => null,
+                        'provider_name'            => null,
+                        'model'                    => null,
+                        'requested_provider_id'    => isset($agentProviders[$agentId]) ? ($agentProviders[$agentId]['provider_id'] ?? null) : null,
+                        'requested_model'          => isset($agentProviders[$agentId]) ? ($agentProviders[$agentId]['model'] ?? null) : null,
+                        'provider_fallback_used'   => 0,
+                        'provider_fallback_reason' => null,
+                        'round'                    => $round,
+                        'phase'                    => $agentId === 'synthesizer' ? 'synthesis' : 'analysis',
+                        'mode_context'             => 'decision-room',
+                        'message_type'             => $agentId === 'synthesizer' ? 'synthesis' : 'analysis',
+                        'content'                  => '[Error] ' . $e->getMessage(),
+                        'created_at'               => date('c'),
                     ]);
                     $roundMessages[] = $msg;
                 }
@@ -227,18 +273,23 @@ class DecisionRoomRunner {
                         $daRouted  = $this->providerRouter->chat($daMessages, null, null, null, null);
                         $daContent = $daRouted['content'];
                         $daMsg     = $this->messageRepo->create([
-                            'id'           => $this->uuid(),
-                            'session_id'   => $sessionId,
-                            'role'         => 'assistant',
-                            'agent_id'     => 'devil_advocate',
-                            'provider_id'  => $daRouted['provider_id'] ?? null,
-                            'model'        => $daRouted['model'] ?? null,
-                            'round'        => $round,
-                            'phase'        => 'devil-advocate',
-                            'mode_context' => 'decision-room',
-                            'message_type' => 'devil_advocate',
-                            'content'      => $daContent,
-                            'created_at'   => date('c'),
+                            'id'                       => $this->uuid(),
+                            'session_id'               => $sessionId,
+                            'role'                     => 'assistant',
+                            'agent_id'                 => 'devil_advocate',
+                            'provider_id'              => $daRouted['provider_id'] ?? null,
+                            'provider_name'            => $daRouted['provider_name'] ?? null,
+                            'model'                    => $daRouted['model'] ?? null,
+                            'requested_provider_id'    => null,
+                            'requested_model'          => null,
+                            'provider_fallback_used'   => 0,
+                            'provider_fallback_reason' => null,
+                            'round'                    => $round,
+                            'phase'                    => 'devil-advocate',
+                            'mode_context'             => 'decision-room',
+                            'message_type'             => 'devil_advocate',
+                            'content'                  => $daContent,
+                            'created_at'               => date('c'),
                         ]);
                         $roundMessages[] = $daMsg;
                     } catch (\Throwable $e) {
@@ -248,11 +299,41 @@ class DecisionRoomRunner {
                 $daPartialHistory[] = $partialConfidence;
             }
 
+            if ($round < $rounds) {
+                $votesEnd = $this->voteRepo->findVotesBySession($sessionId);
+                $forceStrongNext = $this->falseConsensusDetector->shouldForceChallengeNextRound(
+                    $contextQuality,
+                    $state['positions'] ?? [],
+                    $state['edges'] ?? [],
+                    $votesEnd
+                );
+            } else {
+                $forceStrongNext = false;
+            }
+
             $previousRoundMessages = $roundMessages;
             $allMessages[$round]   = $roundMessages;
         }
 
         $automaticDecision = $this->voteAggregator->recompute($sessionId, $decisionThreshold);
+        $allSessionMessages = $this->messageRepo->findBySession($sessionId);
+        $evidenceReport = null;
+        try {
+            $evidenceReport = $this->evidenceService->generateAndPersist(
+                $sessionId, $allSessionMessages, $contextDoc
+            );
+        } catch (\Throwable $e) {
+            error_log('[DecisionRoomRunner] Evidence generation failed: ' . $e->getMessage());
+        }
+        $riskProfile = null;
+        try {
+            $riskProfile = $this->riskAnalyzer->analyzeAndPersist(
+                $sessionId, $objective, 'decision-room',
+                $allSessionMessages, $contextDoc, $decisionThreshold, $evidenceReport
+            );
+        } catch (\Throwable $e) {
+            error_log('[DecisionRoomRunner] Risk analysis failed: ' . $e->getMessage());
+        }
         $reliability = $this->reliabilityService->buildEnvelope(
             $objective,
             $contextDoc,
@@ -260,7 +341,12 @@ class DecisionRoomRunner {
             $this->voteRepo->findVotesBySession($sessionId),
             $state['positions'],
             $state['edges'],
-            $decisionThreshold
+            $decisionThreshold,
+            null,
+            null,
+            null,
+            $evidenceReport,
+            $riskProfile
         );
         return [
             'rounds' => $allMessages,
@@ -280,6 +366,9 @@ class DecisionRoomRunner {
             'reliability_warnings' => $reliability['reliability_warnings'],
             'decision_reliability_summary' => $reliability['decision_reliability_summary'] ?? null,
             'context_clarification' => $reliability['context_clarification'] ?? null,
+            'evidence_report' => $evidenceReport,
+            'risk_profile' => $riskProfile,
+            'risk_threshold_info' => $reliability['risk_threshold_info'] ?? null,
         ];
     }
 

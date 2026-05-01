@@ -41,7 +41,9 @@ class DecisionReliabilityService {
         float $decisionThreshold = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD,
         ?array $timeline = null,
         ?array $personaScores = null,
-        ?array $biasReport = null
+        ?array $biasReport = null,
+        ?array $evidenceReport = null,
+        ?array $riskProfile = null
     ): array {
         $threshold = ReliabilityConfig::normalizeThreshold($decisionThreshold);
         $contextQuality = $this->contextAnalyzer->analyze($objective, $contextDoc);
@@ -56,8 +58,8 @@ class DecisionReliabilityService {
             $biasReport
         );
 
-        $adjustedDecision = $this->buildAdjustedDecision($rawDecision, $contextQuality, $falseConsensus, $threshold);
-        $decisionSummary = $this->buildDecisionSummary($adjustedDecision, $contextQuality, $falseConsensus);
+        $adjustedDecision = $this->buildAdjustedDecision($rawDecision, $contextQuality, $falseConsensus, $threshold, $evidenceReport, $riskProfile);
+        $decisionSummary = $this->buildDecisionSummary($adjustedDecision, $contextQuality, $falseConsensus, $evidenceReport, $riskProfile);
 
         $contextClarification = null;
         if (($adjustedDecision['final_outcome'] ?? '') === 'INSUFFICIENT_CONTEXT') {
@@ -67,6 +69,17 @@ class DecisionReliabilityService {
         $warnings = $this->collectWarnings($contextQuality, $falseConsensus, $adjustedDecision, $decisionSummary);
 
         $this->logReliabilitySnapshot($contextQuality, $falseConsensus);
+
+        // Build risk threshold info for consumers
+        $riskThresholdInfo = null;
+        if ($riskProfile !== null) {
+            $riskThresholdInfo = [
+                'configured_threshold'    => round($threshold, 4),
+                'risk_adjusted_threshold' => (float)($riskProfile['recommended_threshold'] ?? $threshold),
+                'threshold_reason'        => $riskProfile['recommendations'][0] ?? '',
+                'was_adjusted'            => ($riskProfile['recommended_threshold'] ?? $threshold) > $threshold,
+            ];
+        }
 
         return [
             'raw_decision' => $rawDecision,
@@ -79,6 +92,8 @@ class DecisionReliabilityService {
             'decision_threshold' => $threshold,
             'decision_reliability_summary' => $decisionSummary,
             'context_clarification' => $contextClarification,
+            'evidence_score' => $evidenceReport !== null ? (float)($evidenceReport['evidence_score'] ?? 1.0) : null,
+            'risk_threshold_info' => $riskThresholdInfo,
         ];
     }
 
@@ -88,7 +103,7 @@ class DecisionReliabilityService {
      * @param array<string,mixed> $falseConsensus
      * @return array{decision_possible:bool, reliability_level:string, top_issues: array<int,array{key:string}>, recommended_action:string}
      */
-    public function buildDecisionSummary(array $adjustedDecision, array $contextQuality, array $falseConsensus): array {
+    public function buildDecisionSummary(array $adjustedDecision, array $contextQuality, array $falseConsensus, ?array $evidenceReport = null, ?array $riskProfile = null): array {
         $level = (string)($contextQuality['level'] ?? 'medium');
         $final = (string)($adjustedDecision['final_outcome'] ?? '');
         $decisionPossible = $final !== 'INSUFFICIENT_CONTEXT';
@@ -143,11 +158,39 @@ class DecisionReliabilityService {
             $rec = 'complete_context_rerun';
         }
 
+        // Surface evidence quality in the summary
+        $evidenceScore  = null;
+        $evidenceImpact = null;
+        if ($evidenceReport !== null) {
+            $evidenceScore  = (float)($evidenceReport['evidence_score']  ?? 1.0);
+            $evidenceImpact = (string)($evidenceReport['decision_impact'] ?? 'low');
+            if ($evidenceImpact === 'high' && !isset($seen['reliability.issue.evidence_gap'])) {
+                $push('reliability.issue.evidence_gap');
+            } elseif ($evidenceImpact === 'medium' && count($issues) < 3 && !isset($seen['reliability.issue.evidence_partial'])) {
+                $push('reliability.issue.evidence_partial');
+            }
+        }
+
+        // Surface risk profile in summary
+        $riskLevel     = null;
+        $riskAdjThr    = null;
+        if ($riskProfile !== null) {
+            $riskLevel  = (string)($riskProfile['risk_level'] ?? 'medium');
+            $riskAdjThr = (float)($riskProfile['recommended_threshold'] ?? 0.0);
+            if (in_array($riskLevel, ['high', 'critical'], true) && !isset($seen['reliability.issue.high_risk'])) {
+                $push('reliability.issue.high_risk');
+            }
+        }
+
         return [
-            'decision_possible' => $decisionPossible,
-            'reliability_level' => $level,
-            'top_issues' => $issues,
-            'recommended_action' => $rec,
+            'decision_possible'       => $decisionPossible,
+            'reliability_level'       => $level,
+            'top_issues'              => $issues,
+            'recommended_action'      => $rec,
+            'evidence_score'          => $evidenceScore,
+            'evidence_impact'         => $evidenceImpact,
+            'risk_level'              => $riskLevel,
+            'risk_adjusted_threshold' => $riskAdjThr,
         ];
     }
 
@@ -177,7 +220,9 @@ class DecisionReliabilityService {
         ?array $rawDecision,
         array $contextQuality,
         array $falseConsensus,
-        float $threshold
+        float $threshold,
+        ?array $evidenceReport = null,
+        ?array $riskProfile = null
     ): array {
         if (empty($rawDecision)) {
             return $this->adjustedInsufficientShell(
@@ -230,6 +275,44 @@ class DecisionReliabilityService {
         if ($decisionStatus !== 'INSUFFICIENT_CONTEXT' && $fcRisk === 'high' && $voteLabel === 'ITERATE') {
             $decisionStatus = 'FRAGILE';
             $reason = $reason ?? 'High false-consensus risk on an iterative / unclear vote outcome.';
+        }
+
+        // Evidence downgrade rules
+        if ($evidenceReport !== null) {
+            $contradicted  = (int)($evidenceReport['contradicted_claims_count'] ?? 0);
+            $unsupported   = (int)($evidenceReport['unsupported_claims_count']  ?? 0);
+            $total         = (int)($evidenceReport['total_claims']              ?? 0);
+            $impact        = (string)($evidenceReport['decision_impact']         ?? 'low');
+            $criticals     = (array)($evidenceReport['critical_unknowns']        ?? []);
+
+            if ($contradicted > 0 && $decisionStatus === 'CONFIDENT') {
+                $decisionStatus = 'FRAGILE';
+                $reason = $reason ?? "Evidence: {$contradicted} claim(s) directly contradicted by context document.";
+            }
+            if ($total > 0 && ($unsupported / $total) >= 0.7 && $decisionStatus === 'CONFIDENT') {
+                $decisionStatus = 'FRAGILE';
+                $reason = $reason ?? "Evidence: over 70% of identified claims are unsupported.";
+            }
+            if (!empty($criticals) && $decisionStatus === 'CONFIDENT') {
+                $decisionStatus = 'FRAGILE';
+                $reason = $reason ?? 'Evidence: critical unknowns detected — key claims cannot be verified.';
+            }
+            if ($impact === 'high' && $decisionStatus === 'INSUFFICIENT_CONTEXT') {
+                // Already insufficient — no extra downgrade needed
+            }
+        }
+
+        // Risk-adjusted threshold downgrade
+        // Only applies when the decision would be CONFIDENT but raw score
+        // passes the user threshold while failing the risk-adjusted one.
+        if ($riskProfile !== null && $decisionStatus === 'CONFIDENT') {
+            $riskAdjusted = (float)($riskProfile['recommended_threshold'] ?? $threshold);
+            if ($riskAdjusted > $threshold && $rawScore < $riskAdjusted) {
+                $decisionStatus = 'FRAGILE';
+                $adjPct = round($riskAdjusted * 100);
+                $rl     = (string)($riskProfile['risk_level'] ?? 'medium');
+                $reason = $reason ?? "Risk-adjusted threshold not met: {$rl}-risk decision requires ≥{$adjPct}% consensus.";
+            }
         }
 
         $finalOutcome = $this->composeFinalOutcome($voteLabel, $decisionStatus);

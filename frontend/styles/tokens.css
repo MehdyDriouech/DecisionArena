@@ -22,5 +22,131 @@
   background: var(--bg-secondary);
   color: var(--text-muted);
   font-family: monospace;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ── LLM fallback indicator inside message badge ── */
+.message-llm-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: monospace;
+}
+.message-llm-fallback {
+  color: #f59e0b;
+  font-size: 10px;
+  font-style: italic;
+  cursor: help;
+}
+
+/* ── LLM Assignment panel (new session) ── */
+.llm-assignment-panel {
+  border-top: 1px solid var(--border);
+  margin-top: 16px;
+}
+.llm-assignment-mode {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.llm-assignment-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.llm-agent-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ── Reactive Chat panel ── */
+.reactive-chat-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+.reactive-chat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+}
+.reactive-chat-option {
+  display: flex;
+  flex-direction: column;
+}
+.reactive-turn-group {
+  margin-bottom: 16px;
+}
+.reactive-turn-title {
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.reactive-role-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.reactive-synthesis-card {
+  margin-top: 8px;
+  padding: 16px;
+  background: rgba(16, 185, 129, 0.06);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  border-radius: 8px;
+}
+.reactive-thread-result {
+  padding: 16px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+
+/* ── Session LLM used card ── */
+.session-llm-used-card table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.session-llm-used-card td,
+.session-llm-used-card th {
+  text-align: left;
+  vertical-align: middle;
+}
+.session-llm-used-card tr:hover td {
+  background: var(--bg-secondary);
+}
+
+/* ── Collapsible analytics panels ── */
+.collapsible-panel {
+  margin-top: 16px;
+}
+.collapsible-panel-header {
+  user-select: none;
+}
+.collapsible-panel-header:hover {
+  opacity: 0.85;
+}
+.collapsible-panel-body {
+  padding-top: 4px;
+}
+
+/* ── uiComplexity body attribute overrides ── */
+/* Elements hidden in basic mode */
+[data-ui-complexity="basic"] [data-ui-min="advanced"],
+[data-ui-complexity="basic"] [data-ui-min="expert"] {
+  display: none !important;
+}
+/* Elements hidden in advanced mode */
+[data-ui-complexity="advanced"] [data-ui-min="expert"] {
+  display: none !important;
 }
