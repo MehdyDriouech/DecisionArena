@@ -502,4 +502,109 @@ Scripts de vérification ajoutés :
 
 ## Licence
 
-MIT
+MIT + commercial clause
+
+In short:
+
+- ✅ Personal & educational use: allowed
+
+- ⚠️ Commercial use: requires a separate license
+
+For commercial inquiries:
+
+👉 contact: mehdy.driouech@dawp-engineering.com
+
+# Decision Arena Restricted License v1.0
+
+Copyright (c) 2026 Mehdy Driouech
+
+---
+
+## 1. Grant of License
+
+Permission is hereby granted to any individual to:
+
+- Use the Software for personal, non-commercial purposes
+- Study and modify the source code for personal or educational use
+- Run the Software locally for experimentation
+
+---
+
+## 2. Prohibited Uses
+
+The following uses are strictly prohibited without explicit written permission from the Licensor:
+
+### 2.1 Commercial Use
+
+You may NOT:
+
+- Sell the Software or any derivative work
+- Offer the Software as a paid service (SaaS, API, platform, etc.)
+- Use the Software within a commercial organization or for business purposes
+- Integrate the Software into a product or service that generates revenue
+
+---
+
+### 2.2 Redistribution
+
+You may NOT:
+
+- Redistribute the Software in modified or unmodified form
+- Publish forks publicly (GitHub, GitLab, etc.)
+- Rebrand, white-label, or sublicense the Software
+
+---
+
+### 2.3 Competitive Use
+
+You may NOT:
+
+- Use the Software to build, train, or improve a competing product
+- Replicate core concepts, architecture, or features for commercial purposes
+
+---
+
+## 3. Modifications
+
+You may modify the Software for personal use only.
+
+All modifications remain subject to this license.
+
+---
+
+## 4. Commercial Licensing
+
+Commercial usage requires a separate written agreement with the Licensor.
+
+Contact: [your email here]
+
+---
+
+## 5. Ownership
+
+The Software remains the exclusive property of the Licensor.
+
+This license does not grant any ownership rights.
+
+---
+
+## 6. Termination
+
+This license is automatically terminated if you violate any of its terms.
+
+Upon termination, you must:
+
+- Stop using the Software
+- Delete all copies
+
+---
+
+## 7. Disclaimer
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+
+---
+
+## 8. Acceptance
+
+By using this Software, you agree to all terms of this license.
