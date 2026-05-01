@@ -482,15 +482,6 @@ decision-room-ai/
 
 ---
 
-## Roadmap technique
-
-1. Remplacer `API_BASE` hardcodé par une configuration dynamique (env / host)
-2. Enrichir le mode diagnostic (corrélations session / provider dans les Logs)
-3. Ajouter des tests de non-régression (smoke tests Playwright)
-4. Normaliser toutes les réponses backend (shape consistent)
-5. Documenter précisément le schéma SQLite (exporter `Migration.php` en doc)
-6. Ajouter le streaming optionnel via SSE (impact important sur le backend)
-
 ## Mise à jour corrective (2026-05-01)
 
 Ce lot corrige les points prioritaires issus de l’audit, sans refactor massif ni ajout de dépendances.
@@ -512,26 +503,3 @@ Scripts de vérification ajoutés :
 ## Licence
 
 MIT
-
-## Validation manuelle — Fiabilité décisionnelle
-
-Scénario A — contexte faible
-- Input: `Should we launch this?`
-- Attendu: `context_quality.level = weak`
-- Attendu: `adjusted_decision.decision_label = INSUFFICIENT_CONTEXT` ou `GO_FRAGILE`/`NO_GO_FRAGILE`
-- Attendu: `reliability_warnings` non vide et `false_consensus_risk` potentiellement `medium/high`
-
-Scénario B — contexte moyen
-- Input: objectif clair sans critères de succès explicites
-- Attendu: `context_quality.level = medium`
-- Attendu: décision possible, avec plafonnement (`raw_decision.decision_score > adjusted_decision.decision_score` si cap atteint)
-
-Scénario C — contexte fort
-- Input: objectif avec marché, contraintes, critères, risques et données
-- Attendu: `context_quality.level = strong`
-- Attendu: pas de plafonnement abusif (`reliability_cap = 1.0`)
-
-Scénario D — consensus trop rapide
-- Précondition: convergence des agents dès le round 1 (ou round 2)
-- Attendu: `false_consensus_risk = medium/high`
-- Attendu: déclenchement Devil’s Advocate si activé (`message_type = devil_advocate`)
