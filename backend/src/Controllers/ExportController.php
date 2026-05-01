@@ -21,6 +21,7 @@ use Infrastructure\Persistence\EvidenceRepository;
 use Infrastructure\Persistence\RiskProfileRepository;
 use Infrastructure\Persistence\SessionAgentProvidersRepository;
 use Domain\Orchestration\DebateMemoryService;
+use Infrastructure\Persistence\JuryAdversarialReportRepository;
 
 class ExportController {
     private SessionRepository         $sessionRepo;
@@ -39,26 +40,28 @@ class ExportController {
     private BiasReportRepository $biasRepo;
     private EvidenceRepository $evidenceRepo;
     private RiskProfileRepository $riskRepo;
-    private SessionAgentProvidersRepository $agentProvidersRepo;
+    private SessionAgentProvidersRepository  $agentProvidersRepo;
+    private JuryAdversarialReportRepository  $adversarialRepo;
 
     public function __construct() {
-        $this->sessionRepo  = new SessionRepository();
-        $this->messageRepo  = new MessageRepository();
-        $this->snapshotRepo = new SnapshotRepository();
-        $this->verdictRepo  = new VerdictRepository();
-        $this->docRepo      = new ContextDocumentRepository();
-        $this->planRepo     = new ActionPlanRepository();
-        $this->debateRepo   = new DebateRepository();
-        $this->voteRepo     = new VoteRepository();
+        $this->sessionRepo        = new SessionRepository();
+        $this->messageRepo        = new MessageRepository();
+        $this->snapshotRepo       = new SnapshotRepository();
+        $this->verdictRepo        = new VerdictRepository();
+        $this->docRepo            = new ContextDocumentRepository();
+        $this->planRepo           = new ActionPlanRepository();
+        $this->debateRepo         = new DebateRepository();
+        $this->voteRepo           = new VoteRepository();
         $this->providerRoutingRepo = new ProviderRoutingSettingsRepository();
-        $this->debateMemory = new DebateMemoryService();
+        $this->debateMemory       = new DebateMemoryService();
         $this->reliabilityService = new DecisionReliabilityService();
-        $this->timelineRepo = new ConfidenceTimelineRepository();
-        $this->personaScoreRepo = new PersonaScoreRepository();
-        $this->biasRepo = new BiasReportRepository();
-        $this->evidenceRepo = new EvidenceRepository();
-        $this->riskRepo     = new RiskProfileRepository();
+        $this->timelineRepo       = new ConfidenceTimelineRepository();
+        $this->personaScoreRepo   = new PersonaScoreRepository();
+        $this->biasRepo           = new BiasReportRepository();
+        $this->evidenceRepo       = new EvidenceRepository();
+        $this->riskRepo           = new RiskProfileRepository();
         $this->agentProvidersRepo = new SessionAgentProvidersRepository();
+        $this->adversarialRepo    = new JuryAdversarialReportRepository();
     }
 
     public function export(Request $req): array {
@@ -115,6 +118,17 @@ class ExportController {
         $ext      = $format === 'json' ? 'json' : 'md';
         $filename = 'session-' . $id . $suffix . '.' . $ext;
 
+        // Load jury_adversarial report: persisted table first, then recomputed fallback
+        $isJurySession = ($session['mode'] ?? '') === 'jury';
+        $juryAdversarial = null;
+        if ($isJurySession) {
+            $juryAdversarial = $this->adversarialRepo->findBySession($id);
+            if ($juryAdversarial === null) {
+                // Fallback for sessions created before persistence was added
+                $juryAdversarial = $this->buildJuryAdversarialReport($edges, $positions, $messages);
+            }
+        }
+
         if ($format === 'json') {
             $verdict  = $this->verdictRepo->findBySession($id);
             $routing  = null;
@@ -151,6 +165,7 @@ class ExportController {
                 'evidence_report'      => $evidenceReport,
                 'evidence_claims'      => $evidenceClaims,
                 'risk_profile'         => $riskProfile,
+                'jury_adversarial'     => $juryAdversarial,
                 'memory'               => [
                     'decision_taken'   => $session['decision_taken']    ?? null,
                     'user_learnings'   => $session['user_learnings']    ?? null,
@@ -170,7 +185,7 @@ class ExportController {
         if ($redactionLevel !== null && $routing !== null) {
             $routing = $this->redactProviderRouting($routing, $redactionLevel);
         }
-        $content = $this->buildMarkdown($session, $messages, $contextDoc, $actionPlan, $arguments, $positions, $edges, $votes, $decision, $routing, $reliability, $evidenceReport, $evidenceClaims, $riskProfile);
+        $content = $this->buildMarkdown($session, $messages, $contextDoc, $actionPlan, $arguments, $positions, $edges, $votes, $decision, $routing, $reliability, $evidenceReport, $evidenceClaims, $riskProfile, $juryAdversarial);
         if ($redactionLevel !== null) {
             $content = "<!-- redacted={$redactionLevel} -->\n\n" . $content;
         }
@@ -346,7 +361,8 @@ class ExportController {
         ?array $reliability       = null,
         ?array $evidenceReport    = null,
         array  $evidenceClaims    = [],
-        ?array $riskProfile       = null
+        ?array $riskProfile       = null,
+        ?array $juryAdversarial   = null
     ): string {
         $agents = is_array($session['selected_agents'])
             ? implode(', ', $session['selected_agents'])
@@ -726,8 +742,41 @@ class ExportController {
             $md .= "_No risk profile available for this session._\n\n";
         }
 
-        // ── 12. Provider Routing ──────────────────────────────────────────
-        $md .= "## 12. Provider Routing\n\n";
+        // ── 12. Jury Adversarial Quality ──────────────────────────────────
+        if ($juryAdversarial !== null) {
+            $md .= "## 12. Qualité adversariale du jury\n\n";
+            $jaScore   = $juryAdversarial['debate_quality_score'] ?? 0;
+            $jaChalCnt = $juryAdversarial['challenge_count']      ?? 0;
+            $jaChalRat = round((float)($juryAdversarial['challenge_ratio'] ?? 0) * 100, 1);
+            $jaPosCh   = $juryAdversarial['position_changes']     ?? 0;
+            $jaMinority = ($juryAdversarial['minority_report_present'] ?? false) ? 'yes' : 'no';
+            $jaMostCh  = $juryAdversarial['most_challenged_agent'] ?? '—';
+            $jaDensity = round((float)($juryAdversarial['interaction_density'] ?? 0) * 100, 1);
+            $jaWarnings = (array)($juryAdversarial['warnings'] ?? []);
+
+            $md .= "- **Debate quality score:** {$jaScore}/100\n";
+            $md .= "- **Challenge count:** {$jaChalCnt} ({$jaChalRat}% of all interactions)\n";
+            $md .= "- **Position changes:** {$jaPosCh}\n";
+            $md .= "- **Minority report present:** {$jaMinority}\n";
+            $md .= "- **Interaction density:** {$jaDensity}%\n";
+            $md .= "- **Most challenged agent:** {$jaMostCh}\n";
+            if (!empty($jaWarnings)) {
+                $md .= "- **Adversarial warnings:** " . implode(', ', $jaWarnings) . "\n";
+            }
+            $posChangers = $juryAdversarial['position_changers'] ?? [];
+            if (!empty($posChangers)) {
+                $md .= "- **Position changers:**\n";
+                foreach ($posChangers as $agent => $change) {
+                    $from = is_array($change) ? ($change['from'] ?? '') : '';
+                    $to   = is_array($change) ? ($change['to']   ?? '') : '';
+                    $md .= "  - {$agent}: {$from} → {$to}\n";
+                }
+            }
+            $md .= "\n";
+        }
+
+        // ── 13. Provider Routing ──────────────────────────────────────────
+        $md .= "## 13. Provider Routing\n\n";
         if (!empty($routing)) {
             $mode        = $routing['routing_mode']    ?? 'single-primary';
             $primaryId   = $routing['primary_provider_id'] ?? null;
@@ -747,8 +796,8 @@ class ExportController {
             $md .= "_No provider routing settings recorded._\n\n";
         }
 
-        // ── 13. User Notes ────────────────────────────────────────────────
-        $md .= "## 13. User Notes\n\n";
+        // ── 14. User Notes ────────────────────────────────────────────────
+        $md .= "## 14. User Notes\n\n";
         $hasNotes = false;
         if (!empty($session['decision_taken'])) {
             $md .= "**Decision taken:** " . $session['decision_taken'] . "\n\n";
@@ -767,6 +816,106 @@ class ExportController {
         }
 
         return $md;
+    }
+
+    /**
+     * Recompute jury adversarial quality report from persisted DB data.
+     * No extra table needed — derived from edges, positions, and messages.
+     */
+    private function buildJuryAdversarialReport(array $edges, array $positions, array $messages): array {
+        $totalEdges     = count($edges);
+        $challengeEdges = 0;
+        $challengesByTarget = [];
+        foreach ($edges as $e) {
+            if (($e['edge_type'] ?? '') === 'challenge') {
+                $challengeEdges++;
+                $tid = (string)($e['target_agent_id'] ?? '');
+                if ($tid !== '') {
+                    $challengesByTarget[$tid] = ($challengesByTarget[$tid] ?? 0) + 1;
+                }
+            }
+        }
+        arsort($challengesByTarget);
+        $mostChallengedAgent = !empty($challengesByTarget) ? array_key_first($challengesByTarget) : null;
+        $challengeRatio = $totalEdges > 0 ? round($challengeEdges / $totalEdges, 2) : 0.0;
+
+        // Position changes
+        $firstByAgent = [];
+        $lastByAgent  = [];
+        foreach ($positions as $pos) {
+            $agentId = $pos['agent_id'] ?? '';
+            $round   = (int)($pos['round'] ?? 0);
+            if ($agentId === '' || $agentId === 'synthesizer') continue;
+            if (!isset($firstByAgent[$agentId]) || $round < (int)($firstByAgent[$agentId]['round'] ?? PHP_INT_MAX)) {
+                $firstByAgent[$agentId] = $pos;
+            }
+            if (!isset($lastByAgent[$agentId]) || $round >= (int)($lastByAgent[$agentId]['round'] ?? 0)) {
+                $lastByAgent[$agentId] = $pos;
+            }
+        }
+        $positionChangers = [];
+        foreach ($lastByAgent as $agentId => $last) {
+            $first = $firstByAgent[$agentId] ?? null;
+            if ($first && ($first['stance'] ?? '') !== '' && ($last['stance'] ?? '') !== ''
+                && ($first['stance'] ?? '') !== ($last['stance'] ?? '')) {
+                $positionChangers[$agentId] = [
+                    'from' => $first['stance'] ?? '',
+                    'to'   => $last['stance'] ?? '',
+                ];
+            }
+        }
+
+        // Minority report present (check message phases)
+        $minorityReportPresent = false;
+        foreach ($messages as $msg) {
+            if (($msg['phase'] ?? '') === 'jury-minority-report' || ($msg['message_type'] ?? '') === 'jury-minority-report') {
+                $minorityReportPresent = true;
+                break;
+            }
+        }
+
+        // Unique agent pairs (interaction density)
+        $agentIds = array_values(array_unique(array_filter(
+            array_column($positions, 'agent_id'),
+            fn($id) => !empty($id) && $id !== 'synthesizer'
+        )));
+        $agentCount = count($agentIds);
+        $interactingPairs = $totalEdges > 0
+            ? count(array_unique(array_map(
+                fn($e) => min($e['source_agent_id'] ?? '', $e['target_agent_id'] ?? '')
+                         . '_' .
+                         max($e['source_agent_id'] ?? '', $e['target_agent_id'] ?? ''),
+                $edges
+              )))
+            : 0;
+        $maxPairs = max(1, ($agentCount * ($agentCount - 1)) / 2);
+        $densityRatio = round($interactingPairs / $maxPairs, 2);
+
+        // Quality score
+        $challengeScore = (int)round($challengeRatio * 40);
+        $positionScore  = min(20, count($positionChangers) * 7);
+        $minorityScore  = $minorityReportPresent ? 20 : 0;
+        $densityScore   = (int)round(min(1.0, $densityRatio) * 20);
+        $qualityScore   = min(100, $challengeScore + $positionScore + $minorityScore + $densityScore);
+
+        // Build warnings
+        $warnings = [];
+        if ($qualityScore < 50) $warnings[] = 'weak_debate_quality';
+        if ($challengeRatio < 0.20) $warnings[] = 'insufficient_challenge';
+        $warnings[] = 'synthesis_constrained_by_vote';
+
+        return [
+            'enabled'                 => true,
+            'debate_quality_score'    => $qualityScore,
+            'challenge_count'         => $challengeEdges,
+            'challenge_ratio'         => $challengeRatio,
+            'position_changes'        => count($positionChangers),
+            'position_changers'       => $positionChangers,
+            'minority_report_present' => $minorityReportPresent,
+            'interaction_density'     => $densityRatio,
+            'most_challenged_agent'   => $mostChallengedAgent,
+            'warnings'                => $warnings,
+        ];
     }
 
     private function uuid(): string {

@@ -48,6 +48,7 @@ class Migration {
         $this->createEvidenceTables();
         $this->createRiskProfileTable();
         $this->createLearningInsightsCacheTable();
+        $this->createJuryAdversarialReportsTable();
         $this->seedDefaultTemplates();
         $this->seedStressTestTemplate();
         $this->seedDefaultScenarioPacks();
@@ -994,5 +995,35 @@ class Migration {
         } catch (\Throwable $e) {
             // Column already exists in another form — ignore
         }
+    }
+
+    private function createJuryAdversarialReportsTable(): void
+    {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS jury_adversarial_reports (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id TEXT NOT NULL UNIQUE,
+              enabled INTEGER DEFAULT 0,
+              debate_quality_score REAL,
+              challenge_count INTEGER DEFAULT 0,
+              challenge_ratio REAL,
+              position_changes INTEGER DEFAULT 0,
+              position_changers_json TEXT,
+              minority_report_present INTEGER DEFAULT 0,
+              interaction_density REAL,
+              most_challenged_agent TEXT,
+              warnings_json TEXT,
+              compliance_retries INTEGER DEFAULT 0,
+              planned_rounds INTEGER,
+              executed_rounds INTEGER,
+              report_json TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
+        ");
+        $this->pdo->exec("
+            CREATE INDEX IF NOT EXISTS idx_jury_adversarial_session
+            ON jury_adversarial_reports(session_id)
+        ");
     }
 }

@@ -362,12 +362,59 @@ class DebateMemoryService {
 
     private function resolveEdgeType(string $content): string {
         $lc = mb_strtolower($content, 'UTF-8');
-        if (str_contains($lc, 'disagree') || str_contains($lc, 'counter') || str_contains($lc, 'objection')) {
+
+        // Defense header has highest priority (before challenge keywords)
+        if (preg_match('/##\s*response\s+to\s+challenges?\b/i', $content)) {
+            return 'defense';
+        }
+
+        // Explicit adversarial section headers take next priority
+        if (preg_match('/##\s*challenge\b/i', $content)) {
             return 'challenge';
         }
-        if (str_contains($lc, 'agree') || str_contains($lc, 'support')) {
+        if (preg_match('/##\s*minority report\b/i', $content)) {
+            return 'challenge';
+        }
+
+        // Strong challenge keywords
+        $challengeKeywords = [
+            'disagree', 'counter', 'objection', 'i challenge', 'i contest',
+            'i refute', 'this is incorrect', 'this is wrong', 'weak assumption',
+            'unsupported claim', 'unsupported assumption', 'missing evidence',
+            'invalid assumption', 'insufficient evidence', 'fails to account',
+            'overlooks the risk', 'ignores', 'does not address', 'position changed: yes',
+            'this claim fails', 'this overlooks', 'no evidence', 'unsubstantiated',
+            'je conteste', 'je réfute', 'je ne suis pas', 'hypothèse faible',
+            'preuve manquante', 'insuffisant', 'en désaccord',
+        ];
+        foreach ($challengeKeywords as $kw) {
+            if (str_contains($lc, $kw)) {
+                return 'challenge';
+            }
+        }
+
+        // Defense markers (secondary defense phrases — headers already caught above)
+        if (str_contains($lc, 'responding to the challenge')
+            || str_contains($lc, 'addressing the objection')
+            || str_contains($lc, 'to defend my position')) {
+            return 'defense';
+        }
+
+        // Alliance / explicit support
+        if (preg_match('/##\s*(alliance|alignment)\b/i', $content)) {
             return 'support';
         }
+        $supportKeywords = [
+            'agree', 'support', 'align with', 'concur', 'endorse',
+            'reinforce', 'this is correct', 'validates', 'confirms',
+            'je suis d\'accord', 'je confirme', 'je soutiens', 'en accord',
+        ];
+        foreach ($supportKeywords as $kw) {
+            if (str_contains($lc, $kw)) {
+                return 'support';
+            }
+        }
+
         return 'neutral';
     }
 

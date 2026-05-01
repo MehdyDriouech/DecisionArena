@@ -803,6 +803,56 @@ function renderCollapsiblePanel(key, title, innerHtml, state) {
 
 /* ── Main session history view ── */
 
+/* ── Jury adversarial card (session history, read-only) ── */
+
+function renderSessionJuryAdversarialCard(ja) {
+  if (!ja || !ja.enabled) return '';
+  const { t, escHtml } = getCtx();
+
+  const score = ja.debate_quality_score ?? null;
+  const scoreColor = score === null ? 'var(--text-muted)'
+    : score >= 70 ? 'var(--color-success,#10b981)'
+    : score >= 40 ? 'var(--color-warning,#f59e0b)'
+    : 'var(--color-error,#ef4444)';
+
+  const warnings = Array.isArray(ja.warnings) ? ja.warnings : [];
+  const warningLabels = {
+    weak_debate_quality:     t('jury.adversarial.warningWeak'),
+    insufficient_challenge:  t('jury.adversarial.warningParallel'),
+    parallel_answers_detected: t('jury.adversarial.warningParallel'),
+    false_consensus_risk_high: '⚠️ Faux consensus élevé',
+    no_consensus_reached:    t('jury.adversarial.warningNoConsensus'),
+    synthesis_constrained_by_vote: t('jury.adversarial.synthesisConstrained'),
+  };
+
+  const statItem = (label, value) =>
+    `<div class="stat-item"><div class="stat-label">${label}</div><div class="stat-value">${value}</div></div>`;
+
+  return `
+    <div class="card adversarial-card" style="margin-bottom:16px;border:1px solid var(--border-color);border-radius:8px;overflow:hidden;">
+      <div style="padding:12px 16px;background:var(--surface-2,#f8f9fa);border-bottom:1px solid var(--border-color);
+                  display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <span style="font-size:16px;">⚔️</span>
+        <strong>${t('jury.adversarial.qualityTitle')}</strong>
+        ${score !== null ? `<span style="margin-left:auto;font-size:22px;font-weight:700;color:${scoreColor};">${score}<span style="font-size:13px;font-weight:400;color:var(--text-muted);">/100</span></span>` : ''}
+      </div>
+      <div style="padding:12px 16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;">
+        ${statItem(t('jury.adversarial.challengeCount'),     ja.challenge_count ?? 0)}
+        ${statItem(t('jury.adversarial.mostChallenged'),     ja.most_challenged_agent ? escHtml(ja.most_challenged_agent) : '—')}
+        ${statItem(t('jury.adversarial.positionChanges'),    ja.position_changes ?? 0)}
+        ${statItem(t('jury.adversarial.minorityDetected'),   ja.minority_report_present ? '✅' : '❌')}
+        ${statItem(t('jury.adversarial.complianceRetries'),  ja.compliance_retries ?? 0)}
+        ${ja.planned_rounds  != null ? statItem(t('jury.adversarial.plannedRounds'),  ja.planned_rounds)  : ''}
+        ${ja.executed_rounds != null ? statItem(t('jury.adversarial.executedRounds'), ja.executed_rounds) : ''}
+      </div>
+      ${warnings.length > 0 ? `
+        <div style="padding:0 16px 12px;display:flex;flex-wrap:wrap;gap:6px;">
+          ${warnings.map((w) => `<span class="badge badge-warning" style="font-size:11px;">${escHtml(warningLabels[w] ?? w)}</span>`).join('')}
+        </div>` : ''}
+    </div>
+  `;
+}
+
 function renderSessionHistory() {
   const { state, escHtml, renderMarkdown, formatDate, agentIcon, agentName, t } = getCtx();
   const data = state.sessionHistory;
@@ -927,6 +977,8 @@ function renderSessionHistory() {
 
       ${renderSessionMemoryPanel(session)}
       ${renderSessionContextDocPanel(session)}
+
+      ${mode === 'jury' && data.jury_adversarial ? renderSessionJuryAdversarialCard(data.jury_adversarial) : ''}
 
       ${mode !== 'chat' ? renderDebateInsightsPanels({
         arguments: data.arguments || [],

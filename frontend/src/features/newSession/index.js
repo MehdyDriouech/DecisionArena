@@ -90,7 +90,7 @@ function renderNewSession() {
   const allModes = ['chat', 'decision-room', 'confrontation', 'quick-decision', 'stress-test', 'jury'];
   const personas = state.personas.filter((p) => {
     const modes = Array.isArray(p.available_modes) ? p.available_modes : ['chat', 'decision-room', 'confrontation'];
-    return modes.includes(ns.mode) || ns.mode === 'quick-decision' || ns.mode === 'stress-test';
+    return modes.includes(ns.mode) || ns.mode === 'quick-decision' || ns.mode === 'stress-test' || ns.mode === 'jury';
   });
 
   const agentSectionHtml = ns.mode === 'confrontation' ? `

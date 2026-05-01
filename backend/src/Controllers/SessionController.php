@@ -15,21 +15,23 @@ use Infrastructure\Persistence\ContextDocumentRepository;
 use Infrastructure\Persistence\SessionAgentProvidersRepository;
 use Infrastructure\Persistence\SnapshotRepository;
 use Infrastructure\Persistence\DebateRepository;
+use Infrastructure\Persistence\JuryAdversarialReportRepository;
 use Infrastructure\Persistence\VoteRepository;
 
 class SessionController {
-    private SessionRepository              $sessionRepo;
-    private MessageRepository              $messageRepo;
-    private SnapshotRepository             $snapshotRepo;
-    private DebateRepository               $debateRepo;
-    private DebateMemoryService            $debateMemory;
-    private VoteRepository                 $voteRepo;
-    private ContextDocumentRepository      $contextDocRepo;
-    private ConfidenceTimelineRepository   $timelineRepo;
-    private PersonaScoreRepository         $personaScoreRepo;
-    private BiasReportRepository           $biasRepo;
-    private DecisionReliabilityService     $reliabilityService;
+    private SessionRepository               $sessionRepo;
+    private MessageRepository               $messageRepo;
+    private SnapshotRepository              $snapshotRepo;
+    private DebateRepository                $debateRepo;
+    private DebateMemoryService             $debateMemory;
+    private VoteRepository                  $voteRepo;
+    private ContextDocumentRepository       $contextDocRepo;
+    private ConfidenceTimelineRepository    $timelineRepo;
+    private PersonaScoreRepository          $personaScoreRepo;
+    private BiasReportRepository            $biasRepo;
+    private DecisionReliabilityService      $reliabilityService;
     private SessionAgentProvidersRepository $agentProvidersRepo;
+    private JuryAdversarialReportRepository $adversarialRepo;
 
     public function __construct() {
         $this->sessionRepo        = new SessionRepository();
@@ -44,6 +46,7 @@ class SessionController {
         $this->biasRepo           = new BiasReportRepository();
         $this->reliabilityService = new DecisionReliabilityService();
         $this->agentProvidersRepo = new SessionAgentProvidersRepository();
+        $this->adversarialRepo    = new JuryAdversarialReportRepository();
     }
 
     public function index(Request $req): array {
@@ -79,6 +82,13 @@ class SessionController {
             $this->biasRepo->findBySession($id)
         );
         $state = ['arguments' => $arguments, 'positions' => $positions, 'edges' => $edges];
+
+        // Load persisted adversarial report for jury sessions
+        $juryAdversarial = null;
+        if (($session['mode'] ?? '') === 'jury') {
+            $juryAdversarial = $this->adversarialRepo->findBySession($id);
+        }
+
         return [
             'session' => $session,
             'messages' => $messages,
@@ -98,6 +108,7 @@ class SessionController {
             'reliability_warnings' => $reliability['reliability_warnings'],
             'decision_reliability_summary' => $reliability['decision_reliability_summary'] ?? null,
             'context_clarification' => $reliability['context_clarification'] ?? null,
+            'jury_adversarial' => $juryAdversarial,
         ];
     }
 
