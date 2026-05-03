@@ -5,6 +5,7 @@ use Domain\Agents\AgentAssembler;
 use Domain\DecisionReliability\DecisionReliabilityService;
 use Domain\DecisionReliability\DevilAdvocateTriggerPolicy;
 use Domain\DecisionReliability\ReliabilityConfig;
+use Domain\Evidence\EvidencePromptBuilder;
 use Domain\Evidence\EvidenceReportService;
 use Domain\Risk\RiskProfileAnalyzer;
 use Domain\SocialDynamics\SocialDynamicsService;
@@ -141,7 +142,9 @@ class StressTestRunner {
                         $this->debateMemory->buildPromptContext($state),
                         $assignedTarget,
                         $socialBlock,
-                        $forceStrongNext && $agentId !== 'synthesizer'
+                        $forceStrongNext && $agentId !== 'synthesizer',
+                        $sessionId,
+                        null
                     );
                     $routed  = $this->providerRouter->chat($messages, $agent, null, null, $agentProviders[$agentId] ?? null);
                     $content = $routed['content'];
@@ -270,12 +273,22 @@ class StressTestRunner {
                         fn($m) => '[' . ($m['agent_id'] ?? 'agent') . ']: ' . ($m['content'] ?? ''),
                         $last3
                     ));
+                    $daEvidence = null;
+                    try {
+                        $daEvidence = $this->evidenceService->generateAndPersist(
+                            $sessionId,
+                            $this->messageRepo->findBySession($sessionId),
+                            $contextDoc
+                        );
+                    } catch (\Throwable) {
+                    }
+                    $daUser = (new EvidencePromptBuilder())->buildDevilAdvocateUserMessage($context, $daEvidence, $contextDoc);
                     $daMessages = [
                         ['role' => 'system', 'content' => $daPrompt],
-                        ['role' => 'user', 'content' => "Debate so far: ...$context..."],
+                        ['role' => 'user', 'content' => $daUser],
                     ];
                     try {
-                        $daRouted  = $this->providerRouter->chat($daMessages, null, null, null, null);
+                        $daRouted  = $this->providerRouter->chat($daMessages, null, null, null);
                         $daContent = $daRouted['content'];
                         $daMsg     = $this->messageRepo->create([
                             'id'                       => $this->uuid(),

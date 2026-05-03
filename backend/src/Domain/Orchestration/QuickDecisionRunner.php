@@ -85,7 +85,8 @@ class QuickDecisionRunner {
                 }
 
                 $messages = $this->promptBuilder->buildQuickDecisionMessages(
-                    $agent, $objective, $roundMessages, $language, $forceDisagreement, $contextDoc, $socialBlock
+                    $agent, $objective, $roundMessages, $language, $forceDisagreement, $contextDoc, $socialBlock,
+                    $sessionId, null
                 );
 
                 $routed  = $this->providerRouter->chat($messages, $agent);
@@ -173,7 +174,8 @@ class QuickDecisionRunner {
         if ($synthAgent) {
             try {
                 $messages = $this->promptBuilder->buildQuickDecisionMessages(
-                    $synthAgent, $objective, $roundMessages, $language, $forceDisagreement, $contextDoc, null
+                    $synthAgent, $objective, $roundMessages, $language, $forceDisagreement, $contextDoc, null,
+                    $sessionId, null
                 );
                 $routed  = $this->providerRouter->chat($messages, $synthAgent);
                 $content = $routed['content'];

@@ -5,6 +5,7 @@ use Domain\Agents\AgentAssembler;
 use Domain\DecisionReliability\DecisionReliabilityService;
 use Domain\DecisionReliability\DevilAdvocateTriggerPolicy;
 use Domain\DecisionReliability\ReliabilityConfig;
+use Domain\Evidence\EvidencePromptBuilder;
 use Domain\Evidence\EvidenceReportService;
 use Domain\Risk\RiskProfileAnalyzer;
 use Domain\SocialDynamics\SocialDynamicsService;
@@ -150,12 +151,22 @@ class ConfrontationRunner {
                         fn($m) => '[' . ($m['agent_id'] ?? 'agent') . ']: ' . ($m['content'] ?? ''),
                         $last3
                     ));
+                    $daEvidence = null;
+                    try {
+                        $daEvidence = $this->evidenceService->generateAndPersist(
+                            $sessionId,
+                            $this->messageRepo->findBySession($sessionId),
+                            $contextDoc
+                        );
+                    } catch (\Throwable) {
+                    }
+                    $daUser = (new EvidencePromptBuilder())->buildDevilAdvocateUserMessage($context, $daEvidence, $contextDoc);
                     $daMessages = [
                         ['role' => 'system', 'content' => $daPrompt],
-                        ['role' => 'user', 'content' => "Debate so far: ...$context..."],
+                        ['role' => 'user', 'content' => $daUser],
                     ];
                     try {
-                        $daRouted  = $this->providerRouter->chat($daMessages, null, null, null, null);
+                        $daRouted  = $this->providerRouter->chat($daMessages, null, null, null);
                         $daContent = $daRouted['content'];
                         $daMsg     = $this->messageRepo->create([
                             'id'                       => $this->uuid(),
@@ -199,11 +210,23 @@ class ConfrontationRunner {
             // Build reliability-aware constraint block for synthesis
             $synthExtraContent = null;
             try {
+                $preSynthMessages = $this->messageRepo->findBySession($sessionId);
+                $preEvidence = null;
+                try {
+                    $preEvidence = $this->evidenceService->generateAndPersist(
+                        $sessionId,
+                        $preSynthMessages,
+                        $contextDoc
+                    );
+                } catch (\Throwable) {
+                }
                 $preEnvelope  = $this->reliabilityService->buildEnvelope(
                     $objective, $contextDoc, $automaticDecision,
                     $this->voteRepo->findVotesBySession($sessionId),
                     $state['positions'] ?? [], $state['edges'] ?? [],
-                    $decisionThreshold, null, null, null, null, null
+                    $decisionThreshold, null, null, null,
+                    $preEvidence,
+                    null
                 );
                 $preFcData        = $preEnvelope['false_consensus'] ?? [];
                 $preDebateQuality = (float)(($preFcData['diversity_score'] ?? 0.5) * 100);
@@ -213,7 +236,7 @@ class ConfrontationRunner {
                     contextQuality:    $preEnvelope['context_quality'] ?? [],
                     falseConsensus:    $preFcData,
                     debateQualityScore:$preDebateQuality,
-                    evidenceReport:    null,
+                    evidenceReport:    $preEvidence,
                     riskProfile:       null,
                     mode:              'confrontation',
                     sessionOptions:    []
@@ -222,6 +245,7 @@ class ConfrontationRunner {
                     array_merge($preEnvelope, [
                         'debate_quality_score' => $preDebateQuality,
                         'guardrails'           => $preGuardrails,
+                        'evidence_report'      => $preEvidence,
                     ])
                 ) . $this->promptBuilder->buildSynthesizerOutputFormatInstruction();
             } catch (\Throwable $e) {
@@ -309,6 +333,7 @@ class ConfrontationRunner {
                 'guardrails'             => $guardrails,
                 'decision_quality_score' => $qualityScore,
                 'risk_profile'           => $riskProfile,
+                'evidence_report'        => $evidenceReport,
             ])
         );
 
@@ -390,7 +415,9 @@ class ConfrontationRunner {
                     $interactionStyle, $language, $forceDisagreement, $contextDoc, $memoryContext,
                     $assignedTarget,
                     $socialBlock,
-                    $forceStrongNextFlag
+                    $forceStrongNextFlag,
+                    $sessionId,
+                    null
                 );
 
                 $routed        = $this->providerRouter->chat($messages, $agent, null, null, $agentProviders[$agentId] ?? null);
@@ -519,7 +546,9 @@ class ConfrontationRunner {
 
         try {
             $messages = $this->promptBuilder->buildConfrontationSynthesisMessages(
-                $agent, $objective, $allMessages, $language, $forceDisagreement, $contextDoc, $memoryContext
+                $agent, $objective, $allMessages, $language, $forceDisagreement, $contextDoc, $memoryContext,
+                $sessionId,
+                null
             );
 
             if ($extraUserContent !== null) {

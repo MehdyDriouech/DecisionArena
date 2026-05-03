@@ -13,6 +13,7 @@ use Infrastructure\Persistence\PersonaScoreRepository;
 use Infrastructure\Persistence\BiasReportRepository;
 use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\VoteRepository;
+use Domain\Orchestration\PromptBuilder;
 
 class VoteController {
     private SessionRepository $sessionRepo;
@@ -49,7 +50,9 @@ class VoteController {
         $timelineRows = $this->timelineRepo->findBySession($sessionId);
         $reliability = $this->reliabilityService->buildEnvelope(
             (string)($session['initial_prompt'] ?? ''),
-            $this->contextDocRepo->findBySession($sessionId),
+            (new PromptBuilder())->prepareContextDocumentForPrompt(
+                $this->contextDocRepo->findBySession($sessionId)
+            ),
             $decision,
             $votes,
             $this->debateRepo->findPositionsBySession($sessionId),
@@ -98,7 +101,9 @@ class VoteController {
         $timelineRows = $this->timelineRepo->findBySession($sessionId);
         $reliability = $this->reliabilityService->buildEnvelope(
             (string)($session['initial_prompt'] ?? ''),
-            $this->contextDocRepo->findBySession($sessionId),
+            (new PromptBuilder())->prepareContextDocumentForPrompt(
+                $this->contextDocRepo->findBySession($sessionId)
+            ),
             $decision,
             $votes,
             $this->debateRepo->findPositionsBySession($sessionId),

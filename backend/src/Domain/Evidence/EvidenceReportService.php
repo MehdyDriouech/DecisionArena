@@ -4,16 +4,18 @@ declare(strict_types=1);
 
 namespace Domain\Evidence;
 
+use Infrastructure\Persistence\ContextDocumentChunkRepository;
 use Infrastructure\Persistence\EvidenceRepository;
+use Infrastructure\Persistence\SessionRepository;
 
 /**
- * Orchestrates claim extraction → assessment → report persistence.
+ * Orchestrates claim extraction → assessment → report persistence (Phase 3).
  */
 class EvidenceReportService
 {
-    private EvidenceClaimExtractor  $extractor;
+    private EvidenceClaimExtractor   $extractor;
     private EvidenceAssessmentService $assessor;
-    private EvidenceRepository      $repo;
+    private EvidenceRepository       $repo;
 
     public function __construct()
     {
@@ -26,7 +28,7 @@ class EvidenceReportService
      * Full pipeline: extract → assess → persist claims & report → return report.
      *
      * @param array<int,array<string,mixed>> $messages   all session messages
-     * @param array<string,mixed>|null       $contextDoc context document row
+     * @param array<string,mixed>|null       $contextDoc context document row (may include Phase 1 prompt fields)
      * @return array<string,mixed>                       evidence_report
      */
     public function generateAndPersist(
@@ -36,13 +38,23 @@ class EvidenceReportService
     ): array {
         $contextText = $contextDoc !== null ? (string)($contextDoc['content'] ?? '') : null;
 
-        // 1. Extract raw claims
+        $objective = '';
+        try {
+            $sess = (new SessionRepository())->findById($sessionId);
+            $objective = (string)($sess['initial_prompt'] ?? '');
+        } catch (\Throwable) {
+        }
+
+        $chunkBundle = $this->buildChunkMeta($sessionId, $objective);
+        $retrievalQuery = $chunkBundle['retrieval_query'];
+        unset($chunkBundle['retrieval_query']);
+
         $claims = $this->extractor->extract($messages);
+        $claims = $this->addFallbackClaimsForChallengedMessages($claims, $messages);
+        $claims = $this->assessor->assess($claims, $contextText, $chunkBundle);
+        $claims = $this->applyUserChallengeFlags($claims, $messages);
+        $claims = $this->tuneConfidenceForUserChallenges($claims);
 
-        // 2. Assess each claim against context
-        $claims = $this->assessor->assess($claims, $contextText);
-
-        // 3. Persist claims (delete old ones first so recompute is idempotent)
         $this->repo->deleteClaimsBySession($sessionId);
         foreach ($claims as $c) {
             $this->repo->saveClaim(
@@ -54,14 +66,21 @@ class EvidenceReportService
                 (string)($c['status']     ?? 'unsupported'),
                 (float) ($c['confidence'] ?? 0.5),
                 $c['evidence_text']    ?? null,
-                $c['source_reference'] ?? null
+                $c['source_reference'] ?? null,
+                (string)($c['support_class']    ?? 'unsupported'),
+                (string)($c['importance']      ?? 'medium'),
+                isset($c['linked_chunk_ids']) && is_string($c['linked_chunk_ids']) ? $c['linked_chunk_ids'] : null,
+                (string)($c['source_layer'] ?? 'none'),
+                !empty($c['challenge_flag']) ? 1 : 0
             );
         }
 
-        // 4. Build report
-        $report = $this->buildReport($claims);
+        $report = $this->buildReport(
+            $claims,
+            $contextDoc,
+            $retrievalQuery
+        );
 
-        // 5. Persist report
         $this->repo->saveReport($sessionId, $report);
 
         return $report;
@@ -75,110 +94,419 @@ class EvidenceReportService
         return $this->generateAndPersist($sessionId, $messages, $contextDoc);
     }
 
-    /**
-     * Load a cached report; returns null if none exists.
-     */
+    /** @return array<string,mixed>|null */
     public function loadCachedReport(string $sessionId): ?array
     {
         return $this->repo->findReportBySession($sessionId);
     }
 
-    // ── Internal report builder ───────────────────────────────────────────────
+    /**
+     * @return array{chunks:list,priority_chunk_ids:list,retrieval_query:?string}
+     */
+    private function buildChunkMeta(string $sessionId, string $objective): array
+    {
+        $chunkRepo = new ContextDocumentChunkRepository();
+        $chunks    = $chunkRepo->findChunksWithOffsetsForSession($sessionId);
+        $priority  = [];
+        $ftsQ      = ContextDocumentChunkRepository::buildFtsMatchQuery($objective, null);
+        if ($ftsQ !== '' && $chunks !== []) {
+            try {
+                $raw = $chunkRepo->searchTopChunks($sessionId, $ftsQ, 8);
+                foreach (ContextDocumentChunkRepository::dedupeByChunkIndex($raw, 5) as $r) {
+                    $priority[] = (int)$r['id'];
+                }
+            } catch (\Throwable) {
+            }
+        }
+
+        return [
+            'chunks'             => $chunks,
+            'priority_chunk_ids' => $priority,
+            'retrieval_query'    => $ftsQ !== '' ? $ftsQ : null,
+        ];
+    }
 
     /**
      * @param list<array<string,mixed>> $claims assessed claims
      * @return array<string,mixed>
      */
-    public function buildReport(array $claims): array
-    {
-        $total        = count($claims);
-        $verified     = 0;
-        $plausible    = 0;
-        $unsupported  = 0;
-        $contradicted = 0;
-        $needsSource  = 0;
-        $criticals    = [];
+    public function buildReport(
+        array $claims,
+        ?array $contextDoc = null,
+        ?string $retrievalQuery = null
+    ): array {
+        $total             = count($claims);
+        $supported         = 0;
+        $unsupported       = 0;
+        $contradicted      = 0;
+        $notApplicable     = 0;
+        $verified          = 0;
+        $plausible         = 0;
+        $needsSource       = 0;
+        $applicableImportant = 0;
+        $supportedImportant  = 0;
+        $highUnsupported     = 0;
+        $highContradicted    = 0;
+        $criticals           = [];
+        $claimSummaries      = [];
+
+        $challengedCount      = 0;
+        $highChallenged       = 0;
+        $granularityFallback  = 0;
 
         foreach ($claims as $c) {
-            switch ($c['status'] ?? 'unsupported') {
-                case 'verified':       $verified++;                 break;
-                case 'plausible':      $plausible++;                break;
-                case 'unsupported':    $unsupported++;              break;
-                case 'contradicted':   $contradicted++;             break;
-                case 'needs_source':   $needsSource++;              break;
+            $sc  = (string)($c['support_class'] ?? 'unsupported');
+            $imp = (string)($c['importance'] ?? 'medium');
+            $st  = (string)($c['status'] ?? 'unsupported');
+            $chF = !empty($c['challenge_flag']);
+            if ($chF) {
+                $challengedCount++;
+                if ($imp === 'high') {
+                    $highChallenged++;
+                }
+                if (($c['claim_granularity'] ?? '') === 'message_fallback') {
+                    $granularityFallback++;
+                }
             }
-            // A claim is critical if it is contradicted, or is factual and unsupported
-            if (($c['status'] ?? '') === 'contradicted'
-                || (($c['status'] ?? '') === 'needs_source' && ($c['claim_type'] ?? '') === 'factual')
+
+            match ($sc) {
+                'supported'       => $supported++,
+                'unsupported'     => $unsupported++,
+                'contradicted'    => $contradicted++,
+                'not_applicable'  => $notApplicable++,
+                default           => $unsupported++,
+            };
+
+            if ($st === 'verified') {
+                $verified++;
+            }
+            if ($st === 'plausible') {
+                $plausible++;
+            }
+            if ($st === 'needs_source') {
+                $needsSource++;
+            }
+
+            if ($sc !== 'not_applicable' && in_array($imp, ['medium', 'high'], true)) {
+                $applicableImportant++;
+                if ($sc === 'supported') {
+                    $supportedImportant++;
+                }
+            }
+            if ($imp === 'high' && $sc === 'unsupported') {
+                $highUnsupported++;
+            }
+            if ($imp === 'high' && $sc === 'contradicted') {
+                $highContradicted++;
+            }
+
+            if (($sc === 'contradicted' || ($sc === 'unsupported' && $imp === 'high'))
+                && count($criticals) < 8
             ) {
                 $criticals[] = mb_substr((string)($c['claim_text'] ?? ''), 0, 160, 'UTF-8');
             }
+
+            if (count($claimSummaries) < 50) {
+                $claimSummaries[] = [
+                    'claim_text'         => mb_substr((string)($c['claim_text'] ?? ''), 0, 220, 'UTF-8'),
+                    'support_class'      => $sc,
+                    'importance'         => $imp,
+                    'linked_chunk_ids'   => $c['linked_chunk_ids'] ?? null,
+                    'source_layer'       => (string)($c['source_layer'] ?? 'none'),
+                    'challenge_flag'     => $chF,
+                    'confidence_weight'  => $chF ? 0.72 : 1.0,
+                    'claim_granularity'  => (string)($c['claim_granularity'] ?? 'extracted'),
+                ];
+            }
         }
 
-        // evidence_score: ratio of strong vs weak evidence (0–1)
-        $evidenceScore = $total > 0
-            ? round(($verified * 1.0 + $plausible * 0.7) / ($total * 1.0), 3)
-            : 1.0; // No claims extracted → no evidence issues
+        $evidenceDensity = ($applicableImportant === 0)
+            ? 1.0
+            : round($supportedImportant / $applicableImportant, 4);
 
-        // decision_impact: how risky is the evidence gap?
-        $impact = $this->computeImpact($total, $unsupported, $contradicted, $needsSource);
+        $unsupportedClaimsCount = $unsupported + $needsSource;
 
-        // recommendation text
-        $recommendation = $this->buildRecommendation(
-            $evidenceScore, $contradicted, $unsupported + $needsSource, $impact
+        $evidenceBadge = $this->computeEvidenceBadge(
+            $evidenceDensity,
+            $contradicted,
+            $highContradicted,
+            $highUnsupported
         );
 
+        $score100 = $this->computeEvidenceScore100(
+            $evidenceDensity,
+            $contradicted,
+            $highUnsupported,
+            $highContradicted,
+            $total
+        );
+
+        $impact = $this->computeImpactPhase3(
+            $total,
+            $unsupportedClaimsCount,
+            $contradicted,
+            $needsSource,
+            $evidenceDensity,
+            $highUnsupported,
+            $highContradicted
+        );
+
+        $recommendation = $this->buildRecommendationPhase3(
+            $evidenceDensity,
+            $contradicted,
+            $unsupportedClaimsCount,
+            $impact,
+            $highContradicted,
+            $highUnsupported
+        );
+
+        $ctxHash = $contextDoc['context_hash'] ?? null;
+        $ctxTrunc = !empty($contextDoc['context_truncated']);
+
+        $granularityNote = $granularityFallback > 0
+            ? 'Some user challenges used whole-message claim granularity because no atomic claims were extracted; boundaries are approximate.'
+            : null;
+
         return [
-            'evidence_score'           => $evidenceScore,
-            'total_claims'             => $total,
-            'verified_count'           => $verified,
-            'plausible_count'          => $plausible,
-            'unsupported_claims_count' => $unsupported + $needsSource,
-            'contradicted_claims_count'=> $contradicted,
-            'needs_source_count'       => $needsSource,
-            'critical_unknowns'        => array_slice($criticals, 0, 5),
-            'decision_impact'          => $impact,
-            'recommendation'           => $recommendation,
+            'evidence_score'                  => round($score100 / 100, 4),
+            'score'                           => $score100,
+            'evidence_density'                => $evidenceDensity,
+            'evidence_badge'                  => $evidenceBadge,
+            'total_claims'                    => $total,
+            'supported_claims_count'          => $supported,
+            'verified_count'                  => $verified,
+            'plausible_count'                 => $plausible,
+            'unsupported_claims_count'        => $unsupportedClaimsCount,
+            'contradicted_claims_count'       => $contradicted,
+            'not_applicable_claims_count'     => $notApplicable,
+            'needs_source_count'              => $needsSource,
+            'high_importance_unsupported_count'=> $highUnsupported,
+            'high_importance_contradicted_count'=> $highContradicted,
+            'challenged_claims_count'         => $challengedCount,
+            'high_importance_challenged_count'=> $highChallenged,
+            'user_challenge_claim_granularity_note' => $granularityNote,
+            'uncertainty_penalty_units'       => round(min(20, $challengedCount * 2.0 + $highChallenged * 3.5), 2),
+            'applicable_important_claims'     => $applicableImportant,
+            'supported_important_claims'      => $supportedImportant,
+            'critical_unknowns'               => array_slice($criticals, 0, 5),
+            'decision_impact'                 => $impact,
+            'recommendation'                  => $recommendation,
+            'claims'                          => $claimSummaries,
+            'context_hash'                    => $ctxHash,
+            'context_truncated'               => $ctxTrunc,
+            'retrieval_query'                 => $retrievalQuery,
         ];
     }
 
-    private function computeImpact(int $total, int $unsupported, int $contradicted, int $needsSource): string
+    /**
+     * @param list<array<string,mixed>> $claims
+     * @param array<int,array<string,mixed>> $messages
+     * @return list<array<string,mixed>>
+     */
+    private function addFallbackClaimsForChallengedMessages(array $claims, array $messages): array
     {
+        $claimedMsgIds = [];
+        foreach ($claims as $c) {
+            $mid = $c['message_id'] ?? null;
+            if ($mid !== null && $mid !== '') {
+                $claimedMsgIds[(string)$mid] = true;
+            }
+        }
+        $out   = $claims;
+        $limit = 60;
+        foreach ($messages as $msg) {
+            if (($msg['role'] ?? '') !== 'assistant') {
+                continue;
+            }
+            $meta = $this->decodeMessageMetaRow($msg);
+            if (($meta['challenge_status'] ?? '') !== 'challenged') {
+                continue;
+            }
+            $mid = (string)($msg['id'] ?? '');
+            if ($mid === '' || isset($claimedMsgIds[$mid])) {
+                continue;
+            }
+            $content = trim((string)($msg['content'] ?? ''));
+            if ($content === '') {
+                continue;
+            }
+            $snippet = mb_substr($content, 0, 400, 'UTF-8');
+            $out[] = [
+                'claim_text'       => '[Whole-message proxy — user challenged; no atomic claims extracted from this reply] ' . $snippet,
+                'claim_type'       => 'strategic_assumption',
+                'agent_id'         => $msg['agent_id'] ?? null,
+                'message_id'       => $mid,
+                'status'           => 'unsupported',
+                'confidence'       => 0.5,
+                'evidence_text'    => null,
+                'source_reference' => null,
+                'claim_granularity'=> 'message_fallback',
+            ];
+            $claimedMsgIds[$mid] = true;
+            if (count($out) >= $limit) {
+                break;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * @param list<array<string,mixed>> $claims
+     * @param array<int,array<string,mixed>> $messages
+     * @return list<array<string,mixed>>
+     */
+    private function applyUserChallengeFlags(array $claims, array $messages): array
+    {
+        $challengedMsgs = [];
+        foreach ($messages as $msg) {
+            $mid = (string)($msg['id'] ?? '');
+            if ($mid === '') {
+                continue;
+            }
+            $meta = $this->decodeMessageMetaRow($msg);
+            if (($meta['challenge_status'] ?? '') === 'challenged') {
+                $challengedMsgs[$mid] = true;
+            }
+        }
+        foreach ($claims as &$c) {
+            $mid = (string)($c['message_id'] ?? '');
+            if (($c['claim_granularity'] ?? '') === 'message_fallback') {
+                $c['challenge_flag'] = true;
+            } elseif ($mid !== '' && isset($challengedMsgs[$mid])) {
+                $c['challenge_flag'] = true;
+            } else {
+                $c['challenge_flag'] = false;
+            }
+        }
+        unset($c);
+        return $claims;
+    }
+
+    /**
+     * User challenge contests evidence without changing support_class; down-weight confidence only.
+     *
+     * @param list<array<string,mixed>> $claims
+     * @return list<array<string,mixed>>
+     */
+    private function tuneConfidenceForUserChallenges(array $claims): array
+    {
+        foreach ($claims as &$c) {
+            if (empty($c['challenge_flag'])) {
+                continue;
+            }
+            $base = (float)($c['confidence'] ?? 0.5);
+            $c['confidence'] = round(max(0.08, $base * 0.72), 4);
+        }
+        unset($c);
+        return $claims;
+    }
+
+    /** @param array<string,mixed> $msg */
+    private function decodeMessageMetaRow(array $msg): array
+    {
+        $raw = $msg['meta_json'] ?? null;
+        if ($raw === null || $raw === '') {
+            return [];
+        }
+        if (is_array($raw)) {
+            return $raw;
+        }
+        $d = json_decode((string)$raw, true);
+        return is_array($d) ? $d : [];
+    }
+
+    private function computeEvidenceBadge(
+        float $density,
+        int $contradicted,
+        int $highContradicted,
+        int $highUnsupported
+    ): string {
+        if ($contradicted > 0 || $highContradicted > 0) {
+            return 'Risky';
+        }
+        if ($highUnsupported > 0 || $density < 0.4) {
+            return 'Weak';
+        }
+        if ($density < 0.7) {
+            return 'Medium';
+        }
+        return 'Strong';
+    }
+
+    private function computeEvidenceScore100(
+        float $density,
+        int $contradicted,
+        int $highUnsupported,
+        int $highContradicted,
+        int $total
+    ): int {
+        if ($total === 0) {
+            return 100;
+        }
+        $raw = $density * 100
+            - min(35, $contradicted * 14)
+            - min(25, $highUnsupported * 12)
+            - min(30, $highContradicted * 18);
+        return (int) max(0, min(100, round($raw)));
+    }
+
+    private function computeImpactPhase3(
+        int $total,
+        int $unsupported,
+        int $contradicted,
+        int $needsSource,
+        float $density,
+        int $highUnsupported,
+        int $highContradicted
+    ): string {
         if ($total === 0) {
             return 'low';
         }
-        $badRatio = ($unsupported + $contradicted + $needsSource) / $total;
-
-        if ($contradicted > 0 || $badRatio >= 0.7) {
+        if ($highContradicted > 0 || $contradicted >= 2) {
             return 'high';
         }
-        if ($badRatio >= 0.4) {
+        if ($contradicted > 0 || $highUnsupported >= 2 || $density < 0.35) {
+            return 'high';
+        }
+        $badRatio = ($unsupported + $contradicted + $needsSource) / $total;
+        if ($badRatio >= 0.55 || $density < 0.5) {
+            return 'medium';
+        }
+        if ($badRatio >= 0.35) {
             return 'medium';
         }
         return 'low';
     }
 
-    private function buildRecommendation(
-        float $score,
+    private function buildRecommendationPhase3(
+        float $density,
         int $contradicted,
         int $unsupported,
-        string $impact
+        string $impact,
+        int $highContradicted,
+        int $highUnsupported
     ): string {
+        if ($highContradicted > 0) {
+            return "High-importance claim(s) contradict the shared context ({$highContradicted}); reconcile before committing.";
+        }
         if ($contradicted > 0) {
-            return "Review the {$contradicted} contradicted claim(s) before finalising this decision. "
-                . 'These claims conflict with information in the context document.';
+            return "Review the {$contradicted} contradicted claim(s): they conflict with passages in the context document.";
+        }
+        if ($highUnsupported > 0) {
+            return "Some high-importance claims ({$highUnsupported}) are not supported by the context document — add sourcing or narrow the decision.";
+        }
+        if ($density < 0.35) {
+            return 'Evidence density is low for important claims; enrich the context or downgrade confidence.';
         }
         if ($unsupported >= 5) {
-            return "High number of unsupported claims ({$unsupported}). "
-                . 'Enrich the context document with market data, cost estimates and technical specs.';
+            return "Many claims lack support ({$unsupported}). Enrich the context with concrete facts.";
         }
         if ($impact === 'medium') {
-            return "Several claims lack supporting evidence. "
-                . 'Consider adding more context before committing to this decision.';
+            return 'Several important claims are weakly evidenced — verify before execution.';
         }
-        if ($score >= 0.8) {
-            return 'Evidence coverage is good. Proceed with standard review.';
+        if ($density >= 0.75) {
+            return 'Important claims are largely supported by context. Proceed with standard review.';
         }
-        return 'Evidence quality is acceptable. Verify key assumptions before execution.';
+        return 'Evidence is acceptable; verify key assumptions before execution.';
     }
 }

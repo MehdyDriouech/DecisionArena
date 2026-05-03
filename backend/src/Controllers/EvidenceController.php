@@ -11,6 +11,7 @@ use Infrastructure\Persistence\ContextDocumentRepository;
 use Infrastructure\Persistence\EvidenceRepository;
 use Infrastructure\Persistence\MessageRepository;
 use Infrastructure\Persistence\SessionRepository;
+use Domain\Orchestration\PromptBuilder;
 
 class EvidenceController
 {
@@ -42,7 +43,7 @@ class EvidenceController
         // If no cached report, try to generate on-the-fly
         if ($cached === null) {
             $messages   = $this->messageRepo->findBySession($id);
-            $contextDoc = $this->docRepo->findBySession($id);
+            $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt($this->docRepo->findBySession($id));
             try {
                 $cached = $this->evidenceService->generateAndPersist($id, $messages, $contextDoc);
             } catch (\Throwable $e) {
@@ -75,6 +76,10 @@ class EvidenceController
                     'confidence'       => isset($row['confidence']) ? (float)$row['confidence'] : 0.5,
                     'evidence_text'    => $row['evidence_text'] ?? null,
                     'source_reference' => $row['source_reference'] ?? null,
+                    'support_class'    => (string)($row['support_class'] ?? 'not_applicable'),
+                    'importance'       => (string)($row['importance'] ?? 'medium'),
+                    'linked_chunk_ids' => $row['linked_chunk_ids'] ?? null,
+                    'source_layer'     => (string)($row['source_layer'] ?? 'none'),
                 ];
             }, $claims),
         ];
@@ -89,7 +94,7 @@ class EvidenceController
         }
 
         $messages   = $this->messageRepo->findBySession($id);
-        $contextDoc = $this->docRepo->findBySession($id);
+        $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt($this->docRepo->findBySession($id));
 
         try {
             $report = $this->evidenceService->recompute($id, $messages, $contextDoc);

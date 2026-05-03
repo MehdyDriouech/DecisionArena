@@ -8,6 +8,7 @@ use Infrastructure\Persistence\MessageRepository;
 use Infrastructure\Persistence\ContextDocumentRepository;
 use Domain\Orchestration\ChatRunner;
 use Domain\Orchestration\ReactiveChatRunner;
+use Domain\Orchestration\PromptBuilder;
 
 class ChatController {
     private SessionRepository $sessionRepo;
@@ -38,6 +39,20 @@ class ChatController {
             return Response::error('Session not found', 404);
         }
 
+        $userMeta = null;
+        if ($contextMode === 'challenge') {
+            $co  = trim((string)($data['challenge_origin'] ?? ''));
+            $cta = trim((string)($data['challenge_target_agent'] ?? ''));
+            $cl  = (($data['challenge_level'] ?? 'soft') === 'firm') ? 'firm' : 'soft';
+            $userMetaArr = array_filter([
+                'context_mode'            => 'challenge',
+                'challenge_origin'        => $co !== '' ? $co : null,
+                'challenge_target_agent'  => $cta !== '' ? $cta : null,
+                'challenge_level'         => $cl,
+            ], fn($v) => $v !== null && $v !== '');
+            $userMeta = $userMetaArr !== [] ? json_encode($userMetaArr, JSON_UNESCAPED_UNICODE) : null;
+        }
+
         $userMsg = $this->messageRepo->create([
             'id'          => $this->uuid(),
             'session_id'  => $sessionId,
@@ -48,6 +63,7 @@ class ChatController {
             'round'       => null,
             'content'     => $message,
             'created_at'  => date('c'),
+            'meta_json'   => $userMeta,
         ]);
 
         if (empty($selectedAgents)) {
@@ -57,11 +73,17 @@ class ChatController {
         $language = $session['language'] ?? 'en';
 
         $sessionContext = $session['initial_prompt'] ?? '';
-        if ($contextMode !== 'chat') {
+        if ($contextMode === 'challenge') {
+            $sessionContext = trim($sessionContext . "\n\n[Challenge mode — single-agent revision] The user contests one specific prior assistant message."
+                . " Respond alone: check justification vs the context, correct if needed, flag weak assumptions. Be concise."
+                . " Do not simulate other agents or broaden into a full multi-agent debate.");
+        } elseif ($contextMode !== 'chat') {
             $sessionContext = trim($sessionContext . "\n\n[Mode: {$contextMode}] This is a follow-up question inside an active session. Answer as a direct follow-up to the prior analysis — do not restart the whole analysis.");
         }
 
-        $contextDoc    = (new ContextDocumentRepository())->findBySession($sessionId);
+        $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt(
+            (new ContextDocumentRepository())->findBySession($sessionId)
+        );
 
         $agentMessages = $this->runner->run(
             $sessionId,
@@ -71,6 +93,30 @@ class ChatController {
             $language,
             $contextDoc
         );
+
+        if ($contextMode === 'challenge') {
+            $origin = trim((string)($data['challenge_origin'] ?? ''));
+            if ($origin !== '') {
+                $this->messageRepo->patchMetaJson($origin, [
+                    'challenge_status' => 'challenged',
+                ], (string)$userMsg['id']);
+            }
+            foreach ($agentMessages as $am) {
+                $aid = (string)($am['id'] ?? '');
+                if ($aid === '') {
+                    continue;
+                }
+                $patch = [
+                    'context_mode'              => 'challenge',
+                    'challenge_response'        => true,
+                    'challenge_user_message_id'  => (string)$userMsg['id'],
+                ];
+                if ($origin !== '') {
+                    $patch['challenge_origin_message_id'] = $origin;
+                }
+                $this->messageRepo->patchMetaJson($aid, $patch);
+            }
+        }
 
         return [
             'user_message'   => $userMsg,
@@ -132,12 +178,17 @@ class ChatController {
             'created_at'  => date('c'),
         ]);
 
+        $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt(
+            (new ContextDocumentRepository())->findBySession($sessionId)
+        );
+
         $result = $this->reactiveRunner->run(
             $sessionId,
             $question,
             $primaryAgentId,
             $reactorIds,
-            $config
+            $config,
+            $contextDoc
         );
 
         return [

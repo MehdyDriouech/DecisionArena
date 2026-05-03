@@ -9,6 +9,7 @@
 
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
 import { renderDecisionBrief } from '../../ui/components.js';
+import { formatHitlMessageBadges, formatRerunWithChallengeButton } from '../../utils/messageLookup.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -24,19 +25,27 @@ function getCtx() {
 /* ===== SHARED: message renderers ===== */
 
 function renderMessage(msg) {
-  const { escHtml, renderMarkdown, formatDate, agentIcon, agentName, agentTitleText, t } = getCtx();
+  const { state, escHtml, renderMarkdown, formatDate, agentIcon, agentName, agentTitleText, t } = getCtx();
 
   if (msg.role === 'user') {
+    const hitl = formatHitlMessageBadges(msg, t, escHtml);
+    const rerun = formatRerunWithChallengeButton(state.currentSession?.id, msg, t, escHtml);
     return `
       <div class="message-user">
+        ${hitl}
         ${escHtml(msg.content)}
         <div class="message-user-meta">${formatDate(msg.created_at)}</div>
+        ${rerun}
       </div>
     `;
   }
   const icon     = agentIcon(msg.agent_id);
   const name     = agentName(msg.agent_id);
   const titleTxt = agentTitleText(msg.agent_id);
+  const chBtn = window.DecisionArena?.utils?.canChallengeMessage?.(msg)
+    ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;font-size:11px;" data-action="challenge-claim" data-message-id="${escHtml(String(msg.id))}">${escHtml(t('hitl.challenge'))}</button>`
+    : '';
+  const hitlAgent = formatHitlMessageBadges(msg, t, escHtml);
   return `
     <div class="message-agent">
       <div class="message-agent-header">
@@ -46,12 +55,14 @@ function renderMessage(msg) {
           ${titleTxt ? `<div style="font-size:11px;color:var(--text-muted);">${escHtml(titleTxt)}</div>` : ''}
         </div>
       </div>
+      ${hitlAgent}
       <div class="message-agent-body md-content">${renderMarkdown(msg.content)}</div>
       <div class="message-agent-footer">
         ${msg.provider_id ? `<span>${t('label.provider')}: ${escHtml(msg.provider_id)}</span>` : ''}
         ${msg.model ? `<span>${t('label.model')}: ${escHtml(msg.model)}</span>` : ''}
         <span style="margin-left:auto;">${formatDate(msg.created_at)}</span>
       </div>
+      ${chBtn}
     </div>
   `;
 }
@@ -68,6 +79,10 @@ function renderDRAgentMessage(msg, isSynth = false, messageKey = '') {
   const contentHtml = isLong && collapsed
     ? `<div class="agent-content md-content"><p>${preview}…</p></div>`
     : `<div class="agent-content md-content">${renderMarkdown(msg.content || '')}</div>`;
+  const chBtn = window.DecisionArena?.utils?.canChallengeMessage?.(msg)
+    ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;font-size:11px;" data-action="challenge-claim" data-message-id="${escHtml(String(msg.id))}">${escHtml(t('hitl.challenge'))}</button>`
+    : '';
+  const hitl = formatHitlMessageBadges(msg, t, escHtml);
   return `
     <div class="agent-card ${isSynth ? 'synthesis-card' : ''}">
       <div class="agent-card-header">
@@ -77,8 +92,10 @@ function renderDRAgentMessage(msg, isSynth = false, messageKey = '') {
         </div>
         ${isSynth ? `<span class="badge badge-success" style="font-size:11px;">✨ ${t('dr.synthesis')}</span>` : ''}
       </div>
+      ${hitl}
       ${contentHtml}
       ${isLong ? `<button class="btn btn-secondary btn-sm" data-action="toggle-agent-message" data-message-id="${escHtml(messageId)}">${collapsed ? 'Voir' : 'Masquer'}</button>` : ''}
+      ${chBtn}
     </div>
   `;
 }
@@ -162,9 +179,11 @@ function renderReactiveRoleBadge(role, t) {
 }
 
 function renderReactiveMessage(msg) {
-  const { escHtml, renderMarkdown, formatDate, agentIcon, agentName, t } = getCtx();
+  const { state, escHtml, renderMarkdown, formatDate, agentIcon, agentName, t } = getCtx();
   if (msg.role === 'user') {
-    return `<div class="message-user">${escHtml(msg.content)}<div class="message-user-meta">${formatDate(msg.created_at)}</div></div>`;
+    const hitl = formatHitlMessageBadges(msg, t, escHtml);
+    const rerun = formatRerunWithChallengeButton(state.currentSession?.id, msg, t, escHtml);
+    return `<div class="message-user">${hitl}${escHtml(msg.content)}<div class="message-user-meta">${formatDate(msg.created_at)}</div>${rerun}</div>`;
   }
   const icon  = agentIcon(msg.agent_id);
   const name  = agentName(msg.agent_id);
@@ -173,10 +192,14 @@ function renderReactiveMessage(msg) {
   const providerLabel = msg.provider_name || msg.provider_id || null;
   const modelLabel    = msg.model || null;
   const hasFallback   = msg.provider_fallback_used == 1;
-  const provBadge = (providerLabel || modelLabel)
+    const provBadge = (providerLabel || modelLabel)
     ? `<span class="message-llm-meta provider-badge" style="font-size:10px;">${modelLabel ? escHtml(modelLabel) : ''}${providerLabel ? ` via ${escHtml(providerLabel)}` : ''}${hasFallback ? ` <span class="message-llm-fallback">⚠ ${t('message.llm.fallback')}</span>` : ''}</span>`
     : '';
-  return `
+    const chBtn = window.DecisionArena?.utils?.canChallengeMessage?.(msg)
+      ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;font-size:11px;" data-action="challenge-claim" data-message-id="${escHtml(String(msg.id))}">${escHtml(t('hitl.challenge'))}</button>`
+      : '';
+    const hitl = formatHitlMessageBadges(msg, t, escHtml);
+    return `
     <div class="message-agent" style="border-left:3px solid ${role === 'reactor' ? 'var(--warning,#f59e0b)' : role === 'synthesizer' ? 'var(--success,#10b981)' : 'var(--accent)'};">
       <div class="message-agent-header">
         <span style="font-size:20px;">${icon}</span>
@@ -185,11 +208,13 @@ function renderReactiveMessage(msg) {
         </div>
         ${roleBadge}
       </div>
+      ${hitl}
       <div class="message-agent-body md-content">${renderMarkdown(msg.content)}</div>
       <div class="message-agent-footer">
         ${provBadge}
         <span style="margin-left:auto;">${formatDate(msg.created_at)}</span>
       </div>
+      ${chBtn}
     </div>`;
 }
 

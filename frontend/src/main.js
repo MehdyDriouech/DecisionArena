@@ -4,12 +4,14 @@ import * as htmlUtils from './utils/html.js';
 import * as markdownUtils from './utils/markdown.js';
 import * as dateUtils from './utils/date.js';
 import * as agentsUtils from './utils/agents.js';
+import * as messageLookup from './utils/messageLookup.js';
 import { renderSidebarShell } from './core/shell.js';
 
 /* ── Core: renderer + router + events ── */
 import { render, renderSidebar, renderMain, applyComplexityVisibility } from './core/renderer.js';
 import { navigate, scrollMainToTop, scrollMessagesToBottom, scrollFollowUpToBottom } from './core/router.js';
 import { bindGlobalEventDelegation } from './core/events.js';
+import { registerHumanLoopHandlers } from './core/humanLoopHandlers.js';
 
 /* ── Feature view modules ── */
 import { renderDashboard, renderSessions, renderSessionCard } from './features/sessions/view.js';
@@ -60,6 +62,7 @@ function bootstrapModuleArchitecture() {
       ...markdownUtils,
       ...dateUtils,
       ...agentsUtils,
+      ...messageLookup,
     },
     router: {
       navigate,
@@ -127,6 +130,7 @@ function bootstrapModuleArchitecture() {
   registerJuryHandlers();
   registerArgumentHeatmapHandlers();
   registerDebateReplayHandlers();
+  registerHumanLoopHandlers();
 
   /* ── Wire global event delegation (replaces legacy-app.js listeners) ── */
   bindGlobalEventDelegation();

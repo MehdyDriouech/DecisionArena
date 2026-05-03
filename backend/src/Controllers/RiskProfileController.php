@@ -11,6 +11,7 @@ use Infrastructure\Persistence\ContextDocumentRepository;
 use Infrastructure\Persistence\MessageRepository;
 use Infrastructure\Persistence\RiskProfileRepository;
 use Infrastructure\Persistence\SessionRepository;
+use Domain\Orchestration\PromptBuilder;
 
 class RiskProfileController
 {
@@ -42,7 +43,7 @@ class RiskProfileController
 
         if ($cached === null) {
             $messages   = $this->messageRepo->findBySession($id);
-            $contextDoc = $this->docRepo->findBySession($id);
+            $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt($this->docRepo->findBySession($id));
             $threshold  = (float)($session['decision_threshold'] ?? 0.55);
             $mode       = (string)($session['mode'] ?? 'decision-room');
             $objective  = (string)($session['initial_prompt'] ?? '');
@@ -69,7 +70,7 @@ class RiskProfileController
         }
 
         $messages   = $this->messageRepo->findBySession($id);
-        $contextDoc = $this->docRepo->findBySession($id);
+        $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt($this->docRepo->findBySession($id));
         $threshold  = (float)($session['decision_threshold'] ?? 0.55);
         $mode       = (string)($session['mode'] ?? 'decision-room');
         $objective  = (string)($session['initial_prompt'] ?? '');

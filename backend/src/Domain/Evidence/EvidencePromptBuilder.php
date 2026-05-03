@@ -76,17 +76,33 @@ SYS;
             return '';
         }
 
-        $score    = round((float)($report['evidence_score'] ?? 1.0) * 100, 1);
+        $score    = isset($report['score']) ? round((float)$report['score'], 1) : round((float)($report['evidence_score'] ?? 1.0) * 100, 1);
+        $density  = isset($report['evidence_density']) ? round((float)$report['evidence_density'] * 100, 1) : null;
+        $badge    = (string)($report['evidence_badge'] ?? '');
         $unsup    = (int)($report['unsupported_claims_count'] ?? 0);
         $contra   = (int)($report['contradicted_claims_count'] ?? 0);
+        $hiu      = (int)($report['high_importance_unsupported_count'] ?? 0);
+        $hic      = (int)($report['high_importance_contradicted_count'] ?? 0);
         $impact   = (string)($report['decision_impact'] ?? 'low');
         $rec      = (string)($report['recommendation'] ?? '');
         $unknowns = (array)($report['critical_unknowns'] ?? []);
 
         $block  = "## Evidence Assessment\n\n";
-        $block .= "- Evidence coverage score: {$score}%\n";
+        if ($badge !== '') {
+            $block .= "- Evidence strength: **{$badge}**\n";
+        }
+        $block .= "- Evidence score (0–100): {$score}\n";
+        if ($density !== null) {
+            $block .= "- Important-claim support density: {$density}%\n";
+        }
         $block .= "- Unsupported claims: {$unsup}\n";
         $block .= "- Contradicted claims: {$contra}\n";
+        if ($hiu > 0) {
+            $block .= "- High-importance unsupported: {$hiu}\n";
+        }
+        if ($hic > 0) {
+            $block .= "- High-importance contradicted: {$hic}\n";
+        }
         $block .= "- Decision impact of evidence gaps: {$impact}\n";
         if (!empty($unknowns)) {
             $block .= "- Critical unknowns:\n";
@@ -100,5 +116,81 @@ SYS;
         $block .= "\n";
 
         return $block;
+    }
+
+    /**
+     * Directive for Devil's Advocate — evidence-aware challenges (no fabricated sources).
+     */
+    public function buildDevilAdvocateUserMessage(string $debateBody, ?array $evidenceReport, ?array $contextDoc): string
+    {
+        $parts = [];
+
+        if ($evidenceReport !== null) {
+            $parts[] = $this->buildDevilAdvocateEvidenceDirective($evidenceReport, $contextDoc);
+        }
+
+        $parts[] = "## Debate excerpt\n\n" . trim($debateBody);
+
+        return implode("\n\n", array_filter($parts));
+    }
+
+    /**
+     * @param array<string,mixed> $evidenceReport
+     * @param ?array<string,mixed> $contextDoc
+     */
+    public function buildDevilAdvocateEvidenceDirective(?array $evidenceReport, ?array $contextDoc): string
+    {
+        if ($evidenceReport === null || empty($evidenceReport)) {
+            return "## Evidence signals\n\n(none computed yet — challenge unstated assumptions with falsifiable questions.)";
+        }
+
+        $density = round((float)($evidenceReport['evidence_density'] ?? 0) * 100, 1);
+        $hic     = (int)($evidenceReport['high_importance_contradicted_count'] ?? 0);
+        $hiu     = (int)($evidenceReport['high_importance_unsupported_count'] ?? 0);
+        $contra  = (int)($evidenceReport['contradicted_claims_count'] ?? 0);
+        $chClaims = (int)($evidenceReport['challenged_claims_count'] ?? 0);
+        $badge   = (string)($evidenceReport['evidence_badge'] ?? '');
+        $claims  = (array)($evidenceReport['claims'] ?? []);
+        $trunc   = !empty($contextDoc['context_truncated'] ?? false);
+
+        $targets = [];
+        foreach ($claims as $c) {
+            if (!empty($c['challenge_flag']) && count($targets) < 6) {
+                $lab = (string)($c['support_class'] ?? '');
+                $targets[] = '- User-challenged (' . $lab . '): ' . ($c['claim_text'] ?? '');
+            }
+        }
+        foreach ($claims as $c) {
+            if (($c['support_class'] ?? '') === 'contradicted' && ($c['importance'] ?? '') === 'high') {
+                $targets[] = '- Contradicted (high): ' . ($c['claim_text'] ?? '');
+            }
+        }
+        foreach ($claims as $c) {
+            if (count($targets) >= 4) {
+                break;
+            }
+            if (($c['support_class'] ?? '') === 'unsupported' && ($c['importance'] ?? '') === 'high') {
+                $targets[] = '- Unsupported (high): ' . ($c['claim_text'] ?? '');
+            }
+        }
+
+        $out = "## Evidence signals (machine-assessed)\n\n";
+        $out .= "- Strength: {$badge}\n";
+        $out .= "- Important-claim density: {$density}%\n";
+        $out .= "- Contradicted: {$contra} (high-importance flagged: {$hic})\n";
+        $out .= "- High-importance unsupported: {$hiu}\n";
+        $out .= "- User-challenged claims (disagreement, not truth reversal): {$chClaims}\n";
+        if ($trunc) {
+            $out .= "- Context was truncated for prompts; treat agent citations as unverified unless they quote the context doc.\n";
+        }
+        if ($density < 40) {
+            $out .= "- Low evidence density: prioritize asking which context passage supports each key claim.\n";
+        }
+        if ($targets !== []) {
+            $out .= "\n**Prioritize challenging:**\n" . implode("\n", array_slice($targets, 0, 4)) . "\n";
+        }
+        $out .= "\nRules: ask falsifiable questions; never invent external facts; demand quotes from the Shared Context Document when agents assert specifics.\n";
+
+        return $out;
     }
 }

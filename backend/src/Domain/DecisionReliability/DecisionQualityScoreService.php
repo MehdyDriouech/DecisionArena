@@ -23,13 +23,25 @@ class DecisionQualityScoreService
         $debPts = round($debateQualityScore / 100 * 25, 1);
         $explanation[] = "Debate quality: {$debPts}/25 (score: {$debateQualityScore})";
 
-        // Evidence: 0–20 pts
-        $evScore = $evidenceReport !== null ? (float)($evidenceReport['score'] ?? 0) : 0.0;
-        $evPts   = round($evScore / 100 * 20, 1);
-        if ($evidenceReport === null) {
-            $explanation[] = "Evidence: 0/20 (no evidence layer)";
+        // Evidence: 0–20 pts (Phase 3: density + high-importance gaps, not citation count)
+        $evPts   = 0.0;
+        $evScore = 0.0;
+        if ($evidenceReport !== null) {
+            $evScore = (float)($evidenceReport['score'] ?? (($evidenceReport['evidence_score'] ?? 0.5) * 100));
+            $density = (float)($evidenceReport['evidence_density'] ?? 1.0);
+            $hic     = (int)($evidenceReport['high_importance_contradicted_count'] ?? 0);
+            $hiu     = (int)($evidenceReport['high_importance_unsupported_count'] ?? 0);
+            $contra  = (int)($evidenceReport['contradicted_claims_count'] ?? 0);
+
+            $evPts = round($evScore / 100 * 20, 1);
+            $evPts -= min(8, $hic * 2.5 + $hiu * 1.5);
+            $evPts -= min(4, max(0.0, (0.55 - $density)) * 15);
+            $evPts -= min(3, $contra * 1.0);
+            $evPts = round(max(0, min(20, $evPts)), 1);
+
+            $explanation[] = "Evidence: {$evPts}/20 (score: {$evScore}, density: " . round($density * 100, 1) . "%, contra: {$contra}, hi_unsup: {$hiu})";
         } else {
-            $explanation[] = "Evidence: {$evPts}/20 (score: {$evScore})";
+            $explanation[] = "Evidence: 0/20 (no evidence layer)";
         }
 
         // Risk alignment: 5–15 pts
@@ -62,7 +74,20 @@ class DecisionQualityScoreService
         }
 
         $raw   = $ctxPts + $debPts + $evPts + $riskPts + $fcPen + $missingPen;
-        $score = (int) max(0, min(100, round($raw)));
+
+        $challengePen = 0.0;
+        if ($evidenceReport !== null) {
+            $nCh  = (int)($evidenceReport['challenged_claims_count'] ?? 0);
+            $hiCh = (int)($evidenceReport['high_importance_challenged_count'] ?? 0);
+            if ($nCh > 0 || $hiCh > 0) {
+                // Bounded impact: max −20 on final 100. Scale by claim volume & importance.
+                $challengePen = min(20.0, $nCh * 1.8 + $hiCh * 4.5);
+                $challengePen = round($challengePen, 1);
+                $explanation[] = "User challenge uncertainty: -{$challengePen} pts (contested claims; objective support labels unchanged)";
+            }
+        }
+
+        $score = (int) max(0, min(100, round($raw - $challengePen)));
 
         $level = match(true) {
             $score >= 80 => 'strong',
@@ -81,6 +106,7 @@ class DecisionQualityScoreService
                 'risk_alignment'           => $riskPts,
                 'false_consensus_penalty'  => $fcPen,
                 'missing_info_penalty'     => $missingPen,
+                'user_challenge_penalty'   => $challengePen > 0 ? -$challengePen : 0,
             ],
             'explanation' => $explanation,
         ];

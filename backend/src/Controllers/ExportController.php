@@ -22,6 +22,7 @@ use Infrastructure\Persistence\RiskProfileRepository;
 use Infrastructure\Persistence\SessionAgentProvidersRepository;
 use Domain\Orchestration\DebateMemoryService;
 use Infrastructure\Persistence\JuryAdversarialReportRepository;
+use Domain\Orchestration\PromptBuilder;
 
 class ExportController {
     private SessionRepository         $sessionRepo;
@@ -80,7 +81,7 @@ class ExportController {
         }
 
         $messages   = $this->messageRepo->findBySession($id);
-        $contextDoc = $this->docRepo->findBySession($id);
+        $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt($this->docRepo->findBySession($id));
         $arguments  = $this->debateRepo->findArgumentsBySession($id);
         $positions  = $this->debateRepo->findPositionsBySession($id);
         $edges      = $this->debateRepo->findEdgesBySession($id);
@@ -244,6 +245,9 @@ class ExportController {
         if ($doc === null) return null;
         if ($level === 'strong') {
             $doc['content'] = '[REDACTED]';
+            if (isset($doc['prompt_content'])) {
+                $doc['prompt_content'] = '[REDACTED]';
+            }
         }
         return $doc;
     }
@@ -278,7 +282,7 @@ class ExportController {
         }
 
         $messages   = $this->messageRepo->findBySession($id);
-        $contextDoc = $this->docRepo->findBySession($id);
+        $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt($this->docRepo->findBySession($id));
         $arguments  = $this->debateRepo->findArgumentsBySession($id);
         $positions  = $this->debateRepo->findPositionsBySession($id);
         $edges      = $this->debateRepo->findEdgesBySession($id);
@@ -687,15 +691,33 @@ class ExportController {
         // ── 10. Evidence Layer ────────────────────────────────────────────
         $md .= "## 10. Evidence Assessment\n\n";
         if (!empty($evidenceReport)) {
-            $evScore    = round((float)($evidenceReport['evidence_score']            ?? 1.0) * 100, 1);
+            $evScore100 = isset($evidenceReport['score'])
+                ? round((float)$evidenceReport['score'], 1)
+                : round((float)($evidenceReport['evidence_score'] ?? 1.0) * 100, 1);
+            $evDensity  = round((float)($evidenceReport['evidence_density'] ?? 0) * 100, 1);
+            $evBadge    = (string)($evidenceReport['evidence_badge'] ?? '');
             $evUnsup    = (int)($evidenceReport['unsupported_claims_count']           ?? 0);
             $evContra   = (int)($evidenceReport['contradicted_claims_count']          ?? 0);
+            $evHiUnsup  = (int)($evidenceReport['high_importance_unsupported_count'] ?? 0);
+            $evHiContra = (int)($evidenceReport['high_importance_contradicted_count']?? 0);
+            $ctxHash    = (string)($evidenceReport['context_hash'] ?? '');
+            $ctxTrunc   = !empty($evidenceReport['context_truncated']);
+            $ftsQ       = (string)($evidenceReport['retrieval_query'] ?? '');
             $evImpact   = (string)($evidenceReport['decision_impact']                ?? 'low');
             $evRec      = (string)($evidenceReport['recommendation']                 ?? '');
             $evUnknowns = (array)($evidenceReport['critical_unknowns']               ?? []);
-            $md .= "- **Evidence coverage score:** {$evScore}%\n";
+            $md .= "- **Evidence score (0–100):** {$evScore100}\n";
+            $md .= "- **Strength badge:** {$evBadge}\n";
+            $md .= "- **Important-claim support density:** {$evDensity}%\n";
             $md .= "- **Unsupported claims:** {$evUnsup}\n";
             $md .= "- **Contradicted claims:** {$evContra}\n";
+            $md .= "- **High-importance unsupported:** {$evHiUnsup}\n";
+            $md .= "- **High-importance contradicted:** {$evHiContra}\n";
+            $md .= "- **Context hash:** " . ($ctxHash !== '' ? $ctxHash : '–') . "\n";
+            $md .= "- **Context truncated:** " . ($ctxTrunc ? 'yes' : 'no') . "\n";
+            if ($ftsQ !== '') {
+                $md .= "- **Retrieval query (FTS):** " . $ftsQ . "\n";
+            }
             $md .= "- **Decision impact of evidence gaps:** {$evImpact}\n";
             if (!empty($evUnknowns)) {
                 $md .= "- **Critical unknowns:**\n";
@@ -707,8 +729,18 @@ class ExportController {
                 $md .= "- **Recommendation:** {$evRec}\n";
             }
             $md .= "\n";
+            $md .= "### Claim support (excerpt)\n\n";
+            $md .= "| support_class | importance | source_layer | claim |\n|---|---|---|---|\n";
+            foreach (array_slice($evidenceClaims, 0, 25) as $c) {
+                $sc = $c['support_class'] ?? ($c['status'] ?? '');
+                $im = $c['importance'] ?? '–';
+                $sl = $c['source_layer'] ?? '–';
+                $ct = str_replace('|', '\\|', mb_substr((string)($c['claim_text'] ?? ''), 0, 120, 'UTF-8'));
+                $md .= "| {$sc} | {$im} | {$sl} | {$ct} |\n";
+            }
+            $md .= "\n";
             // Top unsupported claims
-            $topUnsupported = array_filter($evidenceClaims, fn($c) => in_array($c['status'] ?? '', ['unsupported', 'needs_source'], true));
+            $topUnsupported = array_filter($evidenceClaims, fn($c) => in_array($c['support_class'] ?? $c['status'] ?? '', ['unsupported', 'needs_source'], true));
             if (!empty($topUnsupported)) {
                 $md .= "### Top Unsupported Claims\n\n";
                 foreach (array_slice(array_values($topUnsupported), 0, 5) as $c) {
@@ -717,7 +749,7 @@ class ExportController {
                 $md .= "\n";
             }
             // Contradicted claims
-            $contradictedList = array_filter($evidenceClaims, fn($c) => ($c['status'] ?? '') === 'contradicted');
+            $contradictedList = array_filter($evidenceClaims, fn($c) => ($c['support_class'] ?? $c['status'] ?? '') === 'contradicted');
             if (!empty($contradictedList)) {
                 $md .= "### Contradicted Claims\n\n";
                 foreach (array_values($contradictedList) as $c) {

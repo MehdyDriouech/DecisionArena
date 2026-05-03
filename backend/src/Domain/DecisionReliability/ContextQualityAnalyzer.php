@@ -77,6 +77,8 @@ class ContextQualityAnalyzer {
         $text = trim($objective);
         $normalized = mb_strtolower($text, 'UTF-8');
 
+        $contextTruncated = !empty($contextDoc) && !empty($contextDoc['context_truncated']);
+
         $score = 1.0;
         $missing = [];
         $warnings = [];
@@ -131,6 +133,12 @@ class ContextQualityAnalyzer {
             $warnings[] = 'No explicit user, customer, or market target was detected.';
         }
 
+        if ($contextTruncated) {
+            $score -= 0.14;
+            $missing[] = 'context_prompt_truncated';
+            $warnings[] = 'Shared context document was truncated for the model prompt; information after the cutoff was not visible to agents during this run.';
+        }
+
         $hasContextDoc = !empty($contextDoc['content']);
         if (!$hasContextDoc) {
             $score -= 0.10;
@@ -170,6 +178,10 @@ class ContextQualityAnalyzer {
         }
 
         $cap = ReliabilityConfig::reliabilityCapForLevel($level);
+        if ($contextTruncated) {
+            $cap = round(max(0.35, $cap - 0.12), 3);
+        }
+
         if ($level !== $levelBeforeDowngrade && !in_array('semantic_density', $missing, true)) {
             $missing[] = 'semantic_density';
         }
@@ -182,6 +194,7 @@ class ContextQualityAnalyzer {
             'reliability_cap' => $cap,
             'critical_missing' => array_values(array_unique($criticalMissing)),
             'semantic_density' => $semanticDensity,
+            'context_truncated' => $contextTruncated,
         ];
     }
 

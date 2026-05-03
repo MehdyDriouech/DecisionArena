@@ -147,7 +147,7 @@ class JuryRunner {
                     $messages = $this->buildJuryMessages(
                         $agent, $objective, $contextMessages,
                         $round, $rounds, $phase,
-                        $language, $forceDisagreement, $contextDoc, $assignedTarget,
+                        $language, $forceDisagreement, $contextDoc, $sessionId, $assignedTarget,
                         $socialDynBlock, $forceStrongNext
                     );
 
@@ -372,7 +372,7 @@ class JuryRunner {
                 $messages = $this->buildJuryMessages(
                     $synthAgent, $objective, $allPrevMessages,
                     $verdictRound, $verdictRound, 'jury-verdict',
-                    $language, $forceDisagreement, $contextDoc,
+                    $language, $forceDisagreement, $contextDoc, $sessionId,
                     null, null, false, false
                 );
 
@@ -384,11 +384,23 @@ class JuryRunner {
 
                 // Inject reliability constraint block (always)
                 try {
+                    $preSynthMessages = $this->messageRepo->findBySession($sessionId);
+                    $preEvidence = null;
+                    try {
+                        $preEvidence = $this->evidenceService->generateAndPersist(
+                            $sessionId,
+                            $preSynthMessages,
+                            $contextDoc
+                        );
+                    } catch (\Throwable) {
+                    }
                     $preEnvelope = $this->reliabilityService->buildEnvelope(
                         $objective, $contextDoc, $automaticDecision,
                         $this->voteRepo->findVotesBySession($sessionId),
                         $state['positions'] ?? [], $state['edges'] ?? [],
-                        $threshold, null, null, null, null, null
+                        $threshold, null, null, null,
+                        $preEvidence,
+                        null
                     );
                     $juryDebateScore   = (float)($qualityData['score'] ?? 0.0);
                     $preFcData         = $preEnvelope['false_consensus'] ?? [];
@@ -398,7 +410,7 @@ class JuryRunner {
                         contextQuality:    $preEnvelope['context_quality'] ?? [],
                         falseConsensus:    $preFcData,
                         debateQualityScore:$juryDebateScore,
-                        evidenceReport:    null,
+                        evidenceReport:    $preEvidence,
                         riskProfile:       null,
                         mode:              'jury',
                         sessionOptions:    []
@@ -408,6 +420,7 @@ class JuryRunner {
                             'adjusted_decision'    => $preEnvelope['adjusted_decision'] ?? [],
                             'debate_quality_score' => $juryDebateScore,
                             'guardrails'           => $preGuardrails,
+                            'evidence_report'      => $preEvidence,
                         ])
                     );
                     $formatInstruction = $this->promptBuilder->buildSynthesizerOutputFormatInstruction();
@@ -639,6 +652,7 @@ class JuryRunner {
                 'guardrails'             => $guardrails,
                 'decision_quality_score' => $qualityScore,
                 'risk_profile'           => $riskProfile,
+                'evidence_report'        => $evidenceReport,
             ])
         );
 
@@ -1372,6 +1386,7 @@ class JuryRunner {
         string $language,
         bool   $forceDisagreement,
         ?array $contextDoc,
+        string $sessionId,
         ?string $assignedTarget = null,
         ?string $socialDynamicsBlock = null,
         bool   $forceStrongContradictionNext = false,
@@ -1388,12 +1403,11 @@ class JuryRunner {
         $system .= "You must directly reference at least one previous agent by id.\n";
         $system .= "You must either challenge, support, or revise a specific claim from that agent.\n";
         $system .= "Generic agreement without argument is not acceptable.";
+        $system .= $this->promptBuilder->buildEvidenceDisciplineSystemBlock();
 
         $userContent = '';
 
-        if (!empty($contextDoc['content'])) {
-            $userContent .= "# Context Document\n\n" . $contextDoc['content'] . "\n\n---\n\n";
-        }
+        $userContent .= $this->promptBuilder->buildContextDocumentContent($contextDoc, $sessionId, $objective, null);
 
         $userContent .= "**Objective under jury deliberation:** $objective\n\n";
 

@@ -37,6 +37,9 @@ function renderDRAgentCard(msg, isFinal, messageKey = '') {
     : `<div class="agent-content md-content">${renderMarkdown(msg.content)}</div>`;
 
   if (isFinal) {
+    const chBtn = window.DecisionArena?.utils?.canChallengeMessage?.(msg)
+      ? `<div style="padding:0 18px 14px;"><button type="button" class="btn btn-secondary btn-sm" style="font-size:11px;" data-action="challenge-claim" data-message-id="${escHtml(String(msg.id))}">${escHtml(t('hitl.challenge'))}</button></div>`
+      : '';
     return `
       <div class="synthesis-card">
         <div class="agent-card-header" style="padding:14px 18px;background:var(--accent-light);border-bottom:1px solid rgba(99,102,241,0.3);">
@@ -47,8 +50,9 @@ function renderDRAgentCard(msg, isFinal, messageKey = '') {
           </div>
           <span class="badge badge-success" style="margin-left:auto;">${t('dr.synthesis')}</span>
         </div>
-        <div style="padding:18px;">${contentHtml}</div>
+        <div style="padding:18px;">${window.DecisionArena?.utils?.formatHitlMessageBadges?.(msg, t, escHtml) || ''}${contentHtml}</div>
         ${isLong ? `<div style="padding:0 18px 14px;"><button class="btn btn-secondary btn-sm" data-action="toggle-agent-message" data-message-id="${escHtml(messageId)}">${collapsed ? 'Voir' : 'Masquer'}</button></div>` : ''}
+        ${chBtn}
         ${msg.model ? `<div class="agent-card-footer">${msg.provider_id ? `<span>${escHtml(msg.provider_id)}</span>` : ''}<span>${escHtml(msg.model)}</span></div>` : ''}
       </div>
     `;
@@ -63,8 +67,12 @@ function renderDRAgentCard(msg, isFinal, messageKey = '') {
           ${titleTxt ? `<div class="agent-title">${escHtml(titleTxt)}</div>` : ''}
         </div>
       </div>
+      ${window.DecisionArena?.utils?.formatHitlMessageBadges?.(msg, t, escHtml) || ''}
       ${contentHtml}
       ${isLong ? `<button class="btn btn-secondary btn-sm" data-action="toggle-agent-message" data-message-id="${escHtml(messageId)}">${collapsed ? 'Voir' : 'Masquer'}</button>` : ''}
+      ${window.DecisionArena?.utils?.canChallengeMessage?.(msg)
+    ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;font-size:11px;" data-action="challenge-claim" data-message-id="${escHtml(String(msg.id))}">${escHtml(t('hitl.challenge'))}</button>`
+    : ''}
       ${msg.model ? `<div class="agent-card-footer">${msg.provider_id ? `<span>${escHtml(msg.provider_id)}</span>` : ''}<span>${escHtml(msg.model)}</span></div>` : ''}
     </div>
   `;

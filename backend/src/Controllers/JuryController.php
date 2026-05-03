@@ -7,6 +7,7 @@ use Http\Response;
 use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\ContextDocumentRepository;
 use Domain\Orchestration\JuryRunner;
+use Domain\Orchestration\PromptBuilder;
 
 class JuryController {
     private SessionRepository $sessionRepo;
@@ -39,7 +40,9 @@ class JuryController {
         $language = $session['language'] ?? 'en';
         $contextDoc = null;
         try {
-            $contextDoc = (new ContextDocumentRepository())->findBySession($sessionId);
+            $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt(
+                (new ContextDocumentRepository())->findBySession($sessionId)
+            );
         } catch (\Throwable $e) {
             $contextDoc = null;
         }

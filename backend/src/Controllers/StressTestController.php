@@ -7,6 +7,7 @@ use Http\Response;
 use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\ContextDocumentRepository;
 use Domain\Orchestration\StressTestRunner;
+use Domain\Orchestration\PromptBuilder;
 
 class StressTestController {
     private SessionRepository         $sessionRepo;
@@ -44,7 +45,9 @@ class StressTestController {
         }
 
         $language   = $session['language'] ?? 'en';
-        $contextDoc = $this->docRepo->findBySession($sessionId);
+        $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt(
+            $this->docRepo->findBySession($sessionId)
+        );
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($session['decision_threshold'] ?? null);
 
         // Feature 3 & 4

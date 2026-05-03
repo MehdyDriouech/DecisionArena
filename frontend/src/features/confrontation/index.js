@@ -44,6 +44,10 @@ function renderConfrontationAgentCard(msg, isSynthesis, messageKey = '') {
   const contentHtml = isLong && collapsed
     ? `<div class="agent-content md-content"><p>${preview}…</p></div>`
     : `<div class="agent-content md-content">${renderMarkdown(msg.content)}</div>`;
+  const chBtn = window.DecisionArena?.utils?.canChallengeMessage?.(msg)
+    ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;font-size:11px;" data-action="challenge-claim" data-message-id="${escHtml(String(msg.id))}">${escHtml(t('hitl.challenge'))}</button>`
+    : '';
+  const hitl = window.DecisionArena?.utils?.formatHitlMessageBadges?.(msg, t, escHtml) || '';
   return `
     <div class="agent-card ${isSynthesis ? 'synthesis-full' : ''}">
       <div class="agent-card-header">
@@ -54,8 +58,10 @@ function renderConfrontationAgentCard(msg, isSynthesis, messageKey = '') {
         </div>
         ${isSynthesis ? `<span class="badge badge-success" style="margin-left:auto;">${t('dr.synthesis')}</span>` : targetBadge}
       </div>
+      ${hitl}
       ${contentHtml}
       ${isLong ? `<button class="btn btn-secondary btn-sm" data-action="toggle-agent-message" data-message-id="${escHtml(messageId)}">${collapsed ? 'Voir' : 'Masquer'}</button>` : ''}
+      ${chBtn}
       <div class="agent-card-footer">
         ${msg.provider_id ? `<span>${escHtml(msg.provider_id)}</span>` : ''}
         ${msg.model ? `<span>${escHtml(msg.model)}</span>` : ''}

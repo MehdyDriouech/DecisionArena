@@ -5,14 +5,17 @@ use Http\Request;
 use Http\Response;
 use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\ContextDocumentRepository;
+use Infrastructure\Persistence\MessageRepository;
 
 class RerunController {
     private SessionRepository         $sessionRepo;
     private ContextDocumentRepository $docRepo;
+    private MessageRepository         $messageRepo;
 
     public function __construct() {
         $this->sessionRepo = new SessionRepository();
         $this->docRepo     = new ContextDocumentRepository();
+        $this->messageRepo = new MessageRepository();
     }
 
     public function rerun(Request $req): array {
@@ -27,6 +30,8 @@ class RerunController {
         $language         = $data['language'] ?? $session['language'] ?? 'en';
         $customInstruction = trim($data['custom_instruction'] ?? '');
         $keepContext      = (bool)($data['keep_context_document'] ?? true);
+        $includeChallenge = (bool)($data['include_challenge_context'] ?? false);
+        $challengeFallback = trim((string)($data['challenge_summary_fallback'] ?? ''));
 
         // Start with original session values
         $selectedAgents   = (array)($session['selected_agents'] ?? []);
@@ -85,6 +90,15 @@ class RerunController {
             $initialPrompt .= "\n\n[Rerun instruction: " . $customInstruction . "]";
         }
 
+        if ($includeChallenge) {
+            $ctxBlock = $this->buildChallengeContextFromParent($id, $challengeFallback);
+            if ($ctxBlock !== '') {
+                $initialPrompt .= "\n\n"
+                    . "[USER CHALLENGE CONTEXT — re-evaluation requested. This block records user disagreement; it is not independently verified fact. Agents should reconcile with the shared context and prior reasoning.]\n"
+                    . $ctxBlock;
+            }
+        }
+
         // Build new session data
         $now     = date('c');
         $newId   = $this->uuid();
@@ -110,7 +124,11 @@ class RerunController {
         // Store parent reference if columns exist
         try {
             $newData['parent_session_id'] = $id;
-            $newData['rerun_reason']      = implode(', ', $variations) ?: 'manual';
+            $reasonParts = array_values(array_filter([
+                implode(', ', $variations) !== '' ? implode(', ', $variations) : 'manual',
+                $includeChallenge ? 'challenge_rerun' : null,
+            ]));
+            $newData['rerun_reason'] = implode(', ', $reasonParts);
         } catch (\Throwable $_) {}
 
         $created = $this->sessionRepo->create($newData);
@@ -141,6 +159,42 @@ class RerunController {
         }
 
         return ['session' => $created, 'parent_session_id' => $id];
+    }
+
+    /**
+     * Prefer verbatim user challenge messages from the parent session; use synthesized
+     * fallback only when no challenge-thread messages exist (never both).
+     */
+    private function buildChallengeContextFromParent(string $parentSessionId, string $fallbackSummary): string {
+        $messages = $this->messageRepo->findBySession($parentSessionId);
+        $lines    = [];
+        foreach ($messages as $msg) {
+            if (($msg['role'] ?? '') !== 'user') {
+                continue;
+            }
+            $meta = [];
+            if (!empty($msg['meta_json'])) {
+                $d = json_decode((string)$msg['meta_json'], true);
+                $meta = is_array($d) ? $d : [];
+            }
+            $isChallenge = (($meta['context_mode'] ?? '') === 'challenge')
+                || (!empty($meta['challenge_origin']));
+            if (!$isChallenge) {
+                continue;
+            }
+            $text = trim((string)($msg['content'] ?? ''));
+            if ($text !== '') {
+                $lines[] = '[User challenge message]' . "\n" . $text;
+            }
+        }
+        $raw = implode("\n\n", $lines);
+        if ($raw !== '') {
+            return $raw;
+        }
+        if ($fallbackSummary !== '') {
+            return '[USER CHALLENGE]' . "\n" . 'The user has challenged:' . "\n" . '"' . $fallbackSummary . '"';
+        }
+        return '';
     }
 
     private function uuid(): string {

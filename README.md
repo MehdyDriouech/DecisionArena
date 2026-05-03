@@ -6,6 +6,8 @@ Decision Arena est un outil **local** de *Decision Intelligence* basé sur des *
 
 **Stack :** PHP 8+ · Vanilla JS (ES modules) · SQLite · Markdown — sans framework, sans bundler, sans dépendance externe.
 
+**Statut du projet :** *alpha* / early stage. Les fonctionnalités et l’API peuvent encore bouger ; **des bugs sont courants**. Toute contribution pour corriger, documenter, tester ou améliorer le projet est **vivement appréciée** (retours, issues, correctifs).
+
 ---
 
 ## Sommaire
@@ -43,7 +45,8 @@ Decision Arena répond à ça :
 | Votes pondérés | ✅ Décision collective avec seuil configurable |
 | Audit du raisonnement | ✅ Graph, heatmap, replay |
 | Traçabilité | ✅ Logs, snapshots, exports (avec mode redacted) |
-| Rejouabilité | ✅ Rerun avec variations, comparaison de sessions |
+| Rejouabilité | ✅ Rerun avec variations, comparaison de sessions, **re-run avec contexte de conteste** |
+| Human-in-the-loop | ✅ Conteste tracée sur les messages (`meta_json`), intégration evidence **sans modifier** le `support_class`, pénalité qualité bornée, variante avec challenge injecté |
 | Qualité décisionnelle | ✅ Guardrails, score 0–100, brief décisionnel, timeline, biais, Devil's Advocate, post-mortem |
 
 ---
@@ -98,7 +101,7 @@ Puis ouvrez `frontend/index.html` dans votre navigateur.
 1. Ouvrez l'application dans votre navigateur
 2. Allez dans **Administration → Providers** et ajoutez votre provider LLM
 3. Cliquez **Fetch models** pour auto-découvrir les modèles disponibles
-4. Créez votre première session via **Nouvelle session**
+4. Créez votre première session via **Nouvelle session** (templates, **scenario packs** ou formulaire libre)
 
 ---
 
@@ -166,6 +169,7 @@ Conversation libre avec les agents sélectionnés.
 - `@architect @critic` → plusieurs agents ciblés
 - *(sans mention)* → tous les agents sélectionnés répondent
 - Bouton **Stop** pour annuler une génération en cours
+- **Reactive Chat** (preset `minimal` / `standard` / `intense`) : fil structuré multi-tour via `POST /api/chat/reactive`
 
 > Idéal pour : exploration rapide, brainstorming, questions ouvertes.
 
@@ -254,6 +258,7 @@ Score composite 0–100 calculé à partir de :
 | Profil de risque (inverse) | 15 pts |
 | Pénalité faux consensus | −15 pts max |
 | Pénalité champs critiques manquants | −5 pts/champ |
+| Incertitude **conteste utilisateur** | jusqu’à **−20 pts** sur le score final (les classes de support evidence **ne changent pas** ; la contestation est traitée à part) |
 
 Niveaux : **poor** (< 40) · **fragile** (40–64) · **medium** (65–79) · **strong** (≥ 80)
 
@@ -299,7 +304,12 @@ Panneaux d'analyse disponibles pour toutes les sessions de délibération, via `
 | Timeline de confiance | GET | `/api/sessions/{id}/confidence-timeline` | non |
 | Rapport de biais | GET | `/api/sessions/{id}/bias-report` | non |
 | Evidence report | GET | `/api/sessions/{id}/evidence-report` | non |
+| Claims evidence | GET | `/api/sessions/{id}/evidence-claims` | non |
+| Evidence (recalcul) | POST | `/api/sessions/{id}/evidence/recompute` | oui |
 | Profil de risque | GET | `/api/sessions/{id}/risk-profile` | non |
+| Profil de risque (recalcul) | POST | `/api/sessions/{id}/risk-profile/recompute` | oui |
+| Dynamique sociale (liens) | GET | `/api/sessions/{id}/relationships` | non |
+| Dynamique sociale (événements) | GET | `/api/sessions/{id}/relationship-events` | non |
 | Audit débat | GET | `/api/sessions/{id}/audit` | non |
 | Graphe interactions | GET | `/api/sessions/{id}/graph` | non |
 | Heatmap arguments | GET | `/api/sessions/{id}/argument-heatmap` | non |
@@ -310,6 +320,11 @@ Panneaux d'analyse disponibles pour toutes les sessions de délibération, via `
 | Devil's Advocate (manuel) | POST | `/api/sessions/{id}/devil-advocate/run` | oui |
 | Overrides LLM par agent | GET | `/api/sessions/{id}/agent-providers` | — |
 | Check contexte | POST | `/api/context/check` | non |
+| Learning (aperçu) | GET | `/api/learning/overview` | non |
+| Learning (agents / modes / calibration) | GET | `/api/learning/agents`, `/modes`, `/calibration` | non |
+| Learning (recompute) | POST | `/api/learning/recompute` | non |
+| Learning (export) | GET, POST | `/api/learning/export` | non |
+| Politiques de prompts | GET, PUT | `/api/prompt-policies`, `/api/prompt-policies/{id}` | — |
 
 ### Graphe d'interactions
 
@@ -343,6 +358,14 @@ Bilan utilisateur sur l'issue réelle d'une décision (correct / partiel / incor
 
 Relancer une session avec des variations : autre mode, autres agents, autre langue, plus de désaccord forcé, etc.
 
+**Corps JSON** (extrait utile) : `variations[]`, `target_mode`, `language`, `custom_instruction`, `keep_context_document`, et pour intégrer les messages de conteste depuis la session parente : `include_challenge_context` (bool), optionnellement `challenge_summary_fallback` (texte) **uniquement** si aucun message user de challenge n’est trouvé en base — le backend n’injecte **jamais** le verbatim et le fallback ensemble. La nouvelle session peut porter `rerun_reason` incluant `challenge_rerun`.
+
+### Human-in-the-loop — conteste utilisateur
+
+- **UI** : bouton *Contester* sur les réponses agents éligibles ; badges sur le fil (conteste, message contesté, réponse au conteste). Après un message de conteste : *Re-lancer la décision avec ce conteste* (`rerun-with-challenge`) ouvre une variante comme le rerun classique, avec injection du contexte de conteste.
+- **API chat** : `POST /api/chat/send` accepte en mode `context_mode: "challenge"` les champs `challenge_origin` (id du message assistant contesté), `challenge_target_agent`, `challenge_level` (`soft` / `firm`). Les métadonnées sont stockées dans `messages.meta_json`.
+- **Evidence** : claims marqués `challenge_flag` si liés à un message assistant « challenged » ; claim « message entier » de repli si l’extracteur n’a pas produit de claims ; rapport enrichi (`challenged_claims_count`, etc.). **Pas** de changement de `support_class` pour refléter la contestation — seulement confiance pondérée / métriques / score décisionnel.
+
 ### Comparaison de sessions
 
 Comparer 2 à 4 sessions côte à côte — artefact Markdown exportable.
@@ -363,6 +386,10 @@ Sessions pré-configurées (mode, agents, prompt starter). 5 templates système 
 
 Le formulaire **Nouvelle session** affiche une grille de templates système en haut pour un accès direct.
 
+### Scenario packs (parcours guidés)
+
+Presets orientés **profil / cas d’usage** (mode recommandé, personas, tours, seuil, etc.), stockés en SQLite (`scenario_persona_packs`). Grille sur **Nouvelle session** + gestion complète sous **Administration → Scenario packs** (CRUD custom, duplication des packs système). Préremplissage du formulaire via `POST /api/sessions/from-scenario-pack` ou `POST /api/scenario-packs/prefill` (même logique : retour de config, **sans** création de session).
+
 ### Langues (UI)
 
 Interface en **Français** et **Anglais**. Switch via **FR / EN** dans la sidebar.  
@@ -379,6 +406,11 @@ Trois niveaux sélectionnables dans la sidebar : **Basique** · **Avancé** · *
 - Rétention automatique : purge des logs > 90 jours (au plus une fois par 24h)
 - Contenu des messages LLM remplacé par `[REDACTED: N chars]` avant persistance
 
+### Learning & politiques de prompts
+
+- **Learning** (**Administration → Learning**) : métriques agrégées sur agents et modes, calibration, export Markdown/JSON (`GET` et `POST` `/api/learning/export`).
+- **Politiques de prompts** : réglages persistés exposés par `GET/PUT /api/prompt-policies/{id}` (édition côté admin selon l’UI).
+
 ---
 
 ## Concepts & terminologie
@@ -386,7 +418,8 @@ Trois niveaux sélectionnables dans la sidebar : **Basique** · **Avancé** · *
 | Terme | Description |
 |---|---|
 | **Session** | Un "dossier" de conversation + configuration (mode, agents, langue…) |
-| **Message** | Message user ou agent, attaché à une session |
+| **Message** | Message user ou agent, attaché à une session ; peut inclure **`meta_json`** (ex. fil conteste, statut `challenged`, réponse au conteste) |
+| **Conteste (HITL)** | Désaccord utilisateur tracé sur les messages et l’evidence **sans** réécrire la vérité machine (`support_class`) |
 | **Persona** | Description d'un agent (Markdown + frontmatter YAML) |
 | **Soul** | Style comportemental / personnalité d'un agent |
 | **Provider** | Backend LLM (Ollama, LM Studio, OpenAI-compatible) |
@@ -407,6 +440,9 @@ Trois niveaux sélectionnables dans la sidebar : **Basique** · **Avancé** · *
 | **Post-mortem** | Bilan utilisateur sur l'issue réelle d'une décision (correct / partiel / incorrect) |
 | **uiComplexity** | Niveau de complexité UI : basic / advanced / expert (persisté localStorage) |
 | **DR / CF / QD / ST / LA** | Decision Room / Confrontation / Quick Decision / Stress Test / Launch Assistant |
+| **Scenario pack** | Parcours guidé (recommandations mode/agents/tours…) — distinct d’un *template* de session |
+| **Reactive Chat** | Variante de chat multi-tour avec presets (`minimal` / `standard` / `intense`) et persistance des métadonnées de fil |
+| **challenge_rerun** | Motif de rerun : la variante a été créée avec `include_challenge_context` (voir bannière dans l’historique de session) |
 
 ---
 
@@ -421,14 +457,20 @@ decision-room-ai/
 │   ├── config/
 │   ├── src/
 │   │   ├── Controllers/            # HTTP controllers
-│   │   │   ├── ChatController.php
+│   │   │   ├── ChatController.php              # send (+ challenge HITL) + reactive
 │   │   │   ├── ContextCheckController.php   # POST /api/context/check
 │   │   │   ├── DecisionRoomController.php   # persiste result + decision_brief
 │   │   │   ├── DecisionSummaryController.php # GET /api/sessions/{id}/decision-summary
 │   │   │   ├── JuryController.php           # persiste result + decision_brief
 │   │   │   ├── SessionController.php        # read-through result persisté
 │   │   │   ├── ExportController.php         # lit result pour brief/guardrails
-│   │   │   └── … (30+ controllers)
+│   │   │   ├── ScenarioPackController.php
+│   │   │   ├── EvidenceController.php
+│   │   │   ├── RiskProfileController.php
+│   │   │   ├── SocialDynamicsController.php
+│   │   │   ├── LearningController.php
+│   │   │   ├── PromptPolicyController.php
+│   │   │   └── … (~39 contrôleurs)
 │   │   ├── Domain/
 │   │   │   ├── DecisionReliability/
 │   │   │   │   ├── DecisionGuardrailService.php    # 4 règles guardrails
@@ -449,6 +491,7 @@ decision-room-ai/
 │   │   │   ├── Risk/
 │   │   │   ├── Learning/
 │   │   │   ├── SocialDynamics/
+│   │   │   ├── Prompts/            # politiques éditables (ex. social-dynamics-policy)
 │   │   │   ├── Providers/          # ProviderRouter, fallback, multi-LLM
 │   │   │   └── …
 │   │   ├── Http/                   # Router, Request, Response
@@ -471,7 +514,19 @@ decision-room-ai/
 │       ├── test_fast_decision_guardrails.php
 │       ├── test_synthesizer_constraints.php
 │       ├── test_reliability_persistence.php
-│       └── … (12+ scripts)
+│       ├── test_learning_export.php
+│       ├── test_learning_routes_signature.php
+│       ├── test_learning_layer.php
+│       ├── test_reactive_thread_persistence.php
+│       ├── test_evidence_layer.php
+│       ├── test_risk_layer.php
+│       ├── test_prompt_policy_service.php
+│       ├── test_jury_adversarial.php
+│       ├── test_jury_adversarial_report.php
+│       ├── smoke_guardrails.php
+│       ├── reliability_scenarios_manual.php
+│       ├── social_dynamics_scenarios_manual.php
+│       └── …
 └── frontend/
     ├── index.html
     ├── src/
@@ -480,7 +535,7 @@ decision-room-ai/
     │   │   ├── renderer.js         # sidebar + complexité badge/dropdown
     │   │   ├── router.js
     │   │   ├── events.js
-    │   │   └── globalHandlers.js   # set-ui-complexity, toggle-complexity-dropdown
+    │   │   └── globalHandlers.js   # langue, clear-error, set-ui-mode, set-ui-complexity, toggle-complexity-dropdown
     │   ├── services/               # apiClient, sessionService, evidenceService, …
     │   └── features/
     │       ├── newSession/         # Fast Decision preset, template grid, context hint
@@ -493,7 +548,7 @@ decision-room-ai/
     │       ├── sessionHistory/     # brief, guardrails, quality score, reliability
     │       ├── comparisons/
     │       ├── launchAssistant/
-    │       └── admin/              # providers, routing, personas, templates, logs, learning
+    │       └── admin/              # providers, routing, personas, templates, scenario packs, logs, learning, prompt policies
     ├── styles/                     # tokens, layout, components, features
     ├── styles.css
     └── i18n.js                     # Runtime i18n FR/EN (toutes les clés embarquées)
@@ -509,6 +564,7 @@ decision-room-ai/
 | `context_quality_level` | TEXT NULL | weak / medium / strong |
 | `reliability_cap` | REAL NULL | Plafond de fiabilité (0.0–1.0) |
 | `decision_threshold` | REAL | Seuil de consensus (défaut 0.55) |
+| `run_status` | TEXT NULL | JSON : état d’avancement des runs longs (poll possible via `GET …/run-status`) |
 | `devil_advocate_enabled` | INTEGER | 0/1 |
 | `status` | TEXT | draft / completed |
 
@@ -542,6 +598,8 @@ decision-room-ai/
 
 ## Guide de contribution
 
+Le projet est en **phase alpha** : les retours d’expérience, les signalements de bugs et les petites PR ciblées sont particulièrement utiles.
+
 ### Ajouter une feature
 
 1. Créer `frontend/src/features/<feature>/index.js` (vues)
@@ -566,23 +624,29 @@ php backend/tools/test_synthesizer_constraints.php
 php backend/tools/test_reliability_persistence.php
 php backend/tools/test_learning_routes_signature.php
 php backend/tools/test_reactive_thread_persistence.php
+php backend/tools/test_learning_export.php
+php backend/tools/test_learning_layer.php
+php backend/tools/test_evidence_layer.php
+php backend/tools/test_risk_layer.php
+php backend/tools/test_prompt_policy_service.php
+php backend/tools/test_jury_adversarial.php
+php backend/tools/test_jury_adversarial_report.php
+php backend/tools/smoke_guardrails.php
+php backend/tools/seed_templates.php
+# manuels / scénarios
+php backend/tools/reliability_scenarios_manual.php
+php backend/tools/social_dynamics_scenarios_manual.php
 ```
 
 ---
 
 ## Licence
 
-MIT + commercial clause
+**Decision Arena Restricted License v1.0** (voir le texte complet ci-dessous). En résumé : usage personnel et éducatif autorisé ; usage commercial, redistribution publique et fork sans accord écrit interdits.
 
-In short:
+Pour toute licence commerciale :
 
-- ✅ Personal & educational use: allowed
-
-- ⚠️ Commercial use: requires a separate license
-
-For commercial inquiries:
-
-👉 contact: mehdy.driouech@dawp-engineering.com
+👉 contact : mehdy.driouech@dawp-engineering.com
 
 # Decision Arena Restricted License v1.0
 
@@ -646,7 +710,7 @@ All modifications remain subject to this license.
 
 Commercial usage requires a separate written agreement with the Licensor.
 
-Contact: [your email here]
+Contact: mehdy.driouech@dawp-engineering.com
 
 ---
 

@@ -127,4 +127,46 @@ if ($score === null) {
     $fail('Unexpected value for null report');
 }
 
+// ── Phase 3 — support_class + density (not_applicable excluded) ────────────
+$header('Phase 3a — support_class supported when keywords match context text');
+$msgs = [
+    [
+        'role'     => 'assistant',
+        'agent_id' => 'analyst',
+        'content'  => 'The project budget is exactly 250000 euros for phase one.',
+        'id'       => 'p3a',
+    ],
+];
+$ctx3 = 'Finance approved a project budget of 250000 euros for phase one operations.';
+$cl3  = $assessor->assess($extractor->extract($msgs), $ctx3);
+$sc3  = (string)($cl3[0]['support_class'] ?? '');
+if ($sc3 === 'supported') {
+    $pass('support_class=supported when claim aligns with context');
+} else {
+    $fail('Expected supported', 'got ' . $sc3);
+}
+
+$header('Phase 3b — not_applicable claims do not reduce evidence_density denominator');
+$mixClaims = [
+    [
+        'claim_text' => 'I recommend we prioritize user experience over raw performance in this trade-off.',
+        'claim_type' => 'strategic_assumption',
+    ],
+    [
+        'claim_text' => 'The SLA target is 99.9% uptime as written in the operations agreement.',
+        'claim_type' => 'factual',
+    ],
+];
+$ctx4 = 'The operations agreement states the SLA target is 99.9% uptime.';
+$assessedMix = $assessor->assess($mixClaims, $ctx4);
+$repMix = $reporter->buildReport($assessedMix);
+$na = (int)($repMix['not_applicable_claims_count'] ?? 0);
+$dens = (float)($repMix['evidence_density'] ?? 0);
+// One factual supported, one not_applicable → applicable_important >= 1, density should be 1.0 if that claim is supported
+if ($na >= 1 && $dens >= 0.99) {
+    $pass('Mixed opinion + supported fact → not_applicable counted, density stays high');
+} else {
+    $fail('Expected not_applicable>=1 and density~1', "na={$na} density={$dens}");
+}
+
 echo "\n\e[1mDone.\e[0m\n";

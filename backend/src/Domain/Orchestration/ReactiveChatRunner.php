@@ -25,7 +25,13 @@ class ReactiveChatRunner
     private const MIN_TURNS   = 1;
     private const MAX_CONTENT = 3000; // Truncation for context injection
 
+    /** @var ?array<string,mixed> */
+    private ?array $reactiveContextDoc = null;
+
+    private string $reactiveSessionId = '';
+
     private AgentAssembler                  $assembler;
+    private PromptBuilder                   $promptBuilder;
     private ProviderRouter                  $router;
     private MessageRepository               $messageRepo;
     private SessionAgentProvidersRepository $agentProvidersRepo;
@@ -33,6 +39,7 @@ class ReactiveChatRunner
     public function __construct()
     {
         $this->assembler          = new AgentAssembler();
+        $this->promptBuilder      = new PromptBuilder();
         $this->router             = new ProviderRouter();
         $this->messageRepo        = new MessageRepository();
         $this->agentProvidersRepo = new SessionAgentProvidersRepository();
@@ -56,8 +63,11 @@ class ReactiveChatRunner
         string $question,
         string $primaryAgentId,
         array  $reactorAgentIds,
-        array  $config = []
+        array  $config = [],
+        ?array $contextDoc = null
     ): array {
+        $this->reactiveContextDoc = $contextDoc;
+        $this->reactiveSessionId = $sessionId;
         $turnsMin   = max(self::MIN_TURNS, min(self::MAX_TURNS, (int)($config['turns_min']   ?? 2)));
         $turnsMax   = max(self::MIN_TURNS, min(self::MAX_TURNS, (int)($config['turns_max']   ?? 4)));
         $turnsMax   = max($turnsMax, $turnsMin);
@@ -96,11 +106,11 @@ class ReactiveChatRunner
             $primaryAgent = $this->assembler->assemble($primaryAgentId);
             if (!$primaryAgent) break;
 
-            try {
-                $isFirstTurn = ($turn === 1);
-                $primaryPrompt = $isFirstTurn
-                    ? $this->buildPrimaryInitialPrompt($question, $language, $intensity)
-                    : $this->buildPrimaryResponsePrompt($question, $primaryLatestAnswer, $this->collectReactorFeedback($allTurnsHistory, $turn - 1), $language, $intensity);
+                try {
+                    $isFirstTurn = ($turn === 1);
+                    $primaryPrompt = $isFirstTurn
+                        ? $this->buildPrimaryInitialPrompt($question, $language, $intensity)
+                        : $this->buildPrimaryResponsePrompt($question, $primaryLatestAnswer, $this->collectReactorFeedback($allTurnsHistory, $turn - 1), $language, $intensity, $turn);
 
                 $routed = $this->router->chat($primaryPrompt, $primaryAgent, null, null, $agentOverrides[$primaryAgentId] ?? null);
                 $primaryLatestAnswer = $routed['content'];
@@ -136,7 +146,8 @@ class ReactiveChatRunner
                         $prevReactionsContext,
                         $language,
                         $intensity,
-                        $style
+                        $style,
+                        $turn
                     );
 
                     $routed = $this->router->chat($reactorPrompt, $reactorAgent, null, null, $agentOverrides[$reactorId] ?? null);
@@ -206,38 +217,50 @@ class ReactiveChatRunner
     private function buildPrimaryInitialPrompt(string $question, string $language, string $intensity): array
     {
         $intensityNote = $this->intensityNote($intensity);
-        return [
-            [
-                'role'    => 'system',
-                'content' => "You are the primary expert agent in a structured reactive debate.
+        $sys = "You are the primary expert agent in a structured reactive debate.
 Your answer will be challenged by other agents. Be clear, specific and argumented.
 Language: {$language}.
 {$intensityNote}
-Do not add pleasantries. Be direct.",
+Do not add pleasantries. Be direct.";
+        $sys .= $this->promptBuilder->buildEvidenceDisciplineSystemBlock();
+        $ctx = $this->promptBuilder->buildContextDocumentContent(
+            $this->reactiveContextDoc,
+            $this->reactiveSessionId,
+            $question,
+            null
+        );
+        $user = $ctx . "## User Question\n{$question}\n\n## Your Role\nYou are the primary agent.\n\n## Task\nAnswer the question with your best expert answer.\nBe clear, actionable and specific.\nPrepare for other agents to challenge or improve your answer.\n\n## Output Format\n## Position\nGO | NO-GO | ITERATE | ANSWER\n\n## Answer\n[Your detailed answer]\n\n## Confidence\n[0.0 to 1.0]";
+        return [
+            [
+                'role'    => 'system',
+                'content' => $sys,
             ],
             [
                 'role'    => 'user',
-                'content' => "## User Question\n{$question}\n\n## Your Role\nYou are the primary agent.\n\n## Task\nAnswer the question with your best expert answer.\nBe clear, actionable and specific.\nPrepare for other agents to challenge or improve your answer.\n\n## Output Format\n## Position\nGO | NO-GO | ITERATE | ANSWER\n\n## Answer\n[Your detailed answer]\n\n## Confidence\n[0.0 to 1.0]",
+                'content' => $user,
             ],
         ];
     }
 
-    private function buildPrimaryResponsePrompt(string $question, string $previousAnswer, string $reactorFeedback, string $language, string $intensity): array
+    private function buildPrimaryResponsePrompt(string $question, string $previousAnswer, string $reactorFeedback, string $language, string $intensity, int $turn): array
     {
         $intensityNote = $this->intensityNote($intensity);
-        return [
-            [
-                'role'    => 'system',
-                'content' => "You are the primary expert agent responding to challengers.
+        $sys = "You are the primary expert agent responding to challengers.
 Acknowledge valid critiques, defend what remains valid, improve your answer.
 Language: {$language}.
 {$intensityNote}
-Be direct and substantive. Do not be defensive without argument.",
-            ],
-            [
-                'role'    => 'user',
-                'content' => "## User Question\n{$question}\n\n## Your Previous Answer\n{$previousAnswer}\n\n## Reactor Feedback\n{$reactorFeedback}\n\n## Task\nRespond to the objections and improve your answer.\nAcknowledge valid critiques.\nDefend what remains valid.\nAdjust your final recommendation if needed.\n\n## Output Format\n## Response To Feedback\n- Acknowledged:\n- Defended:\n- Adjusted:\n\n## Improved Answer\n[Your updated answer]\n\n## New Argument\nyes|no\n\n## Confidence\n[0.0 to 1.0]",
-            ],
+Be direct and substantive. Do not be defensive without argument.";
+        $sys .= $this->promptBuilder->buildEvidenceDisciplineSystemBlock();
+        $ctx = $turn === 1 ? $this->promptBuilder->buildContextDocumentContent(
+            $this->reactiveContextDoc,
+            $this->reactiveSessionId,
+            $question,
+            null
+        ) : '';
+        $user = $ctx . "## User Question\n{$question}\n\n## Your Previous Answer\n{$previousAnswer}\n\n## Reactor Feedback\n{$reactorFeedback}\n\n## Task\nRespond to the objections and improve your answer.\nAcknowledge valid critiques.\nDefend what remains valid.\nAdjust your final recommendation if needed.\n\n## Output Format\n## Response To Feedback\n- Acknowledged:\n- Defended:\n- Adjusted:\n\n## Improved Answer\n[Your updated answer]\n\n## New Argument\nyes|no\n\n## Confidence\n[0.0 to 1.0]";
+        return [
+            ['role' => 'system', 'content' => $sys],
+            ['role' => 'user',   'content' => $user],
         ];
     }
 
@@ -248,42 +271,49 @@ Be direct and substantive. Do not be defensive without argument.",
         string $prevReactionsThisTurn,
         string $language,
         string $intensity,
-        string $style
+        string $style,
+        int $turn
     ): array {
         $styleNote = $this->styleNote($style);
         $intensityNote = $this->intensityNote($intensity);
         $priorHistorySection = $priorHistory ? "\n\n## Prior Exchange History\n{$priorHistory}" : '';
         $prevReactSection    = $prevReactionsThisTurn ? "\n\n## Other Reactors This Turn\n{$prevReactionsThisTurn}" : '';
-        return [
-            [
-                'role'    => 'system',
-                'content' => "You are a reactor agent in a structured debate.
+        $sys = "You are a reactor agent in a structured debate.
 {$styleNote}
 {$intensityNote}
 Language: {$language}.
-Do not repeat the primary agent. Add value. Be specific.",
-            ],
-            [
-                'role'    => 'user',
-                'content' => "## User Question\n{$question}\n\n## Primary Agent Answer\n{$primaryAnswer}{$priorHistorySection}{$prevReactSection}\n\n## Your Role\nYou are a reactor agent.\n\n## Task\nReact to the question and to the primary agent's latest answer.\nDo not repeat generic agreement.\nQuote or summarize the specific point you react to.\nAdd a useful objection, improvement, risk or nuance.\n\n## Output Format\n## Reaction\n- Point challenged or improved:\n- Why it matters:\n- Suggested improvement:\n\n## New Argument\nyes|no\n\n## Confidence\n[0.0 to 1.0]",
-            ],
+Do not repeat the primary agent. Add value. Be specific.";
+        $sys .= $this->promptBuilder->buildEvidenceDisciplineSystemBlock();
+        $ctx = $turn === 1 ? $this->promptBuilder->buildContextDocumentContent(
+            $this->reactiveContextDoc,
+            $this->reactiveSessionId,
+            $question,
+            null
+        ) : '';
+        $user = $ctx . "## User Question\n{$question}\n\n## Primary Agent Answer\n{$primaryAnswer}{$priorHistorySection}{$prevReactSection}\n\n## Your Role\nYou are a reactor agent.\n\n## Task\nReact to the question and to the primary agent's latest answer.\nDo not repeat generic agreement.\nQuote or summarize the specific point you react to.\nAdd a useful objection, improvement, risk or nuance.\n\n## Output Format\n## Reaction\n- Point challenged or improved:\n- Why it matters:\n- Suggested improvement:\n\n## New Argument\nyes|no\n\n## Confidence\n[0.0 to 1.0]";
+        return [
+            ['role' => 'system', 'content' => $sys],
+            ['role' => 'user',   'content' => $user],
         ];
     }
 
     private function buildSynthesisPrompt(string $question, array $allMessages, string $language): array
     {
         $threadText = $this->buildThreadText($allMessages);
-        return [
-            [
-                'role'    => 'system',
-                'content' => "You are the synthesis agent. Produce a concise, balanced final synthesis.
+        $sys = "You are the synthesis agent. Produce a concise, balanced final synthesis.
 Language: {$language}.
-Be concrete. Avoid repetition. Focus on what was resolved and what remains uncertain.",
-            ],
-            [
-                'role'    => 'user',
-                'content' => "## User Question\n{$question}\n\n## Full Reactive Thread\n{$threadText}\n\n## Task\nProduce a concise final synthesis.\n\n## Output Format\n## Final Answer\n[The best answer after discussion]\n\n## Strongest Objections\n[List objections that were not fully resolved]\n\n## Remaining Uncertainties\n[What is still unclear]\n\n## Recommendation\n[Practical next step]",
-            ],
+Be concrete. Avoid repetition. Focus on what was resolved and what remains uncertain.";
+        $sys .= $this->promptBuilder->buildEvidenceDisciplineSystemBlock();
+        $user = $this->promptBuilder->buildContextDocumentContent(
+            $this->reactiveContextDoc,
+            $this->reactiveSessionId,
+            $question,
+            null
+        )
+            . "## User Question\n{$question}\n\n## Full Reactive Thread\n{$threadText}\n\n## Task\nProduce a concise final synthesis.\n\n## Output Format\n## Final Answer\n[The best answer after discussion]\n\n## Strongest Objections\n[List objections that were not fully resolved]\n\n## Remaining Uncertainties\n[What is still unclear]\n\n## Recommendation\n[Practical next step]";
+        return [
+            ['role' => 'system', 'content' => $sys],
+            ['role' => 'user',   'content' => $user],
         ];
     }
 

@@ -8,6 +8,7 @@ use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\MessageRepository;
 use Infrastructure\Persistence\ContextDocumentRepository;
 use Domain\Orchestration\DecisionRoomRunner;
+use Domain\Orchestration\PromptBuilder;
 
 class DecisionRoomController {
     private SessionRepository $sessionRepo;
@@ -45,7 +46,9 @@ class DecisionRoomController {
         }
 
         $language   = $session['language'] ?? 'en';
-        $contextDoc = (new ContextDocumentRepository())->findBySession($sessionId);
+        $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt(
+            (new ContextDocumentRepository())->findBySession($sessionId)
+        );
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($session['decision_threshold'] ?? null);
 
         // Feature 3: Devil's Advocate — read from session config

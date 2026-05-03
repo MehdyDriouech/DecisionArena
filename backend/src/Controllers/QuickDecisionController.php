@@ -7,6 +7,7 @@ use Http\Response;
 use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\ContextDocumentRepository;
 use Domain\Orchestration\QuickDecisionRunner;
+use Domain\Orchestration\PromptBuilder;
 
 class QuickDecisionController {
     private SessionRepository         $sessionRepo;
@@ -38,7 +39,9 @@ class QuickDecisionController {
         $forceDisagreement = array_key_exists('force_disagreement', $data)
             ? (bool)$data['force_disagreement']
             : (bool)($session['force_disagreement'] ?? false);
-        $contextDoc = $this->docRepo->findBySession($sessionId);
+        $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt(
+            $this->docRepo->findBySession($sessionId)
+        );
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($session['decision_threshold'] ?? null);
 
         $result = $this->runner->run(

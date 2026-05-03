@@ -22,18 +22,27 @@ class EvidenceRepository
         string $status,
         float $confidence,
         ?string $evidenceText,
-        ?string $sourceReference
+        ?string $sourceReference,
+        string $supportClass = 'not_applicable',
+        string $importance = 'medium',
+        ?string $linkedChunkIds = null,
+        string $sourceLayer = 'none',
+        int $challengeFlag = 0
     ): int {
         $now = date('c');
         $stmt = $this->pdo->prepare("
             INSERT INTO evidence_claims
               (session_id, message_id, agent_id, claim_text, claim_type, status,
-               confidence, evidence_text, source_reference, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+               confidence, evidence_text, source_reference,
+               support_class, importance, linked_chunk_ids, source_layer, challenge_flag,
+               created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ");
         $stmt->execute([
             $sessionId, $messageId, $agentId, $claimText, $claimType,
-            $status, $confidence, $evidenceText, $sourceReference, $now, $now,
+            $status, $confidence, $evidenceText, $sourceReference,
+            $supportClass, $importance, $linkedChunkIds, $sourceLayer, $challengeFlag,
+            $now, $now,
         ]);
         return (int) $this->pdo->lastInsertId();
     }

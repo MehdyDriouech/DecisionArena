@@ -352,6 +352,13 @@ function renderNewSession() {
     : ns.mode === 'jury' ? t('jury.run')
     : t('newSession.launchChat');
 
+  const forkBannerHtml = ns.isFork ? `
+    <div class="info-banner" style="margin-bottom:16px;padding:12px 16px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.35);border-radius:8px;font-size:13px;color:var(--text-secondary);">
+      ${escHtml(t('hitl.forkBanner'))}
+    </div>` : '';
+
+  const continueLabel = ns.isFork ? t('hitl.forkContinue') : submitLabel;
+
   const isFastDecision = ns.mode === 'decision-room' && ns.fastDecisionEnabled !== false;
   if (isSimpleDisplay) {
     const basicIntent = (ns.mode === 'quick-decision' || ns.mode === 'decision-room')
@@ -365,6 +372,8 @@ function renderNewSession() {
         <div class="page-title">${t('newSession.title')}</div>
         <div class="page-subtitle">${t('newSession.subtitle')}</div>
       </div>
+
+      ${forkBannerHtml}
 
       ${renderStarterModelsSection()}
 
@@ -408,7 +417,7 @@ function renderNewSession() {
 
         <button class="btn btn-primary" data-action="launch-session" ${state.isLoading ? 'disabled' : ''}>
           ${state.isLoading ? '<span class="spinner"></span>' : ''}
-          Lancer l'analyse
+          ${continueLabel}
         </button>
       </div>
     `;
@@ -419,6 +428,8 @@ function renderNewSession() {
       <div class="page-title">${t('newSession.title')}</div>
       <div class="page-subtitle">${t('newSession.subtitle')}</div>
     </div>
+
+    ${forkBannerHtml}
 
     ${renderStarterModelsSection()}
 
@@ -584,7 +595,7 @@ function renderNewSession() {
       </div>
       <button class="btn btn-primary" data-action="launch-session" ${state.isLoading ? 'disabled' : ''}>
         ${state.isLoading ? '<span class="spinner"></span>' : ''}
-        ${submitLabel}
+        ${continueLabel}
       </button>
     </div>
 

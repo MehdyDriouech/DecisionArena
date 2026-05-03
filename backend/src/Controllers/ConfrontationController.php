@@ -7,6 +7,7 @@ use Http\Response;
 use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\ContextDocumentRepository;
 use Domain\Orchestration\ConfrontationRunner;
+use Domain\Orchestration\PromptBuilder;
 
 class ConfrontationController {
     private SessionRepository $sessionRepo;
@@ -51,7 +52,9 @@ class ConfrontationController {
         $includeSynthesis  = (bool)($data['include_synthesis'] ?? $data['final_synthesis']          ?? true);
         $forceDisagreement = (bool)($data['force_disagreement'] ?? $session['force_disagreement']   ?? false);
         $language   = $session['language'] ?? 'fr';
-        $contextDoc = (new ContextDocumentRepository())->findBySession($sessionId);
+        $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt(
+            (new ContextDocumentRepository())->findBySession($sessionId)
+        );
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($session['decision_threshold'] ?? null);
 
         if (!in_array($interactionStyle, ['sequential', 'agent-to-agent'], true)) {

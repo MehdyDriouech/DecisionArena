@@ -1,5 +1,5 @@
 /* New Session feature — action handlers, change listeners */
-import { registerAction, registerChangeListener, registerInputListener } from '../../core/events.js';
+import { registerAction, registerChangeListener, registerInputListener, dispatchAction } from '../../core/events.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -33,6 +33,9 @@ function resetNewSessionState() {
     teamProviderAssignments: { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } },
     selectedStarter: null,
     starterModelsCollapsed: false,
+    isFork: false,
+    source_session_id: null,
+    forkDraftSessionId: null,
   };
 }
 
@@ -182,6 +185,28 @@ function registerNewSessionHandlers() {
   registerAction('launch-session', async () => {
     const { state, render, navigate, SessionService, ContextDocService, t } = getCtx();
     const ns = state.newSession;
+
+    /** Variante (rerun) : session déjà créée côté API — ouvrir sans dupliquer */
+    if (ns.forkDraftSessionId) {
+      try {
+        state.isLoading = true;
+        state.error = null;
+        render();
+        const fake = document.createElement('button');
+        fake.dataset.sessionId = ns.forkDraftSessionId;
+        fake.dataset.mode = ns.mode || 'chat';
+        await dispatchAction('open-session', { element: fake });
+        state.newSession = resetNewSessionState();
+      } catch (err) {
+        state.error = err?.message || String(err);
+        render();
+      } finally {
+        state.isLoading = false;
+        render();
+      }
+      return;
+    }
+
     // Mode affichage Simple (sidebar) : préremplir les champs avancés masqués pour éviter les erreurs de validation.
     const isSimpleDisplay = state.uiMode !== 'expert';
     const starterLocksConfig = Boolean(
@@ -671,4 +696,4 @@ function _buildLlmPayload(ns) {
   return {};
 }
 
-export { registerNewSessionHandlers, registerScenarioHandlers, _applyTemplate, _applyScenarioPack };
+export { registerNewSessionHandlers, registerScenarioHandlers, _applyTemplate, _applyScenarioPack, resetNewSessionState };

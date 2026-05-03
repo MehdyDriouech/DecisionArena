@@ -245,7 +245,40 @@ class DecisionSummaryService {
             $nextStep = $relSum['recommended_action'] ?? ($guardrails['recommended_action'] ?? '');
         }
 
-        $primaryWarning = $guardrails['warnings'][0] ?? ($runResult['reliability_warnings'][0]['key'] ?? '');
+        $primaryWarning = $guardrails['warnings'][0] ?? ($runResult['reliability_warnings'][0] ?? '');
+
+        if (!empty(($runResult['context_quality'] ?? [])['context_truncated'])) {
+            $t = 'Context document was truncated for model prompts; treat conclusions as lower confidence.';
+            $primaryWarning = $primaryWarning !== '' ? ($t . ' ' . $primaryWarning) : $t;
+        }
+
+        $evidenceReport = $runResult['evidence_report'] ?? null;
+        $evidenceWarnings = [];
+        if (is_array($evidenceReport)) {
+            $hiU = (int)($evidenceReport['high_importance_unsupported_count'] ?? 0);
+            $hiC = (int)($evidenceReport['high_importance_contradicted_count'] ?? 0);
+            $con = (int)($evidenceReport['contradicted_claims_count'] ?? 0);
+            $dens = (float)($evidenceReport['evidence_density'] ?? 1.0);
+            if ($hiC > 0 || $con > 0) {
+                $evidenceWarnings[] = 'Some claims contradict the shared context or retrieved evidence.';
+            }
+            if ($hiU > 0) {
+                $evidenceWarnings[] = 'Some important claims are unsupported by the context document.';
+            }
+            if ($dens < 0.35 && ($evidenceReport['total_claims'] ?? 0) >= 3) {
+                $evidenceWarnings[] = 'Evidence density for important claims is low — conclusions should be cautious.';
+            }
+            $chN = (int)($evidenceReport['challenged_claims_count'] ?? 0);
+            if ($chN > 0) {
+                $evidenceWarnings[] = 'Some claims have been challenged by the user (subjective contest — machine support classification unchanged).';
+                $evidenceWarnings[] = 'Confidence may be reduced due to contested evidence.';
+            }
+        }
+
+        if ($evidenceWarnings !== []) {
+            $ewText = implode(' ', $evidenceWarnings);
+            $primaryWarning = $primaryWarning !== '' ? ($ewText . ' ' . $primaryWarning) : $ewText;
+        }
 
         return [
             'decision'        => $decision,
@@ -257,6 +290,15 @@ class DecisionSummaryService {
             'primary_warning' => $primaryWarning,
             'quality_score'   => $qScore['decision_quality_score'] ?? 0,
             'quality_level'   => $qScore['level'] ?? 'poor',
+            'evidence_badge'       => is_array($evidenceReport) ? ($evidenceReport['evidence_badge'] ?? null) : null,
+            'evidence_density'     => is_array($evidenceReport) ? ($evidenceReport['evidence_density'] ?? null) : null,
+            'evidence_metrics'     => is_array($evidenceReport) ? [
+                'unsupported_claims_count'  => $evidenceReport['unsupported_claims_count'] ?? null,
+                'contradicted_claims_count' => $evidenceReport['contradicted_claims_count'] ?? null,
+                'high_importance_unsupported_count' => $evidenceReport['high_importance_unsupported_count'] ?? null,
+                'challenged_claims_count' => $evidenceReport['challenged_claims_count'] ?? null,
+                'high_importance_challenged_count' => $evidenceReport['high_importance_challenged_count'] ?? null,
+            ] : null,
         ];
     }
 

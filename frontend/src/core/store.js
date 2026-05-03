@@ -105,6 +105,9 @@ const createInitialState = () => ({
     selectedStarter: null,
     /** Replie la grille « Démarrer avec un modèle » sur Nouvelle session */
     starterModelsCollapsed: false,
+    isFork: false,
+    source_session_id: null,
+    forkDraftSessionId: null,
   },
   currentContextDoc: null,
   ctxDocPanelOpen: false,

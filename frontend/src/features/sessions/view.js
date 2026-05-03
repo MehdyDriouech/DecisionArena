@@ -121,6 +121,9 @@ function renderSessionCard(session, fullActions = false) {
         <button class="btn btn-secondary btn-sm" data-action="open-rerun-modal" data-session-id="${escHtml(session.id)}">
           🔁 ${t('sessions.rerun')}
         </button>
+        <button class="btn btn-secondary btn-sm" data-action="fork-session" data-session-id="${escHtml(session.id)}" title="${escHtml(t('hitl.forkVariant'))}">
+          🔀 ${t('hitl.forkVariant')}
+        </button>
         <button class="btn btn-secondary btn-sm" data-action="export-session" data-session-id="${escHtml(session.id)}" data-format="markdown">
           ${t('sessions.exportMd')}
         </button>

@@ -45,7 +45,8 @@ class ChatRunner {
                     $history,
                     $userMessage,
                     $language,
-                    $contextDoc
+                    $contextDoc,
+                    $sessionId
                 );
 
                 $routed  = $this->providerRouter->chat($messages, $agent);

@@ -17,6 +17,7 @@ use Infrastructure\Persistence\ContextDocumentRepository;
 use Infrastructure\Persistence\ConfidenceTimelineRepository;
 use Infrastructure\Persistence\PersonaScoreRepository;
 use Infrastructure\Persistence\BiasReportRepository;
+use Domain\Orchestration\PromptBuilder;
 
 class DecisionSummaryController {
     private SessionRepository $sessionRepo;
@@ -64,7 +65,9 @@ class DecisionSummaryController {
         $votes     = $this->voteRepo->findVotesBySession($id);
         $decision  = $this->voteRepo->findDecisionBySession($id);
         $verdict   = $this->verdictRepo->findBySession($id);
-        $contextDoc = $this->contextDocRepo->findBySession($id);
+        $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt(
+            $this->contextDocRepo->findBySession($id)
+        );
         $threshold = ReliabilityConfig::normalizeThreshold($session['decision_threshold'] ?? null);
         $objective = (string)($session['initial_prompt'] ?? '');
         $timelineRows = $this->timelineRepo->findBySession($id);

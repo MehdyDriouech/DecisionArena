@@ -5,6 +5,7 @@ use Domain\Agents\AgentAssembler;
 use Domain\DecisionReliability\DecisionReliabilityService;
 use Domain\DecisionReliability\DevilAdvocateTriggerPolicy;
 use Domain\DecisionReliability\ReliabilityConfig;
+use Domain\Evidence\EvidencePromptBuilder;
 use Domain\Evidence\EvidenceReportService;
 use Domain\Risk\RiskProfileAnalyzer;
 use Domain\SocialDynamics\SocialDynamicsService;
@@ -160,18 +161,31 @@ class DecisionRoomRunner {
                         $this->debateMemory->buildPromptContext($state),
                         $assignedTarget,
                         $socialDynamicsBlock,
-                        $forceStrongNext && $agentId !== 'synthesizer'
+                        $forceStrongNext && $agentId !== 'synthesizer',
+                        $sessionId,
+                        null
                     );
 
                     // Inject synthesizer constraints on the final round
                     if ($agentId === 'synthesizer' && $round === $rounds) {
                         try {
+                            $preEvidence = null;
+                            try {
+                                $preEvidence = $this->evidenceService->generateAndPersist(
+                                    $sessionId,
+                                    $this->messageRepo->findBySession($sessionId),
+                                    $contextDoc
+                                );
+                            } catch (\Throwable) {
+                            }
                             $preDecision = $this->voteAggregator->recompute($sessionId, $decisionThreshold);
                             $preEnvelope = $this->reliabilityService->buildEnvelope(
                                 $objective, $contextDoc, $preDecision,
                                 $this->voteRepo->findVotesBySession($sessionId),
                                 $state['positions'], $state['edges'],
-                                $decisionThreshold, null, null, null, null, null
+                                $decisionThreshold, null, null, null, null, null,
+                                $preEvidence,
+                                null
                             );
                             $preFcData       = $preEnvelope['false_consensus'] ?? [];
                             $preDebateQuality= (float)(($preFcData['diversity_score'] ?? 0.5) * 100);
@@ -190,6 +204,7 @@ class DecisionRoomRunner {
                                 array_merge($preEnvelope, [
                                     'debate_quality_score' => $preDebateQuality,
                                     'guardrails'           => $preGuardrails,
+                                    'evidence_report'      => $preEvidence,
                                 ])
                             );
                             $formatInstruction = $this->promptBuilder->buildSynthesizerOutputFormatInstruction();
@@ -333,12 +348,26 @@ class DecisionRoomRunner {
                         fn($m) => '[' . ($m['agent_id'] ?? 'agent') . ']: ' . ($m['content'] ?? ''),
                         $last3
                     ));
+                    $daEvidence = null;
+                    try {
+                        $daEvidence = $this->evidenceService->generateAndPersist(
+                            $sessionId,
+                            $this->messageRepo->findBySession($sessionId),
+                            $contextDoc
+                        );
+                    } catch (\Throwable) {
+                    }
+                    $daUser = (new EvidencePromptBuilder())->buildDevilAdvocateUserMessage(
+                        $context,
+                        $daEvidence,
+                        $contextDoc
+                    );
                     $daMessages = [
                         ['role' => 'system', 'content' => $daPrompt],
-                        ['role' => 'user', 'content' => "Debate so far: ...$context..."],
+                        ['role' => 'user', 'content' => $daUser],
                     ];
                     try {
-                        $daRouted  = $this->providerRouter->chat($daMessages, null, null, null, null);
+                        $daRouted  = $this->providerRouter->chat($daMessages, null, null, null);
                         $daContent = $daRouted['content'];
                         $daMsg     = $this->messageRepo->create([
                             'id'                       => $this->uuid(),
@@ -539,6 +568,7 @@ class DecisionRoomRunner {
                 'guardrails'             => $guardrails,
                 'decision_quality_score' => $qualityScore,
                 'risk_profile'           => $riskProfile,
+                'evidence_report'        => $evidenceReport,
             ])
         );
 

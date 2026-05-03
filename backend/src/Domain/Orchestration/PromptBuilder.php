@@ -4,16 +4,113 @@ namespace Domain\Orchestration;
 use Domain\Agents\Agent;
 use Infrastructure\Markdown\MarkdownFileLoader;
 use Infrastructure\Logging\Logger;
+use Infrastructure\Persistence\ContextDocumentChunkRepository;
 
 class PromptBuilder {
+    /** Upper bound aligned with ContextDocumentController (storage). */
+    public const MAX_CONTEXT_STORAGE_CHARS = 50000;
+    /** Max characters injected into model prompts (UTF-8); rest truncated with flag. */
+    public const MAX_CONTEXT_INJECT_CHARS = 32000;
+
     private string $storageDir;
     private MarkdownFileLoader $loader;
     private Logger $logger;
+
+    /** @var array<string, mixed> Metadata from last buildContextDocumentContent FTS step (merged into prompt logs). */
+    private array $lastRetrievalLogMeta = [];
+
+    /** @var array<string, list<array{id:int,chunk_index:int,content:string,rank:float}>> */
+    private static array $ftsRetrievalResultCache = [];
+
+    private const FTS_CACHE_MAX_ENTRIES = 64;
 
     public function __construct() {
         $this->storageDir = __DIR__ . '/../../../storage';
         $this->loader     = new MarkdownFileLoader($this->storageDir);
         $this->logger     = new Logger();
+    }
+
+    /**
+     * Adds prompt injection fields without mutating stored document text.
+     * - content: full text from DB (for evidence / risk / exports)
+     * - prompt_content: optional slice passed to the model via buildContextDocumentContent()
+     *
+     * @param ?array<string,mixed> $doc
+     * @return ?array<string,mixed>
+     */
+    public function prepareContextDocumentForPrompt(?array $doc): ?array {
+        if ($doc === null) {
+            return null;
+        }
+        $content = (string)($doc['content'] ?? '');
+        if ($content === '') {
+            return $doc;
+        }
+        $charset = 'UTF-8';
+        $storageChars = (int)($doc['character_count'] ?? mb_strlen($content, $charset));
+        if ($storageChars !== mb_strlen($content, $charset)) {
+            $storageChars = mb_strlen($content, $charset);
+        }
+        $hash      = md5($content);
+        $max       = self::MAX_CONTEXT_INJECT_CHARS;
+        $out       = array_merge($doc, [
+            'context_truncated'      => false,
+            'context_injected_chars' => $storageChars,
+            'context_hash'           => $hash,
+            'context_storage_chars'  => $storageChars,
+        ]);
+        if (mb_strlen($content, $charset) > $max) {
+            $promptBody = mb_substr($content, 0, $max, $charset)
+                . "\n\n[NOTICE: Context truncated for model prompt. Full document: {$storageChars} chars; injected: {$max} chars.]";
+            $out['prompt_content']         = $promptBody;
+            $out['context_truncated']      = true;
+            $out['context_injected_chars']   = mb_strlen($promptBody, $charset);
+        }
+        return $out;
+    }
+
+    /**
+     * System-level evidence discipline (Phase 1 — all orchestration modes).
+     */
+    public function buildEvidenceDisciplineSystemBlock(): string {
+        return <<<'TEXT'
+
+---
+## Evidence discipline (shared context)
+
+If a claim is not supported by the **Shared Context Document** in this task:
+
+- explicitly label it as **unsupported**
+- do NOT rely on prior knowledge as a substitute for missing context
+- do NOT fabricate citations
+
+When a "## Retrieved excerpts" section appears in the user message, you may reference those rows as **[E1], [E2], …** only when the cited text is clearly relevant; you are not required to cite in every sentence.
+
+TEXT;
+    }
+
+    /**
+     * @param ?array<string,mixed> $contextDoc
+     * @return array{context_injected_chars:int,context_truncated:bool,context_hash:?string}
+     */
+    private function contextPromptLogMeta(?array $contextDoc): array {
+        if (!$contextDoc || ((string)($contextDoc['content'] ?? '') === '' && ($contextDoc['prompt_content'] ?? '') === '')) {
+            return [
+                'context_injected_chars' => 0,
+                'context_truncated'      => false,
+                'context_hash'           => null,
+            ];
+        }
+        return [
+            'context_injected_chars' => (int)($contextDoc['context_injected_chars'] ?? 0),
+            'context_truncated'      => (bool)($contextDoc['context_truncated'] ?? false),
+            'context_hash'           => $contextDoc['context_hash'] ?? null,
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function ftsRetrievalPromptLogMeta(): array {
+        return $this->lastRetrievalLogMeta;
     }
 
     public function buildChatMessages(
@@ -22,10 +119,16 @@ class PromptBuilder {
         array $conversationHistory,
         string $userMessage,
         string $language = 'en',
-        ?array $contextDoc = null
+        ?array $contextDoc = null,
+        ?string $retrievalSessionId = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'chat', $language);
-        $contextPrefix = $this->buildContextDocumentContent($contextDoc);
+        $contextPrefix = $this->buildContextDocumentContent(
+            $contextDoc,
+            $retrievalSessionId,
+            $sessionContext,
+            $userMessage
+        );
         $userContent   = $contextPrefix . $this->buildUserContent($sessionContext, $conversationHistory, $userMessage, null);
 
         $msgs = [
@@ -35,12 +138,12 @@ class PromptBuilder {
 
         $this->logger->logPromptBuild('prompt_built_chat', [
             'agent_id' => $agent->id,
-            'metadata' => [
+            'metadata' => array_merge([
                 'mode' => 'chat',
                 'message_count' => count($msgs),
                 'character_count' => mb_strlen($systemContent, 'UTF-8') + mb_strlen($userContent, 'UTF-8'),
                 'context_doc_injected' => !empty($contextDoc['content']),
-            ],
+            ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
         ]);
 
         return $msgs;
@@ -58,14 +161,18 @@ class PromptBuilder {
         ?array $memoryContext = null,
         ?string $assignedTarget = null,
         ?string $socialDynamicsBlock = null,
-        bool $forceStrongContradictionNext = false
+        bool $forceStrongContradictionNext = false,
+        ?string $retrievalSessionId = null,
+        ?string $retrievalLastUserMessage = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'decision-room', $language);
 
         $roundPolicy      = new RoundPolicy();
         $roundInstruction = $roundPolicy->getRoundInstruction($round, $totalRounds, $forceStrongContradictionNext);
 
-        $userContent  = $this->buildContextDocumentContent($contextDoc);
+        $userContent  = $this->buildContextDocumentContent(
+            $contextDoc, $retrievalSessionId, $objective, $retrievalLastUserMessage
+        );
         $userContent .= "**Objective:** $objective\n\n";
         if (!empty($previousRoundMessages)) {
             $userContent .= "**Previous Round Contributions:**\n";
@@ -115,7 +222,7 @@ class PromptBuilder {
 
         $this->logger->logPromptBuild('prompt_built_decision_room', [
             'agent_id' => $agent->id,
-            'metadata' => [
+            'metadata' => array_merge([
                 'mode' => 'decision-room',
                 'round' => $round,
                 'total_rounds' => $totalRounds,
@@ -124,7 +231,7 @@ class PromptBuilder {
                 'context_doc_injected' => !empty($contextDoc['content']),
                 'memory_injected' => !empty($memoryContext['argument_memory_summary']),
                 'force_disagreement' => (bool)$forceDisagreement,
-            ],
+            ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
         ]);
 
         return $msgs;
@@ -136,13 +243,19 @@ class PromptBuilder {
         array $previousMessages,
         string $phaseKey,
         int $phaseNumber,
-        string $language = 'en'
+        string $language = 'en',
+        ?array $contextDoc = null,
+        ?string $retrievalSessionId = null,
+        ?string $retrievalLastUserMessage = null
     ): array {
         $systemContent      = $this->buildSystemContent($agent, 'confrontation', $language);
         $confrontationPolicy = $this->loadPrompt('confrontation-policy') ?? '';
         $phaseInstruction   = $this->getConfrontationPhaseInstruction($phaseKey, $agent->id);
 
-        $userContent = "**Objective under debate:** $objective\n\n";
+        $userContent  = $this->buildContextDocumentContent(
+            $contextDoc, $retrievalSessionId, $objective, $retrievalLastUserMessage
+        );
+        $userContent .= "**Objective under debate:** $objective\n\n";
 
         if (!empty($previousMessages)) {
             $userContent .= "**Previous contributions:**\n";
@@ -165,10 +278,21 @@ class PromptBuilder {
             $systemFull .= "\n\n---\n\n" . $socialPolicy;
         }
 
-        return [
+        $msgs = [
             ['role' => 'system', 'content' => $systemFull],
             ['role' => 'user',   'content' => $userContent],
         ];
+        $this->logger->logPromptBuild('prompt_built_confrontation_phase', [
+            'agent_id' => $agent->id,
+            'metadata' => array_merge([
+                'mode' => 'confrontation',
+                'phase' => $phaseKey,
+                'message_count' => count($msgs),
+                'character_count' => mb_strlen($systemFull, 'UTF-8') + mb_strlen($userContent, 'UTF-8'),
+                'context_doc_injected' => !empty($contextDoc['content']),
+            ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
+        ]);
+        return $msgs;
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -187,7 +311,9 @@ class PromptBuilder {
         ?array $memoryContext = null,
         ?string $assignedTarget = null,
         ?string $socialDynamicsBlock = null,
-        bool   $forceStrongContradictionNext = false
+        bool   $forceStrongContradictionNext = false,
+        ?string $retrievalSessionId = null,
+        ?string $retrievalLastUserMessage = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'confrontation', $language);
 
@@ -196,7 +322,9 @@ class PromptBuilder {
             $forceStrongContradictionNext
         );
 
-        $userContent  = $this->buildContextDocumentContent($contextDoc);
+        $userContent  = $this->buildContextDocumentContent(
+            $contextDoc, $retrievalSessionId, $objective, $retrievalLastUserMessage
+        );
         $userContent .= "**Objective under debate:** $objective\n\n";
 
         if (!empty($previousMessages)) {
@@ -238,7 +366,7 @@ class PromptBuilder {
 
         $this->logger->logPromptBuild('prompt_built_confrontation', [
             'agent_id' => $agent->id,
-            'metadata' => [
+            'metadata' => array_merge([
                 'mode' => 'confrontation',
                 'round' => $currentRound,
                 'total_rounds' => $totalRounds,
@@ -248,7 +376,7 @@ class PromptBuilder {
                 'context_doc_injected' => !empty($contextDoc['content']),
                 'memory_injected' => !empty($memoryContext['argument_memory_summary']),
                 'force_disagreement' => (bool)$forceDisagreement,
-            ],
+            ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
         ]);
 
         return $msgs;
@@ -261,11 +389,15 @@ class PromptBuilder {
         string $language = 'en',
         bool   $forceDisagreement = false,
         ?array $contextDoc = null,
-        ?array $memoryContext = null
+        ?array $memoryContext = null,
+        ?string $retrievalSessionId = null,
+        ?string $retrievalLastUserMessage = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'confrontation', $language);
 
-        $userContent  = $this->buildContextDocumentContent($contextDoc);
+        $userContent  = $this->buildContextDocumentContent(
+            $contextDoc, $retrievalSessionId, $objective, $retrievalLastUserMessage
+        );
         $userContent .= "**Objective debated:** $objective\n\n";
         $userContent .= "**Full Debate History:**\n";
         foreach ($allMessages as $msg) {
@@ -323,7 +455,7 @@ class PromptBuilder {
 
         $this->logger->logPromptBuild('prompt_built_confrontation_synthesis', [
             'agent_id' => $agent->id,
-            'metadata' => [
+            'metadata' => array_merge([
                 'mode' => 'confrontation',
                 'synthesis' => true,
                 'message_count' => count($msgs),
@@ -331,7 +463,7 @@ class PromptBuilder {
                 'context_doc_injected' => !empty($contextDoc['content']),
                 'memory_injected' => !empty($memoryContext['weighted_analysis']),
                 'force_disagreement' => (bool)$forceDisagreement,
-            ],
+            ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
         ]);
 
         return $msgs;
@@ -344,11 +476,15 @@ class PromptBuilder {
         string $language = 'en',
         bool   $forceDisagreement = false,
         ?array $contextDoc = null,
-        ?string $socialDynamicsBlock = null
+        ?string $socialDynamicsBlock = null,
+        ?string $retrievalSessionId = null,
+        ?string $retrievalLastUserMessage = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'quick-decision', $language);
 
-        $userContent  = $this->buildContextDocumentContent($contextDoc);
+        $userContent  = $this->buildContextDocumentContent(
+            $contextDoc, $retrievalSessionId, $objective, $retrievalLastUserMessage
+        );
         $userContent .= "**Objective:** $objective\n\n";
 
         $isSynthesizer = $agent->id === 'synthesizer';
@@ -391,14 +527,14 @@ class PromptBuilder {
 
         $this->logger->logPromptBuild('prompt_built_quick_decision', [
             'agent_id' => $agent->id,
-            'metadata' => [
+            'metadata' => array_merge([
                 'mode' => 'quick-decision',
                 'synthesizer' => ($agent->id === 'synthesizer'),
                 'message_count' => count($msgs),
                 'character_count' => mb_strlen($systemContent, 'UTF-8') + mb_strlen($userContent, 'UTF-8'),
                 'context_doc_injected' => !empty($contextDoc['content']),
                 'force_disagreement' => (bool)$forceDisagreement,
-            ],
+            ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
         ]);
 
         return $msgs;
@@ -416,13 +552,17 @@ class PromptBuilder {
         ?array $memoryContext = null,
         ?string $assignedTarget = null,
         ?string $socialDynamicsBlock = null,
-        bool   $forceStrongContradictionNext = false
+        bool   $forceStrongContradictionNext = false,
+        ?string $retrievalSessionId = null,
+        ?string $retrievalLastUserMessage = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'stress-test', $language);
 
         $roundPolicy = new RoundPolicy();
 
-        $userContent  = $this->buildContextDocumentContent($contextDoc);
+        $userContent  = $this->buildContextDocumentContent(
+            $contextDoc, $retrievalSessionId, $objective, $retrievalLastUserMessage
+        );
         $userContent .= "**Objective to stress-test:** $objective\n\n";
 
         if (!empty($previousRoundMessages)) {
@@ -495,7 +635,7 @@ class PromptBuilder {
 
         $this->logger->logPromptBuild('prompt_built_stress_test', [
             'agent_id' => $agent->id,
-            'metadata' => [
+            'metadata' => array_merge([
                 'mode' => 'stress-test',
                 'round' => $round,
                 'total_rounds' => $totalRounds,
@@ -505,7 +645,7 @@ class PromptBuilder {
                 'context_doc_injected' => !empty($contextDoc['content']),
                 'memory_injected' => !empty($memoryContext['argument_memory_summary']),
                 'force_disagreement' => (bool)$forceDisagreement,
-            ],
+            ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
         ]);
 
         return $msgs;
@@ -612,34 +752,168 @@ class PromptBuilder {
         ];
     }
 
-    private function buildContextDocumentContent(?array $contextDoc): string {
-        if (!$contextDoc || empty($contextDoc['content'])) {
+    public function buildContextDocumentContent(
+        ?array $contextDoc,
+        ?string $retrievalSessionId = null,
+        ?string $retrievalObjective = null,
+        ?string $retrievalLastUserMessage = null
+    ): string {
+        $this->lastRetrievalLogMeta = [
+            'retrieval_query'          => null,
+            'number_of_chunks_indexed' => null,
+            'number_of_excerpts_used' => 0,
+            'retrieval_latency_ms'     => 0,
+        ];
+
+        if ($contextDoc === null) {
+            return '';
+        }
+        $body = '';
+        if (!empty($contextDoc['prompt_content'])) {
+            $body = (string)$contextDoc['prompt_content'];
+        } elseif (!empty($contextDoc['content'])) {
+            $body = (string)$contextDoc['content'];
+        }
+        if ($body === '') {
             return '';
         }
 
-        $title     = $contextDoc['title']             ?? 'Context Document';
-        $source    = $contextDoc['source_type']       ?? 'manual';
-        $filename  = $contextDoc['original_filename'] ?? '';
-        $charCount = $contextDoc['character_count']   ?? mb_strlen($contextDoc['content'], 'UTF-8');
+        $title          = $contextDoc['title']              ?? 'Context Document';
+        $source         = $contextDoc['source_type']        ?? 'manual';
+        $filename       = $contextDoc['original_filename']  ?? '';
+        $storageChars   = (int)($contextDoc['context_storage_chars']
+            ?? $contextDoc['character_count']
+            ?? mb_strlen((string)($contextDoc['content'] ?? $body), 'UTF-8'));
+        $injectedChars  = (int)($contextDoc['context_injected_chars'] ?? mb_strlen($body, 'UTF-8'));
+        $truncatedNote  = !empty($contextDoc['context_truncated'])
+            ? 'yes (model prompt uses first ' . self::MAX_CONTEXT_INJECT_CHARS . ' chars; full document retained in app)'
+            : 'no';
 
-        $out  = "# Shared Context Document\n\n";
+        $out  = "# Hierarchy (non-negotiable)\n";
+        $out .= "1) This Shared Context Document (below)\n";
+        $out .= "2) Retrieved excerpts — only if a \"## Retrieved excerpts\" section is present in this message\n";
+        $out .= "3) Agent claims — never treat as verified facts without support from (1) or (2)\n";
+        $out .= "4) Agent citations — must point to (1) or (2)\n";
+        $out .= "5) Your wording — do not fabricate citations\n\n";
+        $out .= "# Shared Context Document\n\n";
         $out .= "**Title:** $title\n";
         $out .= "**Source:** $source\n";
         if ($filename) {
             $out .= "**Filename:** $filename\n";
         }
-        $out .= "**Characters:** $charCount\n\n";
+        $out .= "**Characters (stored):** $storageChars\n";
+        $out .= "**Characters (injected into this prompt):** $injectedChars\n";
+        $out .= "**Truncated for prompt:** $truncatedNote\n\n";
         $out .= "---\n\n";
-        $out .= $contextDoc['content'];
+        $out .= $body;
         $out .= "\n\n---\n\n";
-        $out .= "**Instructions for using this context:**\n";
-        $out .= "- Use this context as shared background for your analysis.\n";
-        $out .= "- Do not ignore it.\n";
-        $out .= "- Do not copy large parts of it verbatim.\n";
-        $out .= "- Separate context-based facts from assumptions.\n";
-        $out .= "- If the context is unclear or contradictory, say so.\n\n";
+
+        $out .= $this->buildFtsExcerptBlockForPrompt(
+            $retrievalSessionId,
+            (string)($retrievalObjective ?? ''),
+            $retrievalLastUserMessage
+        );
+
+        $out .= "[INSTRUCTIONS]\n";
+        $out .= "Use this context if relevant.\n";
+        $out .= "If a claim is not supported, label it as unsupported.\n\n";
 
         return $out;
+    }
+
+    /**
+     * Phase 2 — machine-ranked excerpts (FTS5). Updates {@see $lastRetrievalLogMeta}.
+     * Omits the entire block when there are zero hits (no empty heading).
+     */
+    private function buildFtsExcerptBlockForPrompt(
+        ?string $sessionId,
+        string $objective,
+        ?string $lastUserMessage
+    ): string {
+        if ($sessionId === null || $sessionId === '') {
+            return '';
+        }
+
+        $repo       = new ContextDocumentChunkRepository();
+        $chunkCount = $repo->countBySession($sessionId);
+        $this->lastRetrievalLogMeta['number_of_chunks_indexed'] = $chunkCount;
+
+        $ftsQ = ContextDocumentChunkRepository::buildFtsMatchQuery($objective, $lastUserMessage);
+        $this->lastRetrievalLogMeta['retrieval_query'] = $ftsQ !== '' ? $ftsQ : null;
+
+        if ($ftsQ === '' || $chunkCount === 0) {
+            return '';
+        }
+
+        $cacheKey = $sessionId . "\0" . $ftsQ;
+        $t0       = hrtime(true);
+        try {
+            if (isset(self::$ftsRetrievalResultCache[$cacheKey])) {
+                $picked = self::$ftsRetrievalResultCache[$cacheKey];
+            } else {
+                $raw = $repo->searchTopChunks($sessionId, $ftsQ, 8);
+                $picked = ContextDocumentChunkRepository::dedupeByChunkIndex($raw, 5);
+                self::$ftsRetrievalResultCache[$cacheKey] = $picked;
+                $this->trimFtsRetrievalCache();
+            }
+
+            $this->lastRetrievalLogMeta['retrieval_latency_ms'] = (int) round(
+                (hrtime(true) - $t0) / 1_000_000
+            );
+            $this->lastRetrievalLogMeta['number_of_excerpts_used'] = count($picked);
+
+            if (empty($picked)) {
+                return '';
+            }
+
+            return $this->formatMachineRankedExcerptsMarkdown($picked) . "\n";
+        } catch (\Throwable) {
+            $this->lastRetrievalLogMeta['retrieval_latency_ms'] = (int) round(
+                (hrtime(true) - $t0) / 1_000_000
+            );
+            $this->lastRetrievalLogMeta['number_of_excerpts_used'] = 0;
+            return '';
+        }
+    }
+
+    /**
+     * @param list<array{id:int,chunk_index:int,content:string,rank:float}> $rows
+     */
+    private function formatMachineRankedExcerptsMarkdown(array $rows): string
+    {
+        $buf = "## Retrieved excerpts (machine-ranked)\n\n";
+        $buf .= "Rules:\n";
+        $buf .= "- Each excerpt comes from the Shared Context Document\n";
+        $buf .= "- Use [E#] to cite excerpts\n";
+        $buf .= "- If no excerpt supports a claim → label as unsupported\n";
+        $buf .= "- do NOT invent sources\n\n";
+        $buf .= "| id | chunk_index | score | excerpt |\n";
+        $buf .= "|----|-------------|-------|---------|\n";
+
+        $n = 1;
+        foreach ($rows as $r) {
+            $eid         = 'E' . $n;
+            $chunkIdx    = (string)($r['chunk_index'] ?? 0);
+            $score       = number_format((float)($r['rank'] ?? 0.0), 2, '.', '');
+            $excerptCell = ContextDocumentChunkRepository::excerptCell((string)($r['content'] ?? ''));
+            $buf .= "| {$eid} | {$chunkIdx} | {$score} | {$excerptCell} |\n";
+            $n++;
+        }
+
+        return rtrim($buf);
+    }
+
+    private function trimFtsRetrievalCache(): void
+    {
+        if (count(self::$ftsRetrievalResultCache) <= self::FTS_CACHE_MAX_ENTRIES) {
+            return;
+        }
+        self::$ftsRetrievalResultCache = array_slice(
+            self::$ftsRetrievalResultCache,
+            -32,
+            null,
+            true
+        );
     }
 
     private function buildFinalVerdictInstruction(): string {
@@ -790,6 +1064,8 @@ class PromptBuilder {
         $parts[] = $orchestratorPolicy;
         $parts[] = "---\n**You are {$agent->persona->name}, the {$agent->persona->title}. Answer ONLY as yourself.**";
 
+        $parts[] = trim($this->buildEvidenceDisciplineSystemBlock());
+
         if ($language === 'fr') {
             $parts[] = "---\n## INSTRUCTION DE LANGUE OBLIGATOIRE\n**Tu dois répondre UNIQUEMENT en français. Toutes tes réponses doivent être rédigées en français, sans exception. Même si le contexte est en anglais, ta réponse doit être entièrement en français.**";
         } elseif ($language === 'en') {
@@ -883,8 +1159,33 @@ class PromptBuilder {
         $cqScore       = number_format((float)($cq['score'] ?? 0), 0);
         $dqScore       = number_format((float)($reliabilityData['debate_quality_score'] ?? 0), 0);
         $fcRisk        = $fc['false_consensus_risk'] ?? 'unknown';
-        $evidenceScore = $evidence ? number_format((float)($evidence['score'] ?? 0), 0) : 'N/A (no evidence layer)';
+        $evidenceNorm  = 'N/A (no evidence layer)';
+        if ($evidence) {
+            $scr = isset($evidence['score']) ? (float)$evidence['score'] : (float)($evidence['evidence_score'] ?? 0) * 100;
+            $evidenceNorm = number_format($scr, 0) . '/100 (badge: ' . ($evidence['evidence_badge'] ?? 'n/a') . ', density: '
+                . number_format((float)($evidence['evidence_density'] ?? 0) * 100, 0) . '%)';
+        }
         $riskLevel     = $risk['risk_level'] ?? 'unknown';
+
+        $evidenceWarn = '';
+        if (is_array($evidence)) {
+            $lines = [];
+            $hiu = (int)($evidence['high_importance_unsupported_count'] ?? 0);
+            $hic = (int)($evidence['high_importance_contradicted_count'] ?? 0);
+            $cu  = (int)($evidence['contradicted_claims_count'] ?? 0);
+            if ($hic > 0 || $cu > 0) {
+                $lines[] = 'Contradicted: ' . ($hic > 0 ? "{$hic} high-importance" : "{$cu} total");
+            }
+            if ($hiu > 0) {
+                $lines[] = "Unsupported (high importance): {$hiu}";
+            }
+            if (!empty($cq['context_truncated'])) {
+                $lines[] = 'Context was truncated before prompt injection';
+            }
+            if ($lines !== []) {
+                $evidenceWarn = "\n## Evidence warnings (constraints)\n- " . implode("\n- ", $lines) . "\n\nYou MUST reflect material limitations above in your synthesis. Distinguish supported facts from assumptions. Do not fabricate citations.\n";
+            }
+        }
 
         return <<<TEXT
 
@@ -900,14 +1201,15 @@ class PromptBuilder {
 - context_quality: {$cqLevel} (score: {$cqScore})
 - debate_quality_score: {$dqScore}
 - false_consensus_risk: {$fcRisk}
-- evidence_score: {$evidenceScore}
+- evidence_score: {$evidenceNorm}
 - risk_level: {$riskLevel}
-
+{$evidenceWarn}
 ## Hard Constraints
 You MUST NOT claim there is a clear GO if final_outcome is NO_CONSENSUS, NO_CONSENSUS_FRAGILE or INSUFFICIENT_CONTEXT.
 You MUST NOT describe the decision as reliable if decision_status is FRAGILE or INSUFFICIENT_CONTEXT.
 You MUST explicitly state when the debate was weak or insufficiently adversarial.
 You MUST align the final recommendation with the adjusted_decision above.
+If evidence warnings were listed, include a short "## Evidence warnings" section in your response (max 3 bullets).
 
 TEXT;
     }
@@ -932,6 +1234,9 @@ LOW | MEDIUM | HIGH
 
 ## Reliability Warning
 (one sentence — omit this section only if the decision is strong and reliable)
+
+## Evidence warnings
+(omit if none; otherwise max 3 bullets: Unsupported / Contradicted / Context limitation — use evidence signals from constraints only)
 
 ## Next Step
 (one concrete actionable next step)

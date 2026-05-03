@@ -578,21 +578,56 @@ function renderEvidencePanel(sessionId, report) {
       </div>`;
   }
 
-  const score         = typeof report.evidence_score === 'number' ? Math.round(report.evidence_score * 100) : '–';
+  const scoreNum =
+    typeof report.score === 'number'
+      ? Math.round(report.score)
+      : typeof report.evidence_score === 'number'
+        ? Math.round(report.evidence_score * 100)
+        : null;
+  const score         = scoreNum != null ? scoreNum : '–';
+  const badgeKey      = (report.evidence_badge || '').toLowerCase();
+  const badgeLabelMap = { strong: 'evidence.badge.strong', medium: 'evidence.badge.medium', weak: 'evidence.badge.weak', risky: 'evidence.badge.risky' };
+  const badgeTrKey    = badgeLabelMap[badgeKey] || null;
+  const densPct       = typeof report.evidence_density === 'number' ? Math.round(report.evidence_density * 1000) / 10 : null;
+  const hiUnsup       = report.high_importance_unsupported_count ?? 0;
+  const hiContra      = report.high_importance_contradicted_count ?? 0;
   const unsupported   = report.unsupported_claims_count ?? 0;
   const contradicted  = report.contradicted_claims_count ?? 0;
   const impact        = report.decision_impact ?? 'low';
   const rec           = report.recommendation ?? '';
   const unknowns      = Array.isArray(report.critical_unknowns) ? report.critical_unknowns : [];
+  const claimsRows    = Array.isArray(report.claims) ? report.claims : [];
 
   const impactColor = impact === 'high' ? 'var(--danger)' : impact === 'medium' ? 'var(--warning)' : 'var(--success)';
-  const scoreColor  = score < 40 ? 'var(--danger)' : score < 70 ? 'var(--warning)' : 'var(--success)';
+  const scoreColor  = scoreNum != null ? (score < 40 ? 'var(--danger)' : score < 70 ? 'var(--warning)' : 'var(--success)') : 'var(--text-secondary)';
+  const badgeBadgeColor = badgeKey === 'risky' ? 'var(--danger)' : badgeKey === 'weak' ? 'var(--warning)' : badgeKey === 'medium' ? 'var(--warning)' : 'var(--success)';
 
   const unknownsHtml = unknowns.length
     ? `<ul style="margin:6px 0 0 18px;padding:0;font-size:12px;color:var(--text-secondary);">${
         unknowns.map((u) => `<li>${escHtml(String(u))}</li>`).join('')
       }</ul>`
     : '';
+
+  const claimsTableHtml = claimsRows.length
+    ? `<table style="width:100%;font-size:11px;border-collapse:collapse;margin-top:8px;color:var(--text-secondary);">
+        <thead><tr style="text-align:left;border-bottom:1px solid var(--border);">
+          <th style="padding:4px 6px;">${escHtml(t('evidence.claim.text'))}</th>
+          <th style="padding:4px 6px;">${escHtml(t('evidence.claim.support'))}</th>
+          <th style="padding:4px 6px;">${escHtml(t('evidence.claim.importance'))}</th>
+          <th style="padding:4px 6px;">${escHtml(t('evidence.claim.layer'))}</th>
+          <th style="padding:4px 6px;">${escHtml(t('evidence.claim.chunks'))}</th>
+        </tr></thead>
+        <tbody>${
+          claimsRows.map((c) => `<tr style="border-bottom:1px solid var(--border);vertical-align:top;">
+            <td style="padding:6px;">${escHtml(String(c.claim_text || ''))}</td>
+            <td style="padding:6px;">${escHtml(String(c.support_class || ''))}</td>
+            <td style="padding:6px;">${escHtml(String(c.importance || ''))}</td>
+            <td style="padding:6px;">${escHtml(String(c.source_layer || ''))}</td>
+            <td style="padding:6px;">${escHtml(String(c.linked_chunk_ids || '—'))}</td>
+          </tr>`).join('')
+        }</tbody>
+      </table>`
+    : `<div style="font-size:12px;color:var(--text-muted);">${escHtml(t('socialDynamics.none'))}</div>`;
 
   return `
     <div class="card debate-card" style="margin-top:16px;" id="evidence-panel-${escHtml(sessionId)}">
@@ -602,10 +637,11 @@ function renderEvidencePanel(sessionId, report) {
         <button class="btn btn-secondary btn-sm" style="margin-left:auto;font-size:11px;" data-action="recompute-evidence" data-session-id="${escHtml(sessionId)}"
           title="${escHtml(t('evidence.recompute'))}">↺ ${t('evidence.recompute')}</button>
       </div>
+      ${report.evidence_badge ? `<div style="font-size:13px;font-weight:600;margin-bottom:10px;"><span style="color:var(--text-muted);">${escHtml(t('evidence.badge'))}:</span> <span style="color:${badgeBadgeColor};">${escHtml(badgeTrKey ? t(badgeTrKey) : String(report.evidence_badge))}</span></div>` : ''}
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px;">
         <div class="evidence-metric-cell">
           <div class="evidence-metric-label">${escHtml(t('evidence.score'))}</div>
-          <div class="evidence-metric-value" style="color:${scoreColor};">${score}%</div>
+          <div class="evidence-metric-value" style="color:${scoreColor};">${score}${scoreNum != null ? '%' : ''}</div>
         </div>
         <div class="evidence-metric-cell">
           <div class="evidence-metric-label">${escHtml(t('evidence.unsupported'))}</div>
@@ -620,6 +656,18 @@ function renderEvidencePanel(sessionId, report) {
           <div class="evidence-metric-value" style="color:${impactColor};text-transform:uppercase;font-size:12px;">${escHtml(impact)}</div>
         </div>
       </div>
+      <details style="margin-bottom:10px;font-size:12px;color:var(--text-secondary);">
+        <summary style="cursor:pointer;color:var(--text-muted);">${escHtml(t('evidence.advanced'))}</summary>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-top:10px;">
+          <div><span style="color:var(--text-muted);">${escHtml(t('evidence.density'))}</span><br /><strong>${densPct != null ? `${densPct}%` : '–'}</strong></div>
+          <div><span style="color:var(--text-muted);">${escHtml(t('evidence.hiUnsupported'))}</span><br /><strong>${hiUnsup}</strong></div>
+          <div><span style="color:var(--text-muted);">${escHtml(t('evidence.hiContradicted'))}</span><br /><strong>${hiContra}</strong></div>
+        </div>
+      </details>
+      <details style="margin-bottom:10px;font-size:12px;color:var(--text-secondary);">
+        <summary style="cursor:pointer;color:var(--text-muted);">${escHtml(t('evidence.expert'))}</summary>
+        ${claimsTableHtml}
+      </details>
       ${unknowns.length ? `<div style="margin-bottom:10px;"><div style="font-weight:600;font-size:12px;margin-bottom:2px;">${escHtml(t('evidence.criticalUnknowns'))}</div>${unknownsHtml}</div>` : ''}
       ${rec ? `<div style="font-size:13px;color:var(--text-secondary);line-height:1.45;border-top:1px solid var(--border);padding-top:10px;">${escHtml(rec)}</div>` : ''}
     </div>`;
@@ -889,7 +937,9 @@ function renderSessionHistory() {
 
   const renderHistoryMessage = (msg, idx = 0) => {
     if (msg.role === 'user') {
-      return `<div class="message-user" style="margin-bottom:12px;"><div>${escHtml(msg.content)}</div><div class="message-user-meta">${formatDate(msg.created_at)}</div></div>`;
+      const hitlUser = window.DecisionArena?.utils?.formatHitlMessageBadges?.(msg, t, escHtml) || '';
+      const rerunCh = window.DecisionArena?.utils?.formatRerunWithChallengeButton?.(session.id, msg, t, escHtml) || '';
+      return `<div class="message-user" style="margin-bottom:12px;">${hitlUser}<div>${escHtml(msg.content)}</div><div class="message-user-meta">${formatDate(msg.created_at)}</div>${rerunCh}</div>`;
     }
     const icon       = agentIcon(msg.agent_id);
     const name       = agentName(msg.agent_id);
@@ -916,7 +966,11 @@ function renderSessionHistory() {
     const toggleBtn = isLong
       ? `<button class="btn btn-secondary btn-sm" data-action="toggle-agent-message" data-message-id="${escHtml(messageId)}">${collapsed ? 'Voir' : 'Masquer'}</button>`
       : '';
-    return `<div class="agent-card${daClass}" style="margin-bottom:12px;"><div class="agent-card-header"><span class="agent-icon">${icon}</span><div style="flex:1;min-width:0;"><div class="agent-name">${escHtml(name)}</div></div>${daBadge}${targetBadge}${typeBadge}</div>${contentHtml}${toggleBtn}<div class="agent-card-footer" style="font-size:11px;color:var(--text-muted);">${provBadge}${msg.created_at ? `<span style="margin-left:auto;">${formatDate(msg.created_at)}</span>` : ''}</div></div>`;
+    const chBtn = window.DecisionArena?.utils?.canChallengeMessage?.(msg)
+      ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;font-size:11px;" data-action="challenge-claim" data-message-id="${escHtml(String(msg.id))}">${escHtml(t('hitl.challenge'))}</button>`
+      : '';
+    const hitlAg = window.DecisionArena?.utils?.formatHitlMessageBadges?.(msg, t, escHtml) || '';
+    return `<div class="agent-card${daClass}" style="margin-bottom:12px;"><div class="agent-card-header"><span class="agent-icon">${icon}</span><div style="flex:1;min-width:0;"><div class="agent-name">${escHtml(name)}</div></div>${daBadge}${targetBadge}${typeBadge}</div>${hitlAg}${contentHtml}${toggleBtn}${chBtn}<div class="agent-card-footer" style="font-size:11px;color:var(--text-muted);">${provBadge}${msg.created_at ? `<span style="margin-left:auto;">${formatDate(msg.created_at)}</span>` : ''}</div></div>`;
   };
 
   const bodyHtml = (() => {
@@ -951,6 +1005,18 @@ function renderSessionHistory() {
   // Devil's advocate interventions count
   const daMessages = messages.filter((m) => m.message_type === 'devil_advocate' || m.agent_id === 'devil_advocate');
 
+  const variantBanner = session.parent_session_id
+    ? `<div class="info-banner" style="margin-bottom:16px;padding:12px 16px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.35);border-radius:8px;font-size:13px;color:var(--text-secondary);">
+         ${escHtml(t('hitl.variantSessionBanner'))}
+       </div>`
+    : '';
+
+  const challengeRerunBanner = String(session.rerun_reason || '').includes('challenge_rerun')
+    ? `<div class="info-banner" style="margin-bottom:16px;padding:12px 16px;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.4);border-radius:8px;font-size:13px;color:var(--text-secondary);">
+         ${escHtml(t('hitl.challengeRerunBanner'))}
+       </div>`
+    : '';
+
   // Postmortem badge for session card
   const pmBadge = (() => {
     if (!postmortem?.outcome) return '';
@@ -963,6 +1029,10 @@ function renderSessionHistory() {
       <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:24px;">
         <button class="btn btn-secondary btn-sm" data-nav="sessions">← ${t('nav.back')}</button>
       </div>
+
+      ${variantBanner}
+
+      ${challengeRerunBanner}
 
       ${mode !== 'chat' ? renderDecisionSummaryCard(data) : ''}
 

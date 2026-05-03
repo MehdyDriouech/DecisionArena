@@ -16,6 +16,7 @@ use Infrastructure\Persistence\SessionAgentProvidersRepository;
 use Infrastructure\Persistence\SnapshotRepository;
 use Infrastructure\Persistence\DebateRepository;
 use Infrastructure\Persistence\JuryAdversarialReportRepository;
+use Domain\Orchestration\PromptBuilder;
 use Infrastructure\Persistence\VoteRepository;
 
 class SessionController {
@@ -65,7 +66,9 @@ class SessionController {
         $edges = $this->debateRepo->findEdgesBySession($id);
         $votes = $this->voteRepo->findVotesBySession($id);
         $decision = $this->voteRepo->findDecisionBySession($id);
-        $contextDoc = $this->contextDocRepo->findBySession($id);
+        $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt(
+            $this->contextDocRepo->findBySession($id)
+        );
         $threshold = ReliabilityConfig::normalizeThreshold($session['decision_threshold'] ?? null);
         $objective = (string)($session['initial_prompt'] ?? '');
         $timelineRows = $this->timelineRepo->findBySession($id);

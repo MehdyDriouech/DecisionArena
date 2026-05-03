@@ -150,6 +150,10 @@ class DecisionReliabilityService {
             $push('reliability.issue.cap_applied');
         }
 
+        if (!empty($contextQuality['context_truncated']) && !isset($seen['reliability.issue.context_truncated'])) {
+            $push('reliability.issue.context_truncated');
+        }
+
         $rec = (string)($adjustedDecision['reason'] ?? '');
         if ($rec === '' && !empty($falseConsensus['recommendations'][0])) {
             $rec = (string)$falseConsensus['recommendations'][0];
@@ -164,6 +168,23 @@ class DecisionReliabilityService {
         if ($evidenceReport !== null) {
             $evidenceScore  = (float)($evidenceReport['evidence_score']  ?? 1.0);
             $evidenceImpact = (string)($evidenceReport['decision_impact'] ?? 'low');
+            $density        = (float)($evidenceReport['evidence_density'] ?? 1.0);
+            $hiUnsup        = (int)($evidenceReport['high_importance_unsupported_count'] ?? 0);
+            $hiContra       = (int)($evidenceReport['high_importance_contradicted_count'] ?? 0);
+            $contraN        = (int)($evidenceReport['contradicted_claims_count'] ?? 0);
+
+            if ($hiContra > 0 && !isset($seen['reliability.issue.evidence_contradicted_hi'])) {
+                $push('reliability.issue.evidence_contradicted_hi');
+            } elseif ($contraN > 0 && !isset($seen['reliability.issue.evidence_contradicted'])) {
+                $push('reliability.issue.evidence_contradicted');
+            }
+            if ($hiUnsup > 0 && !isset($seen['reliability.issue.evidence_unsupported_hi'])) {
+                $push('reliability.issue.evidence_unsupported_hi');
+            }
+            if ($density < 0.35 && ($evidenceReport['total_claims'] ?? 0) >= 3 && !isset($seen['reliability.issue.evidence_low_density'])) {
+                $push('reliability.issue.evidence_low_density');
+            }
+
             if ($evidenceImpact === 'high' && !isset($seen['reliability.issue.evidence_gap'])) {
                 $push('reliability.issue.evidence_gap');
             } elseif ($evidenceImpact === 'medium' && count($issues) < 3 && !isset($seen['reliability.issue.evidence_partial'])) {
@@ -277,21 +298,35 @@ class DecisionReliabilityService {
             $reason = $reason ?? 'High false-consensus risk on an iterative / unclear vote outcome.';
         }
 
-        // Evidence downgrade rules
+        // Evidence downgrade rules (Phase 3: density + high-importance taxonomy)
         if ($evidenceReport !== null) {
             $contradicted  = (int)($evidenceReport['contradicted_claims_count'] ?? 0);
             $unsupported   = (int)($evidenceReport['unsupported_claims_count']  ?? 0);
             $total         = (int)($evidenceReport['total_claims']              ?? 0);
             $impact        = (string)($evidenceReport['decision_impact']         ?? 'low');
             $criticals     = (array)($evidenceReport['critical_unknowns']        ?? []);
+            $density       = (float)($evidenceReport['evidence_density']         ?? 1.0);
+            $hiUnsup       = (int)($evidenceReport['high_importance_unsupported_count'] ?? 0);
+            $hiContra      = (int)($evidenceReport['high_importance_contradicted_count'] ?? 0);
 
-            if ($contradicted > 0 && $decisionStatus === 'CONFIDENT') {
+            if ($hiContra > 0 && $decisionStatus === 'CONFIDENT') {
+                $decisionStatus = 'FRAGILE';
+                $reason = $reason ?? 'Evidence: at least one high-importance claim contradicts the shared context.';
+            } elseif ($contradicted > 0 && $decisionStatus === 'CONFIDENT') {
                 $decisionStatus = 'FRAGILE';
                 $reason = $reason ?? "Evidence: {$contradicted} claim(s) directly contradicted by context document.";
             }
-            if ($total > 0 && ($unsupported / $total) >= 0.7 && $decisionStatus === 'CONFIDENT') {
+            if ($hiUnsup >= 2 && $decisionStatus === 'CONFIDENT') {
+                $decisionStatus = 'FRAGILE';
+                $reason = $reason ?? 'Evidence: multiple high-importance claims lack context support.';
+            }
+            if ($total > 0 && ($unsupported / max(1, $total)) >= 0.7 && $decisionStatus === 'CONFIDENT') {
                 $decisionStatus = 'FRAGILE';
                 $reason = $reason ?? "Evidence: over 70% of identified claims are unsupported.";
+            }
+            if ($total >= 4 && $density < 0.3 && $decisionStatus === 'CONFIDENT') {
+                $decisionStatus = 'FRAGILE';
+                $reason = $reason ?? 'Evidence: low support density for important claims relative to context.';
             }
             if (!empty($criticals) && $decisionStatus === 'CONFIDENT') {
                 $decisionStatus = 'FRAGILE';

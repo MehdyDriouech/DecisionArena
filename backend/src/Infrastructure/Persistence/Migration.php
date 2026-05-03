@@ -33,6 +33,7 @@ class Migration {
         $this->createSessionTemplatesTable();
         $this->createSessionVerdictsTable();
         $this->createContextDocumentsTable();
+        $this->createContextDocumentChunksFts();
         $this->createActionPlansTable();
         $this->createSessionComparisonsTable();
         $this->createAppSettingsTable();
@@ -46,12 +47,14 @@ class Migration {
         $this->addMissingColumnsV2();
         $this->createSocialDynamicsTables();
         $this->createEvidenceTables();
+        $this->extendEvidenceClaimsPhase3Columns();
         $this->createRiskProfileTable();
         $this->createLearningInsightsCacheTable();
         $this->createJuryAdversarialReportsTable();
         $this->seedDefaultTemplates();
         $this->seedStressTestTemplate();
         $this->seedDefaultScenarioPacks();
+        $this->backfillContextDocumentChunks();
         $this->purgeOldLogs();
     }
 
@@ -569,6 +572,78 @@ class Migration {
         ");
     }
 
+    private function createContextDocumentChunksFts(): void
+    {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS context_document_chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                start_offset INTEGER NOT NULL,
+                end_offset INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        ");
+        $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_context_doc_chunks_session ON context_document_chunks(session_id)');
+
+        $this->pdo->exec('
+            CREATE VIRTUAL TABLE IF NOT EXISTS context_document_chunks_fts USING fts5(
+                content,
+                content=\'context_document_chunks\',
+                content_rowid=\'id\'
+            )
+        ');
+
+        $this->pdo->exec("
+            CREATE TRIGGER IF NOT EXISTS context_document_chunks_ai AFTER INSERT ON context_document_chunks BEGIN
+                INSERT INTO context_document_chunks_fts(rowid, content) VALUES (new.id, new.content);
+            END
+        ");
+        $this->pdo->exec("
+            CREATE TRIGGER IF NOT EXISTS context_document_chunks_ad AFTER DELETE ON context_document_chunks BEGIN
+                INSERT INTO context_document_chunks_fts(context_document_chunks_fts, rowid, content) VALUES('delete', old.id, old.content);
+            END
+        ");
+        $this->pdo->exec("
+            CREATE TRIGGER IF NOT EXISTS context_document_chunks_au AFTER UPDATE ON context_document_chunks BEGIN
+                INSERT INTO context_document_chunks_fts(context_document_chunks_fts, rowid, content) VALUES('delete', old.id, old.content);
+                INSERT INTO context_document_chunks_fts(rowid, content) VALUES (new.id, new.content);
+            END
+        ");
+    }
+
+    private function backfillContextDocumentChunks(): void
+    {
+        try {
+            $check = $this->pdo->query(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='context_document_chunks'"
+            );
+            if (!$check || !$check->fetch()) {
+                return;
+            }
+            $stmt = $this->pdo->query('SELECT session_id, content FROM session_context_documents');
+            if (!$stmt) {
+                return;
+            }
+            $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+            if (empty($rows)) {
+                return;
+            }
+            $repo = new ContextDocumentChunkRepository();
+            foreach ($rows as $row) {
+                $sid = (string)($row['session_id'] ?? '');
+                $content = (string)($row['content'] ?? '');
+                if ($sid === '' || $content === '') {
+                    continue;
+                }
+                $repo->reindexSession($sid, $content);
+            }
+        } catch (\Throwable) {
+            // Non-fatal: FTS/chunk layer must not break startup
+        }
+    }
+
     private function createActionPlansTable(): void {
         $this->pdo->exec("
             CREATE TABLE IF NOT EXISTS session_action_plans (
@@ -919,6 +994,8 @@ class Migration {
         $this->addColumnIfMissing('messages', 'thread_turn',        'INTEGER NULL');
         $this->addColumnIfMissing('messages', 'reaction_role',      'TEXT NULL');
         $this->addColumnIfMissing('messages', 'reactive_thread_id', 'TEXT NULL');
+        // Human-in-the-loop v2 — trace challenges without new tables
+        $this->addColumnIfMissing('messages', 'meta_json', 'TEXT NULL');
     }
 
     private function createEvidenceTables(): void
@@ -952,6 +1029,15 @@ class Migration {
               updated_at TEXT NOT NULL
             )
         ");
+    }
+
+    /** Phase 3 — claim support taxonomy (nullable for backward compatibility). */
+    private function extendEvidenceClaimsPhase3Columns(): void {
+        $this->addColumnIfMissing('evidence_claims', 'support_class', "TEXT DEFAULT 'not_applicable'");
+        $this->addColumnIfMissing('evidence_claims', 'importance', "TEXT DEFAULT 'medium'");
+        $this->addColumnIfMissing('evidence_claims', 'linked_chunk_ids', 'TEXT NULL');
+        $this->addColumnIfMissing('evidence_claims', 'source_layer', "TEXT DEFAULT 'none'");
+        $this->addColumnIfMissing('evidence_claims', 'challenge_flag', 'INTEGER DEFAULT 0');
     }
 
     private function createRiskProfileTable(): void

@@ -18,6 +18,10 @@ class ContextDocumentRepository {
     }
 
     public function upsert(array $data): array {
+        try {
+            (new ContextDocumentChunkRepository())->deleteBySession($data['session_id']);
+        } catch (\Throwable) {
+        }
         $this->pdo->prepare(
             'DELETE FROM session_context_documents WHERE session_id = ?'
         )->execute([$data['session_id']]);
@@ -43,10 +47,22 @@ class ContextDocumentRepository {
             ':updated_at'        => date('c'),
         ]);
 
+        try {
+            (new ContextDocumentChunkRepository())->reindexSession(
+                $data['session_id'],
+                (string)$data['content']
+            );
+        } catch (\Throwable) {
+        }
+
         return $this->findBySession($data['session_id']);
     }
 
     public function delete(string $sessionId): void {
+        try {
+            (new ContextDocumentChunkRepository())->deleteBySession($sessionId);
+        } catch (\Throwable) {
+        }
         $this->pdo->prepare(
             'DELETE FROM session_context_documents WHERE session_id = ?'
         )->execute([$sessionId]);
