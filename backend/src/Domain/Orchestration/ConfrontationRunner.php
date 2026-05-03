@@ -36,6 +36,9 @@ class ConfrontationRunner {
     private FalseConsensusDetector $falseConsensusDetector;
     private EvidenceReportService $evidenceService;
     private RiskProfileAnalyzer $riskAnalyzer;
+    private \Domain\DecisionReliability\DecisionGuardrailService $guardrailService;
+    private \Domain\DecisionReliability\DecisionQualityScoreService $qualityScoreService;
+    private DecisionSummaryService $summaryService;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -54,6 +57,9 @@ class ConfrontationRunner {
         $this->falseConsensusDetector = new FalseConsensusDetector();
         $this->evidenceService = new EvidenceReportService();
         $this->riskAnalyzer    = new RiskProfileAnalyzer();
+        $this->guardrailService = new \Domain\DecisionReliability\DecisionGuardrailService();
+        $this->qualityScoreService = new \Domain\DecisionReliability\DecisionQualityScoreService();
+        $this->summaryService = new DecisionSummaryService();
     }
 
     /**
@@ -189,7 +195,40 @@ class ConfrontationRunner {
         if ($includeSynthesis) {
             $allMessages = array_merge(...array_values($allRounds));
             $memoryContext = $this->debateMemory->buildPromptContext($state);
-            [$synthesis, $verdict] = $this->runSynthesis($sessionId, $objective, $allMessages, $language, $rounds + 1, $forceDisagreement, $contextDoc, $memoryContext);
+
+            // Build reliability-aware constraint block for synthesis
+            $synthExtraContent = null;
+            try {
+                $preEnvelope  = $this->reliabilityService->buildEnvelope(
+                    $objective, $contextDoc, $automaticDecision,
+                    $this->voteRepo->findVotesBySession($sessionId),
+                    $state['positions'] ?? [], $state['edges'] ?? [],
+                    $decisionThreshold, null, null, null, null, null
+                );
+                $preFcData        = $preEnvelope['false_consensus'] ?? [];
+                $preDebateQuality = (float)(($preFcData['diversity_score'] ?? 0.5) * 100);
+                $preGuardrails    = $this->guardrailService->evaluate(
+                    rawDecision:       $preEnvelope['raw_decision'] ?? [],
+                    adjustedDecision:  $preEnvelope['adjusted_decision'] ?? [],
+                    contextQuality:    $preEnvelope['context_quality'] ?? [],
+                    falseConsensus:    $preFcData,
+                    debateQualityScore:$preDebateQuality,
+                    evidenceReport:    null,
+                    riskProfile:       null,
+                    mode:              'confrontation',
+                    sessionOptions:    []
+                );
+                $synthExtraContent = $this->promptBuilder->buildSynthesizerConstraintBlock(
+                    array_merge($preEnvelope, [
+                        'debate_quality_score' => $preDebateQuality,
+                        'guardrails'           => $preGuardrails,
+                    ])
+                ) . $this->promptBuilder->buildSynthesizerOutputFormatInstruction();
+            } catch (\Throwable $e) {
+                error_log('[ConfrontationRunner] Synthesizer constraint build failed: ' . $e->getMessage());
+            }
+
+            [$synthesis, $verdict] = $this->runSynthesis($sessionId, $objective, $allMessages, $language, $rounds + 1, $forceDisagreement, $contextDoc, $memoryContext, $synthExtraContent);
             if (!empty($synthesis[0]['content'])) {
                 $this->debateMemory->processMessage(
                     $sessionId,
@@ -235,6 +274,44 @@ class ConfrontationRunner {
             $evidenceReport,
             $riskProfile
         );
+
+        $falseConsensusData = $reliability['false_consensus'] ?? [];
+        $debateQualityProxy = (float)(($falseConsensusData['diversity_score'] ?? 0.5) * 100);
+
+        $guardrails = $this->guardrailService->evaluate(
+            rawDecision:       $reliability['raw_decision'] ?? [],
+            adjustedDecision:  $reliability['adjusted_decision'] ?? [],
+            contextQuality:    $reliability['context_quality'] ?? [],
+            falseConsensus:    $falseConsensusData,
+            debateQualityScore:$debateQualityProxy,
+            evidenceReport:    $evidenceReport,
+            riskProfile:       $riskProfile,
+            mode:              'confrontation',
+            sessionOptions:    []
+        );
+
+        if ($guardrails['final_outcome_override'] !== null) {
+            $reliability['adjusted_decision']['final_outcome'] = $guardrails['final_outcome_override'];
+        }
+
+        $qualityScore = $this->qualityScoreService->compute(
+            contextQuality:     $reliability['context_quality'] ?? [],
+            debateQualityScore: $debateQualityProxy,
+            evidenceReport:     $evidenceReport,
+            riskProfile:        $riskProfile,
+            falseConsensus:     $falseConsensusData
+        );
+
+        $synthesizerOutput = $synthesis[0]['content'] ?? '';
+        $decisionBrief = $this->summaryService->buildDecisionBrief(
+            array_merge($reliability, [
+                'synthesizer_output'     => $synthesizerOutput,
+                'guardrails'             => $guardrails,
+                'decision_quality_score' => $qualityScore,
+                'risk_profile'           => $riskProfile,
+            ])
+        );
+
         return [
             'rounds'            => $allRounds,
             'synthesis'         => $synthesis,
@@ -261,6 +338,10 @@ class ConfrontationRunner {
             'evidence_report' => $evidenceReport,
             'risk_profile' => $riskProfile,
             'risk_threshold_info' => $reliability['risk_threshold_info'] ?? null,
+            'guardrails' => $guardrails,
+            'synthesizer_output' => !empty($synthesis[0]['content']) ? $synthesis[0]['content'] : null,
+            'decision_quality_score' => $qualityScore,
+            'decision_brief' => $decisionBrief,
         ];
     }
 
@@ -430,7 +511,8 @@ class ConfrontationRunner {
         int    $synthRound,
         bool   $forceDisagreement = false,
         ?array $contextDoc = null,
-        ?array $memoryContext = null
+        ?array $memoryContext = null,
+        ?string $extraUserContent = null
     ): array {
         $agent = $this->assembler->assemble('synthesizer');
         if (!$agent) return [[], null];
@@ -439,6 +521,16 @@ class ConfrontationRunner {
             $messages = $this->promptBuilder->buildConfrontationSynthesisMessages(
                 $agent, $objective, $allMessages, $language, $forceDisagreement, $contextDoc, $memoryContext
             );
+
+            if ($extraUserContent !== null) {
+                foreach ($messages as &$msg) {
+                    if ($msg['role'] === 'user') {
+                        $msg['content'] .= $extraUserContent;
+                        break;
+                    }
+                }
+                unset($msg);
+            }
 
             $routed  = $this->providerRouter->chat($messages, $agent);
             $content = $routed['content'];

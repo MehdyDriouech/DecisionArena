@@ -32,9 +32,14 @@ class JuryRunner {
     private EvidenceReportService $evidenceService;
     private RiskProfileAnalyzer $riskAnalyzer;
     private JuryAdversarialReportRepository $adversarialRepo;
+    private \Domain\DecisionReliability\DecisionGuardrailService $guardrailService;
+    private \Domain\DecisionReliability\DecisionQualityScoreService $qualityScoreService;
+    private DecisionSummaryService $summaryService;
+    private PromptBuilder $promptBuilder;
 
     public function __construct() {
         $this->assembler        = new AgentAssembler();
+        $this->promptBuilder    = new PromptBuilder();
         $this->providerRouter   = new ProviderRouter();
         $this->messageRepo      = new MessageRepository();
         $this->voteRepo         = new VoteRepository();
@@ -48,6 +53,26 @@ class JuryRunner {
         $this->evidenceService  = new EvidenceReportService();
         $this->riskAnalyzer     = new RiskProfileAnalyzer();
         $this->adversarialRepo  = new JuryAdversarialReportRepository();
+        $this->guardrailService = new \Domain\DecisionReliability\DecisionGuardrailService();
+        $this->qualityScoreService = new \Domain\DecisionReliability\DecisionQualityScoreService();
+        $this->summaryService = new DecisionSummaryService();
+        try {
+            $pdo = \Infrastructure\Persistence\Database::getConnection();
+            $pdo->exec("ALTER TABLE sessions ADD COLUMN run_status TEXT DEFAULT NULL");
+        } catch (\Exception $e) {
+            // Column already exists — safe to ignore
+        }
+    }
+
+    private function writeRunStatus(string $sessionId, array $status): void
+    {
+        try {
+            $pdo  = \Infrastructure\Persistence\Database::getConnection();
+            $stmt = $pdo->prepare("UPDATE sessions SET run_status = :s WHERE id = :id");
+            $stmt->execute([':s' => json_encode($status), ':id' => $sessionId]);
+        } catch (\Exception $e) {
+            // Non-fatal
+        }
     }
 
     public function run(
@@ -357,6 +382,40 @@ class JuryRunner {
                     $messages[1]['content'] .= "\n\n" . $constraintBlock;
                 }
 
+                // Inject reliability constraint block (always)
+                try {
+                    $preEnvelope = $this->reliabilityService->buildEnvelope(
+                        $objective, $contextDoc, $automaticDecision,
+                        $this->voteRepo->findVotesBySession($sessionId),
+                        $state['positions'] ?? [], $state['edges'] ?? [],
+                        $threshold, null, null, null, null, null
+                    );
+                    $juryDebateScore   = (float)($qualityData['score'] ?? 0.0);
+                    $preFcData         = $preEnvelope['false_consensus'] ?? [];
+                    $preGuardrails     = $this->guardrailService->evaluate(
+                        rawDecision:       $preEnvelope['raw_decision'] ?? [],
+                        adjustedDecision:  $preEnvelope['adjusted_decision'] ?? [],
+                        contextQuality:    $preEnvelope['context_quality'] ?? [],
+                        falseConsensus:    $preFcData,
+                        debateQualityScore:$juryDebateScore,
+                        evidenceReport:    null,
+                        riskProfile:       null,
+                        mode:              'jury',
+                        sessionOptions:    []
+                    );
+                    $synthConstraint   = $this->promptBuilder->buildSynthesizerConstraintBlock(
+                        array_merge($preEnvelope, [
+                            'adjusted_decision'    => $preEnvelope['adjusted_decision'] ?? [],
+                            'debate_quality_score' => $juryDebateScore,
+                            'guardrails'           => $preGuardrails,
+                        ])
+                    );
+                    $formatInstruction = $this->promptBuilder->buildSynthesizerOutputFormatInstruction();
+                    $messages[1]['content'] .= $synthConstraint . $formatInstruction;
+                } catch (\Throwable $e) {
+                    error_log('[JuryRunner] Synthesizer constraint injection failed: ' . $e->getMessage());
+                }
+
                 $routed  = $this->providerRouter->chat($messages, $synthAgent);
                 $content = $routed['content'];
 
@@ -469,6 +528,120 @@ class JuryRunner {
             }
         }
 
+        $juryDebateScore = (float)($qualityData['score'] ?? 0.0);
+
+        $guardrails = $this->guardrailService->evaluate(
+            rawDecision:       $reliability['raw_decision'] ?? [],
+            adjustedDecision:  $adjustedDecision,
+            contextQuality:    $reliability['context_quality'] ?? [],
+            falseConsensus:    $reliability['false_consensus'] ?? [],
+            debateQualityScore:$juryDebateScore,
+            evidenceReport:    $evidenceReport ?? null,
+            riskProfile:       $riskProfile ?? null,
+            mode:              'jury',
+            sessionOptions:    ['auto_retry_on_weak_debate' => $adversarialCfg['auto_retry_on_weak_debate']]
+        );
+
+        if ($guardrails['final_outcome_override'] !== null) {
+            $adjustedDecision['final_outcome'] = $guardrails['final_outcome_override'];
+            $reliability['adjusted_decision']  = $adjustedDecision;
+        }
+
+        $autoRetryResult = ['triggered' => false];
+
+        if (($guardrails['should_auto_retry'] ?? false) === true) {
+            $initialScore = $juryDebateScore;
+            $this->writeRunStatus($sessionId, [
+                'status'        => 'auto_retry',
+                'reason'        => 'weak_parallel_debate',
+                'initial_score' => $initialScore,
+            ]);
+
+            $retryInstruction = $this->promptBuilder->buildAutoRetryAdversarialPrompt($initialScore);
+
+            foreach ($debateAgents as $agentId) {
+                $agent = $this->assembler->assemble($agentId);
+                if (!$agent) continue;
+
+                $existingMessages = $this->messageRepo->findBySession($sessionId);
+                $historyText = implode("\n\n", array_map(
+                    fn($m) => "[{$m['agent_id']}]: {$m['content']}",
+                    $existingMessages
+                ));
+                $userMsg = $retryInstruction . "\n\nPrevious debate:\n\n" . $historyText;
+                try {
+                    $routed = $this->providerRouter->chat(
+                        [['role' => 'system', 'content' => $agent->systemPrompt ?? ''], ['role' => 'user', 'content' => $userMsg]],
+                        $agent
+                    );
+                    $this->messageRepo->create([
+                        'id'           => $this->uuid(),
+                        'session_id'   => $sessionId,
+                        'role'         => 'assistant',
+                        'agent_id'     => $agentId,
+                        'round'        => $verdictRound + 1,
+                        'phase'        => 'retry-round',
+                        'mode_context' => 'jury',
+                        'message_type' => 'retry-round',
+                        'content'      => $routed['content'] ?? '',
+                        'created_at'   => date('c'),
+                    ]);
+                } catch (\Throwable $e) {
+                    error_log('[JuryRunner] Auto-retry agent failed: ' . $e->getMessage());
+                }
+            }
+
+            $allVotesRetry     = $this->voteRepo->findVotesBySession($sessionId);
+            $newFalseConsensus = $this->falseConsensusDetector->detect(
+                $reliability['context_quality'] ?? [],
+                $state['positions'] ?? [],
+                $state['edges'] ?? [],
+                $allVotesRetry
+            );
+            $newScore = (float)(($newFalseConsensus['diversity_score'] ?? 0.5) * 100);
+
+            $guardrails = $this->guardrailService->evaluate(
+                rawDecision:       $reliability['raw_decision'] ?? [],
+                adjustedDecision:  $adjustedDecision,
+                contextQuality:    $reliability['context_quality'] ?? [],
+                falseConsensus:    $newFalseConsensus,
+                debateQualityScore:$newScore,
+                evidenceReport:    null,
+                riskProfile:       null,
+                mode:              'jury',
+                sessionOptions:    [] // empty: max 1 retry
+            );
+
+            $autoRetryResult = [
+                'triggered'                    => true,
+                'reason'                       => 'weak_parallel_debate',
+                'initial_debate_quality_score' => $initialScore,
+                'retry_debate_quality_score'   => $newScore,
+                'extra_rounds'                 => 1,
+            ];
+            $this->writeRunStatus($sessionId, ['status' => 'auto_retry_complete', 'new_score' => $newScore]);
+        }
+
+        $finalJuryFc    = $newFalseConsensus ?? ($reliability['false_consensus'] ?? []);
+        $finalJuryScore = $newScore ?? $juryDebateScore;
+        $qualityScore = $this->qualityScoreService->compute(
+            contextQuality:     $reliability['context_quality'] ?? [],
+            debateQualityScore: $finalJuryScore,
+            evidenceReport:     $evidenceReport,
+            riskProfile:        $riskProfile,
+            falseConsensus:     $finalJuryFc
+        );
+
+        $synthesizerOutput = $verdictMessages[0]['content'] ?? '';
+        $decisionBrief = $this->summaryService->buildDecisionBrief(
+            array_merge($reliability, [
+                'synthesizer_output'     => $synthesizerOutput,
+                'guardrails'             => $guardrails,
+                'decision_quality_score' => $qualityScore,
+                'risk_profile'           => $riskProfile,
+            ])
+        );
+
         $juryAdversarial = [
             'enabled'                 => $adversarialCfg['enabled'],
             'config'                  => $adversarialCfg,
@@ -518,6 +691,10 @@ class JuryRunner {
             'risk_profile'                => $riskProfile,
             'risk_threshold_info'         => $reliability['risk_threshold_info'] ?? null,
             'jury_adversarial'            => $juryAdversarial,
+            'guardrails'                  => $guardrails,
+            'auto_retry'                  => $autoRetryResult,
+            'decision_quality_score'      => $qualityScore,
+            'decision_brief'              => $decisionBrief,
         ];
     }
 
@@ -533,6 +710,7 @@ class JuryRunner {
             'block_weak_debate_decision'      => (bool)($input['block_weak_debate_decision'] ?? true),
             'debate_quality_min_score'        => max(0, min(100, (int)($input['debate_quality_min_score'] ?? 50))),
             'false_consensus_blocks_decision' => (bool)($input['false_consensus_blocks_confident_decision'] ?? true),
+            'auto_retry_on_weak_debate'       => (bool)($input['auto_retry_on_weak_debate'] ?? false),
             // Explicit minority reporter: empty string = auto-detect
             'minority_reporter_agent_id'      => isset($input['minority_reporter_agent_id'])
                 ? (string)$input['minority_reporter_agent_id'] : '',

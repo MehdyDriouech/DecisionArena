@@ -2,6 +2,72 @@
  * New Session feature – view registration.
  */
 
+const FAST_DECISION_PRESET = {
+  mode: 'decision-room', rounds: 2,
+  agents: ['pm', 'architect', 'ux-expert', 'critic'],
+  devil_advocate_enabled: true, force_disagreement: true,
+  auto_retry_on_weak_debate: true, auto_block_low_quality: true,
+  debate_intensity: 'high', include_final_synthesis: true,
+};
+
+function renderFastDecisionBadge() {
+  const t = (key) => window.i18n?.t(key) ?? key;
+  return `
+    <div class="fast-decision-badge" style="margin-bottom:16px;padding:14px 18px;background:linear-gradient(135deg,rgba(99,102,241,0.15),rgba(139,92,246,0.1));border:1px solid rgba(99,102,241,0.4);border-radius:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+      <div>
+        <div style="font-weight:700;font-size:15px;color:var(--text-primary);">⚡ ${t('fast.title')}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:3px;">${t('fast.subtitle')}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${t('fast.agents_hint')}</div>
+      </div>
+      <button class="btn btn-secondary btn-sm" data-action="ns-fast-customize" style="white-space:nowrap;">${t('fast.customize')}</button>
+    </div>
+  `;
+}
+
+function renderTemplateGrid(templates) {
+  const { escHtml, t } = getCtx();
+  const icons = {
+    'tpl-ship-or-not':      '🚀',
+    'tpl-refactor-vs-ship': '🔧',
+    'tpl-build-vs-buy':     '🛒',
+    'tpl-hire-or-not':      '👤',
+    'tpl-launch-or-wait':   '⏰',
+  };
+  const tiles = templates.map((tpl) => `
+    <div class="template-tile" data-action="select-template" data-template-id="${escHtml(tpl.id)}" role="button" tabindex="0">
+      <div class="tile-icon">${icons[tpl.id] || '📋'}</div>
+      <div class="tile-name">${escHtml(tpl.title)}</div>
+    </div>`).join('');
+  return `
+    <div class="template-grid-section" style="margin-bottom:20px;">
+      <div class="section-label" style="margin-bottom:8px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);">${t('template.section.title')}</div>
+      <div class="template-grid" style="display:flex;flex-wrap:wrap;gap:8px;">
+        ${tiles}
+        <div class="template-tile tile-free" data-action="select-template" data-template-id="" role="button" tabindex="0">
+          <div class="tile-icon">✏️</div>
+          <div class="tile-name">${t('template.free_question')}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderContextHintBanner(questions) {
+  const t = (key) => window.i18n?.t(key) ?? key;
+  if (!questions || questions.length === 0) return '';
+  const items = questions.slice(0, 3).map((q) => {
+    const text = q.fallback || '';
+    return `<li style="margin-bottom:4px;">${text}</li>`;
+  }).join('');
+  return `
+    <div id="context-hint-banner" style="margin-top:8px;padding:12px 14px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.35);border-radius:6px;font-size:12px;color:var(--text-secondary);">
+      <div style="font-weight:600;color:#d97706;margin-bottom:6px;">⚠ ${t('context.hint.weak')}</div>
+      <div style="color:var(--text-muted);margin-bottom:6px;">${t('context.hint.expand')}</div>
+      <ul style="margin:0 0 8px;padding-left:18px;">${items}</ul>
+    </div>
+  `;
+}
+
 function getCtx() {
   const arena = window.DecisionArena;
   const state = arena.store.state;
@@ -203,6 +269,7 @@ function renderNewSession() {
     `;
   })();
 
+  const isFastDecision = ns.mode === 'decision-room' && ns.fastDecisionEnabled !== false;
   return `
     <div class="page-header">
       <div class="page-title">${t('newSession.title')}</div>
@@ -219,6 +286,10 @@ function renderNewSession() {
     ${scenarioSection}
 
     <div class="card" style="max-width:1100px;width:100%;">
+      ${(() => {
+        const systemTpls = (state.scenarioPacks || []).filter((p) => p.is_system_template);
+        return systemTpls.length > 0 ? renderTemplateGrid(systemTpls) : '';
+      })()}
       <div class="form-group">
         <label for="ns-title">${t('newSession.sessionTitle')}</label>
         <input class="input" id="ns-title" type="text" placeholder="${t('newSession.titlePlaceholder')}" value="${escHtml(ns.title)}" data-field="title">
@@ -226,6 +297,7 @@ function renderNewSession() {
       <div class="form-group">
         <label for="ns-idea">${t('newSession.idea')}</label>
         <textarea class="textarea" id="ns-idea" placeholder="${t('newSession.ideaPlaceholder')}" style="min-height:120px;" data-field="idea">${escHtml(ns.idea)}</textarea>
+        <div id="context-hint-banner-container">${renderContextHintBanner(ns.contextHintQuestions || null)}</div>
       </div>
       <div class="form-group">
         <label>${t('newSession.responseLanguage')}</label>
@@ -259,6 +331,8 @@ function renderNewSession() {
         </div>
       ` : ''}
 
+      ${isFastDecision ? renderFastDecisionBadge() : ''}
+      <div ${isFastDecision ? 'style="display:none"' : ''}>
       ${agentSectionHtml}
 
       ${['decision-room', 'stress-test', 'jury'].includes(ns.mode) ? `
@@ -374,6 +448,7 @@ function renderNewSession() {
         })()}
       ` : ''}
 
+      </div>
       <button class="btn btn-primary" data-action="launch-session" ${state.isLoading ? 'disabled' : ''}>
         ${state.isLoading ? '<span class="spinner"></span>' : ''}
         ${submitLabel}
@@ -388,4 +463,4 @@ function registerNewSessionFeature() {
   window.DecisionArena.views['new-session'] = renderNewSession;
 }
 
-export { registerNewSessionFeature, renderNewSession, renderContextDocumentSection };
+export { registerNewSessionFeature, renderNewSession, renderContextDocumentSection, FAST_DECISION_PRESET };

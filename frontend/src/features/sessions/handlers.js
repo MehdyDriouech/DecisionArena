@@ -61,11 +61,6 @@ function registerSessionsHandlers() {
         state.stResults = null;
         state.stRunning = false;
         navigate('stress-test');
-      } else if (mode === 'jury') {
-        state.currentMessages = messages;
-        state.juryResults     = null;
-        state.juryRunning     = false;
-        navigate('jury');
       } else {
         state.sessionHistory = {
           session,

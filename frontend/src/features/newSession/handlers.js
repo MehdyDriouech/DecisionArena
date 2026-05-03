@@ -27,10 +27,53 @@ function resetNewSessionState() {
     devilAdvocateEnabled: false,
     devilAdvocateThreshold: 0.65,
     agentProviders: {},
+    fastDecisionEnabled: true,
     // LLM Assignment
     llmAssignmentMode: 'global',
     teamProviderAssignments: { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } },
   };
+}
+
+let _contextCheckTimer = null;
+
+function _debouncedContextCheck(text, state) {
+  clearTimeout(_contextCheckTimer);
+  const trimmed = text.trim();
+  if (trimmed.length < 20) {
+    state.newSession.contextHintQuestions = null;
+    const container = document.getElementById('context-hint-banner-container');
+    if (container) container.innerHTML = '';
+    return;
+  }
+  _contextCheckTimer = setTimeout(async () => {
+    try {
+      const res = await fetch('/api/context/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ objective: trimmed }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const questions = data.questions || [];
+      const level = data.analysis?.level || 'weak';
+      state.newSession.contextHintQuestions = questions.length > 0 ? questions : null;
+      const container = document.getElementById('context-hint-banner-container');
+      if (!container) return;
+      if (!questions.length || ['strong', 'medium'].includes(level)) {
+        container.innerHTML = '';
+        return;
+      }
+      const t = (key) => window.i18n?.t(key) ?? key;
+      const items = questions.slice(0, 3).map((q) => `<li style="margin-bottom:4px;">${q.fallback || ''}</li>`).join('');
+      container.innerHTML = `
+        <div style="margin-top:8px;padding:12px 14px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.35);border-radius:6px;font-size:12px;color:var(--text-secondary);">
+          <div style="font-weight:600;color:#d97706;margin-bottom:6px;">⚠ ${t('context.hint.weak')}</div>
+          <div style="color:var(--text-muted);margin-bottom:6px;">${t('context.hint.expand')}</div>
+          <ul style="margin:0 0 8px;padding-left:18px;">${items}</ul>
+        </div>
+      `;
+    } catch (_) {}
+  }, 800);
 }
 
 function registerNewSessionHandlers() {
@@ -87,6 +130,7 @@ function registerNewSessionHandlers() {
     const { state, render, navigate, SessionService, ContextDocService, t } = getCtx();
     const ns = state.newSession;
 
+    const isFastMode = ns.mode === 'decision-room' && ns.fastDecisionEnabled !== false;
     if (!ns.title.trim()) {
       state.error = 'Veuillez saisir un titre de session.';
       render(); return;
@@ -96,7 +140,7 @@ function registerNewSessionHandlers() {
         state.error = 'Veuillez sélectionner au moins un agent dans chaque équipe.';
         render(); return;
       }
-    } else if (ns.selectedAgents.length === 0) {
+    } else if (!isFastMode && ns.selectedAgents.length === 0) {
       state.error = 'Veuillez sélectionner au moins un agent.';
       render(); return;
     }
@@ -109,6 +153,7 @@ function registerNewSessionHandlers() {
 
       const allAgents = ns.mode === 'confrontation'
         ? [...new Set([...ns.blueTeam, ...ns.redTeam])]
+        : isFastMode ? ['pm', 'architect', 'ux-expert', 'critic']
         : ns.selectedAgents;
 
       const body = {
@@ -136,6 +181,11 @@ function registerNewSessionHandlers() {
         devil_advocate_threshold: ns.devilAdvocateThreshold || 0.65,
         // LLM Assignment — build agent_providers based on current mode
         ..._buildLlmPayload(ns),
+        ...(isFastMode ? {
+          rounds: 2, force_disagreement: 1,
+          auto_retry_on_weak_debate: 1, auto_block_low_quality: 1,
+          debate_intensity: 'high',
+        } : {}),
       };
 
       const session = await SessionService.create(body);
@@ -274,7 +324,11 @@ function registerNewSessionHandlers() {
     if (!field) return false;
     const { state, render } = getCtx();
     if (field === 'title') { state.newSession.title = e.target.value; return true; }
-    if (field === 'idea')  { state.newSession.idea  = e.target.value; return true; }
+    if (field === 'idea')  {
+      state.newSession.idea = e.target.value;
+      _debouncedContextCheck(e.target.value, state);
+      return true;
+    }
     if (field === 'rounds') {
       state.newSession.rounds = parseInt(e.target.value, 10);
       const label = document.querySelector('label[for="ns-rounds"]');
@@ -332,6 +386,25 @@ function _applyScenarioPack(state, pack) {
 }
 
 function registerScenarioHandlers() {
+  registerAction('select-template', ({ element }) => {
+    const { state, render } = getCtx();
+    const tplId = element?.dataset?.templateId;
+    state.newSession.selectedTemplateId = tplId || null;
+    if (!tplId) {
+      state.newSession.fastDecisionEnabled = false;
+      render();
+      return;
+    }
+    const pack = (state.scenarioPacks || []).find((p) => p.id === tplId);
+    if (!pack) { render(); return; }
+    _applyScenarioPack(state, pack);
+    render();
+    requestAnimationFrame(() => {
+      const card = document.querySelector('.card[style*="max-width:1100px"]');
+      card?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+
   registerAction('apply-scenario', ({ element }) => {
     const { state, render } = getCtx();
     const packId = element?.dataset?.scenarioId;
@@ -377,6 +450,12 @@ function registerScenarioHandlers() {
     state.newSession.devilAdvocateThreshold = val;
     const label = document.getElementById('ns-da-threshold-val');
     if (label) label.textContent = Math.round(val * 100) + '%';
+  });
+
+  registerAction('ns-fast-customize', () => {
+    const { state, render } = getCtx();
+    state.newSession.fastDecisionEnabled = false;
+    render();
   });
 
   /* ══════════════════════════════════════════════════════════════════════

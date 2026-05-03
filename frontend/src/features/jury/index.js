@@ -10,6 +10,38 @@ import { renderArgumentHeatmapPanel } from '../argumentHeatmap/index.js';
 import { renderDebateReplayPanel } from '../debateReplay/index.js';
 import { renderGraphViewPanel } from '../graphView/index.js';
 
+function renderDecisionBrief(brief) {
+  if (!brief) return '';
+  const t = (key) => window.i18n?.t(key) ?? key;
+  const escHtml = window.DecisionArena.utils.escHtml;
+  const colorMap = {
+    GO_CONFIDENT: '#15803d', GO_FRAGILE: '#854d0e',
+    NO_GO_CONFIDENT: '#991b1b', NO_GO_FRAGILE: '#92400e',
+    ITERATE_CONFIDENT: '#92400e', ITERATE_FRAGILE: '#78350f',
+    NO_CONSENSUS: '#7f1d1d', NO_CONSENSUS_FRAGILE: '#7f1d1d',
+    INSUFFICIENT_CONTEXT: '#374151',
+  };
+  const outcome = `${brief.decision}_${brief.reliability}`;
+  const bgColor = colorMap[outcome] || colorMap[brief.decision] || '#374151';
+  const whyHtml  = (brief.why || []).map(w => `<span>${escHtml(w)}</span>`).join(' ');
+  const riskHtml = (brief.risks || []).map(r => `<span>${escHtml(r)}</span>`).join(' ');
+  const warning  = brief.primary_warning
+    ? `<div class="brief-warning">⚠ ${escHtml(brief.primary_warning)}</div>` : '';
+  return `
+<div class="decision-brief-card">
+  <div class="brief-header" style="background:${bgColor}">
+    <span class="brief-decision">${escHtml(brief.decision || '')}</span>
+    <span class="brief-meta">${escHtml(brief.reliability || '')} · ${escHtml(brief.confidence || '')} · ${t('brief.score')}: ${brief.quality_score}/100</span>
+  </div>
+  <div class="brief-body">
+    ${whyHtml ? `<p><strong>${t('brief.why')}:</strong> ${whyHtml}</p>` : ''}
+    ${riskHtml ? `<p><strong>${t('brief.risks')}:</strong> ${riskHtml}</p>` : ''}
+    ${brief.next_step ? `<p><strong>${t('brief.next_step')}:</strong> ${escHtml(brief.next_step)}</p>` : ''}
+    ${warning}
+  </div>
+</div>`;
+}
+
 function getCtx() {
   const arena = window.DecisionArena;
   const state = arena.store.state;
@@ -329,7 +361,8 @@ function renderJuryResults(results) {
     </div>
   ` : '';
 
-  return roundsHtml
+  return renderDecisionBrief(results.decision_brief || null)
+    + roundsHtml
     + miniChallengeHtml
     + minorityHtml
     + synthHtml
@@ -369,6 +402,8 @@ function renderJury() {
         ${state.error ? `<div class="alert alert-danger" style="margin:12px 0;padding:12px 16px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:6px;color:var(--color-error,#ef4444);font-size:13px;">⚠️ ${escHtml(state.error)}</div>` : ''}
 
         ${state.juryRunning ? `<div class="loading-state"><span class="spinner spinner-lg"></span> ${t('jury.running')}</div>` : ''}
+        ${state.juryAutoRetryBanner === 'running' ? `<div class="alert alert-warning" style="margin:8px 0;padding:10px 14px;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.4);border-radius:6px;font-size:13px;">⚡ ${t('autoretry.banner.running')}</div>` : ''}
+        ${state.juryAutoRetryBanner === 'complete' ? `<div class="alert alert-info" style="margin:8px 0;padding:10px 14px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.3);border-radius:6px;font-size:13px;">✅ ${t('autoretry.banner.complete')}</div>` : ''}
 
         ${!results && !state.juryRunning ? `
           <div class="empty-state" style="padding:48px 0;">

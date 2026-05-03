@@ -13,6 +13,24 @@ function getCtx() {
   };
 }
 
+function pollRunStatus(sessionId, onUpdate, intervalMs = 2000) {
+  let active = true;
+  let timer  = null;
+  const loop = () => {
+    if (!active) return;
+    const { apiFetch } = getCtx();
+    apiFetch(`/api/sessions/${sessionId}/run-status`)
+      .then(data => {
+        if (!active) return;
+        onUpdate(data.run_status);
+        timer = setTimeout(loop, intervalMs);
+      })
+      .catch(() => { if (active) timer = setTimeout(loop, intervalMs); });
+  };
+  timer = setTimeout(loop, intervalMs);
+  return () => { active = false; if (timer) clearTimeout(timer); };
+}
+
 async function runDecisionRoom() {
   const { state, render, apiFetch } = getCtx();
   const session = state.currentSession;
@@ -20,8 +38,21 @@ async function runDecisionRoom() {
 
   state.drRunning = true;
   state.drResults = null;
+  state.drAutoRetryBanner = null;
   state.error     = null;
   render();
+
+  const stopPolling = pollRunStatus(session.id, (runStatus) => {
+    const { state: s, render: r } = getCtx();
+    if (!runStatus) return;
+    if (runStatus.phase === 'auto_retry') {
+      s.drAutoRetryBanner = 'running';
+      r();
+    } else if (runStatus.phase === 'auto_retry_complete') {
+      s.drAutoRetryBanner = 'complete';
+      r();
+    }
+  });
 
   try {
     const result = await apiFetch('/api/decision-room/run', {
@@ -37,6 +68,8 @@ async function runDecisionRoom() {
   } catch (err) {
     state.error = 'Decision Room failed: ' + err.message;
   } finally {
+    stopPolling();
+    state.drAutoRetryBanner = null;
     state.drRunning = false;
     render();
   }

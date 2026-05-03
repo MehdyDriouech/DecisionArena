@@ -83,6 +83,24 @@ class SessionController {
         );
         $state = ['arguments' => $arguments, 'positions' => $positions, 'edges' => $edges];
 
+        // Prefer persisted reliability data (set during the live run) over re-computed values.
+        // Old sessions without a result column fall back to the re-computed envelope.
+        $persisted = null;
+        if (!empty($session['result'])) {
+            $persisted = json_decode($session['result'], true);
+        }
+        $rawDecision      = $persisted['raw_decision']        ?? $reliability['raw_decision'];
+        $adjustedDecision = $persisted['adjusted_decision']   ?? $reliability['adjusted_decision'];
+        $falseConsensus   = $persisted['false_consensus']     ?? $reliability['false_consensus'];
+        $guardrails       = $persisted['guardrails']          ?? null;
+        $autoRetry        = $persisted['auto_retry']          ?? null;
+        $qualityScore     = $persisted['decision_quality_score'] ?? null;
+
+        $decisionBriefRaw = $session['decision_brief'] ?? null;
+        $decisionBrief = $decisionBriefRaw
+            ? (is_array($decisionBriefRaw) ? $decisionBriefRaw : json_decode($decisionBriefRaw, true))
+            : null;
+
         // Load persisted adversarial report for jury sessions
         $juryAdversarial = null;
         if (($session['mode'] ?? '') === 'jury') {
@@ -99,15 +117,19 @@ class SessionController {
             'dominance_indicator' => $this->debateMemory->buildDominanceIndicator($state),
             'votes' => $votes,
             'automatic_decision' => $decision,
-            'raw_decision' => $reliability['raw_decision'],
-            'adjusted_decision' => $reliability['adjusted_decision'],
+            'raw_decision' => $rawDecision,
+            'adjusted_decision' => $adjustedDecision,
             'context_quality' => $reliability['context_quality'],
             'reliability_cap' => $reliability['reliability_cap'],
             'false_consensus_risk' => $reliability['false_consensus_risk'],
-            'false_consensus' => $reliability['false_consensus'],
+            'false_consensus' => $falseConsensus,
             'reliability_warnings' => $reliability['reliability_warnings'],
             'decision_reliability_summary' => $reliability['decision_reliability_summary'] ?? null,
             'context_clarification' => $reliability['context_clarification'] ?? null,
+            'guardrails' => $guardrails,
+            'auto_retry' => $autoRetry,
+            'decision_quality_score' => $qualityScore,
+            'decision_brief' => $decisionBrief,
             'jury_adversarial' => $juryAdversarial,
         ];
     }
@@ -276,6 +298,16 @@ class SessionController {
             " WHERE id = " . $this->pdo()->quote($id)
         );
         return ['success' => true];
+    }
+
+    public function runStatus(Request $req): array {
+        $sessionId = $req->param('id');
+        $pdo  = \Infrastructure\Persistence\Database::getConnection();
+        $stmt = $pdo->prepare("SELECT run_status FROM sessions WHERE id = :id");
+        $stmt->execute([':id' => $sessionId]);
+        $row    = $stmt->fetch(\PDO::FETCH_ASSOC);
+        $status = $row ? json_decode($row['run_status'] ?? 'null', true) : null;
+        return ['run_status' => $status];
     }
 
     private function pdo(): \PDO {

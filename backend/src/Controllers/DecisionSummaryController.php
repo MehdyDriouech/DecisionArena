@@ -102,6 +102,11 @@ class DecisionSummaryController {
             $highlights
         );
 
+        $decisionBriefRaw = $session['decision_brief'] ?? null;
+        $decisionBrief = $decisionBriefRaw
+            ? (is_array($decisionBriefRaw) ? $decisionBriefRaw : json_decode($decisionBriefRaw, true))
+            : null;
+
         return [
             'session_id'       => $id,
             'decision_summary' => $payload,
@@ -112,6 +117,7 @@ class DecisionSummaryController {
             'reliability_warnings' => $reliability['reliability_warnings'],
             'decision_reliability_summary' => $reliability['decision_reliability_summary'] ?? null,
             'context_clarification' => $reliability['context_clarification'] ?? null,
+            'decision_brief' => $decisionBrief,
         ];
     }
 }

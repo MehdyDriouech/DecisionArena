@@ -27,10 +27,13 @@ function registerGlobalHandlers() {
   registerAction('set-ui-complexity', ({ element }) => {
     const c = element?.dataset?.complexity;
     if (!['basic', 'advanced', 'expert'].includes(c)) return;
-    window.DecisionArena.store.state.uiComplexity = c;
-    document.body.setAttribute('data-ui-complexity', c);
-    try { localStorage.setItem('da_ui_complexity', c); } catch (_) {}
-    window.DecisionArena.render?.();
+    window.DecisionArena.setUiComplexity?.(c);
+    document.getElementById('complexity-dropdown')?.style?.setProperty('display', 'none');
+  });
+
+  registerAction('toggle-complexity-dropdown', () => {
+    const dd = document.getElementById('complexity-dropdown');
+    if (dd) dd.style.display = dd.style.display === 'none' ? '' : 'none';
   });
 
   registerAction('toggle-panel-collapse', ({ element }) => {

@@ -55,10 +55,14 @@ class DecisionRoomController {
         // Feature 4: per-agent provider overrides
         $agentProviders = (new \Infrastructure\Persistence\SessionAgentProvidersRepository())->findBySession($sessionId);
 
+        $sessionOptions = [
+            'auto_retry_on_weak_debate' => (bool)($data['auto_retry_on_weak_debate'] ?? $session['auto_retry_on_weak_debate'] ?? false),
+        ];
+
         $result = $this->runner->run(
             $sessionId, $objective, $selectedAgents, $rounds, $language,
             $forceDisagreement, $contextDoc,
-            $daEnabled, $daThreshold, $agentProviders, $decisionThreshold
+            $daEnabled, $daThreshold, $agentProviders, $decisionThreshold, $sessionOptions
         );
 
         $this->sessionRepo->update($sessionId, [
@@ -67,6 +71,15 @@ class DecisionRoomController {
             'context_quality_level' => (string)($result['context_quality']['level'] ?? 'weak'),
             'context_quality_report' => json_encode($result['context_quality'] ?? [], JSON_UNESCAPED_UNICODE),
             'reliability_cap' => (float)($result['reliability_cap'] ?? 1.0),
+            'result' => json_encode([
+                'guardrails'             => $result['guardrails']             ?? null,
+                'auto_retry'             => $result['auto_retry']             ?? null,
+                'decision_quality_score' => $result['decision_quality_score'] ?? null,
+                'adjusted_decision'      => $result['adjusted_decision']      ?? null,
+                'false_consensus'        => $result['false_consensus']        ?? null,
+                'raw_decision'           => $result['raw_decision']           ?? null,
+            ], JSON_UNESCAPED_UNICODE),
+            'decision_brief' => json_encode($result['decision_brief'] ?? null, JSON_UNESCAPED_UNICODE),
         ]);
 
         return [

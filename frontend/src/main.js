@@ -7,7 +7,7 @@ import * as agentsUtils from './utils/agents.js';
 import { renderSidebarShell } from './core/shell.js';
 
 /* ── Core: renderer + router + events ── */
-import { render, renderSidebar, renderMain } from './core/renderer.js';
+import { render, renderSidebar, renderMain, applyComplexityVisibility } from './core/renderer.js';
 import { navigate, scrollMainToTop, scrollMessagesToBottom, scrollFollowUpToBottom } from './core/router.js';
 import { bindGlobalEventDelegation } from './core/events.js';
 
@@ -141,6 +141,12 @@ async function init() {
 
 async function startApp() {
   bootstrapModuleArchitecture();
+  // Expose complexity helpers on the global namespace
+  window.DecisionArena.setUiComplexity = (level) => {
+    store.setUiComplexity(level);
+    render();
+  };
+  window.DecisionArena.applyComplexityVisibility = applyComplexityVisibility;
   // Restore uiComplexity body attribute from saved state
   const savedComplexity = window.DecisionArena?.store?.state?.uiComplexity || 'advanced';
   document.body.setAttribute('data-ui-complexity', savedComplexity);

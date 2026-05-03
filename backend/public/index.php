@@ -82,6 +82,7 @@ $router->delete('/api/sessions/{id}', [Controllers\SessionController::class, 'de
 $router->post('/api/sessions/{id}/status', [Controllers\SessionController::class, 'updateStatus']);
 $router->put('/api/sessions/{id}/memory', [Controllers\SessionController::class, 'memory']);
 $router->put('/api/sessions/{id}/decision-threshold', [Controllers\SessionController::class, 'updateThreshold']);
+$router->get('/api/sessions/{id}/run-status', [Controllers\SessionController::class, 'runStatus']);
 $router->get('/api/sessions/{id}/verdict', [Controllers\VerdictController::class, 'show']);
 $router->get('/api/sessions/{id}/votes', [Controllers\VoteController::class, 'show']);
 $router->get('/api/sessions/{id}/votes/explanation', [Controllers\VoteController::class, 'explanation']);
@@ -192,6 +193,9 @@ $router->post('/api/learning/export',     [Controllers\LearningController::class
 $router->get('/api/prompt-policies',       [Controllers\PromptPolicyController::class, 'index']);
 $router->get('/api/prompt-policies/{id}',  [Controllers\PromptPolicyController::class, 'show']);
 $router->put('/api/prompt-policies/{id}',  [Controllers\PromptPolicyController::class, 'update']);
+
+// Context quality check (used by Context Assistant banner)
+$router->post('/api/context/check', [Controllers\ContextCheckController::class, 'check']);
 
 // Templates — specific routes BEFORE parameterized routes
 $router->post('/api/templates/make', [Controllers\TemplateMakerController::class, 'make']);

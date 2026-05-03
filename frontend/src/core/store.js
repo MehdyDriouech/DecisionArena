@@ -38,6 +38,7 @@ const createInitialState = () => ({
   isLoading: false,
   drResults: null,
   drRunning: false,
+  decisionBrief: null,
   confrontationResults: null,
   confrontationRunning: false,
   reactiveChat: {
@@ -95,6 +96,9 @@ const createInitialState = () => ({
     ctxDocContent: '',
     ctxDocDraftSaved: false,
     ctxDocDraftSummary: null,
+    fastDecisionEnabled: true,
+    customizing: false,
+    selectedTemplateId: null,
   },
   currentContextDoc: null,
   ctxDocPanelOpen: false,
@@ -255,10 +259,17 @@ function setView(view) {
   state.view = view;
 }
 
+function setUiComplexity(level) {
+  if (!['basic', 'advanced', 'expert'].includes(level)) return;
+  state.uiComplexity = level;
+  try { localStorage.setItem('da_ui_complexity', level); } catch (_) {}
+}
+
 export {
   createInitialState,
   state,
   resetState,
   patchState,
   setView,
+  setUiComplexity,
 };

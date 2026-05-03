@@ -5,6 +5,38 @@
 
 import { renderConfrontationAgentCard, renderDebateInsightsPanels, renderWeightedVotePanel, renderDecisionReliabilityCard, renderVerdictCard, renderSessionMemoryPanel, renderSessionContextDocPanel } from '../confrontation/index.js';
 
+function renderDecisionBrief(brief) {
+  if (!brief) return '';
+  const t = (key) => window.i18n?.t(key) ?? key;
+  const escHtml = window.DecisionArena.utils.escHtml;
+  const colorMap = {
+    GO_CONFIDENT: '#15803d', GO_FRAGILE: '#854d0e',
+    NO_GO_CONFIDENT: '#991b1b', NO_GO_FRAGILE: '#92400e',
+    ITERATE_CONFIDENT: '#92400e', ITERATE_FRAGILE: '#78350f',
+    NO_CONSENSUS: '#7f1d1d', NO_CONSENSUS_FRAGILE: '#7f1d1d',
+    INSUFFICIENT_CONTEXT: '#374151',
+  };
+  const outcome = `${brief.decision}_${brief.reliability}`;
+  const bgColor = colorMap[outcome] || colorMap[brief.decision] || '#374151';
+  const whyHtml  = (brief.why || []).map(w => `<span>${escHtml(w)}</span>`).join(' ');
+  const riskHtml = (brief.risks || []).map(r => `<span>${escHtml(r)}</span>`).join(' ');
+  const warning  = brief.primary_warning
+    ? `<div class="brief-warning">⚠ ${escHtml(brief.primary_warning)}</div>` : '';
+  return `
+<div class="decision-brief-card">
+  <div class="brief-header" style="background:${bgColor}">
+    <span class="brief-decision">${escHtml(brief.decision || '')}</span>
+    <span class="brief-meta">${escHtml(brief.reliability || '')} · ${escHtml(brief.confidence || '')} · ${t('brief.score')}: ${brief.quality_score}/100</span>
+  </div>
+  <div class="brief-body">
+    ${whyHtml ? `<p><strong>${t('brief.why')}:</strong> ${whyHtml}</p>` : ''}
+    ${riskHtml ? `<p><strong>${t('brief.risks')}:</strong> ${riskHtml}</p>` : ''}
+    ${brief.next_step ? `<p><strong>${t('brief.next_step')}:</strong> ${escHtml(brief.next_step)}</p>` : ''}
+    ${warning}
+  </div>
+</div>`;
+}
+
 function getCtx() {
   const arena = window.DecisionArena;
   const state = arena.store.state;
@@ -988,6 +1020,7 @@ function renderSessionHistory() {
         dominance_indicator: data.dominance_indicator || '',
       }) : ''}
 
+      ${mode !== 'chat' ? renderDecisionBrief(data.decision_brief || null) : ''}
       ${mode !== 'chat' ? renderWeightedVotePanel({
         votes: data.votes || [],
         automatic_decision: data.automatic_decision || null,

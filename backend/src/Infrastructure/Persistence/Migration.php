@@ -380,6 +380,8 @@ class Migration {
         $this->addColumnIfMissing('sessions', 'context_quality_level', 'TEXT DEFAULT NULL');
         $this->addColumnIfMissing('sessions', 'context_quality_report', 'TEXT DEFAULT NULL');
         $this->addColumnIfMissing('sessions', 'reliability_cap', 'REAL DEFAULT NULL');
+        $this->addColumnIfMissing('sessions', 'result', 'TEXT DEFAULT NULL');
+        $this->addColumnIfMissing('sessions', 'decision_brief', 'TEXT DEFAULT NULL');
 
         // Providers (routing + ordering)
         $this->addColumnIfMissing('providers', 'priority', 'INTEGER DEFAULT 100');

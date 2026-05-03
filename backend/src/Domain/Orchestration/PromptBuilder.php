@@ -861,4 +861,93 @@ class PromptBuilder {
             . "> ```\n> ## Target Agent\n> {agent_id}\n> ```\n"
             . "> Replace `{agent_id}` with the exact ID of the agent you are responding to. Available IDs: **{$list}**.\n";
     }
+
+    public function buildSynthesizerConstraintBlock(array $reliabilityData): string
+    {
+        $adj        = $reliabilityData['adjusted_decision'] ?? [];
+        $raw        = $reliabilityData['raw_decision'] ?? [];
+        $cq         = $reliabilityData['context_quality'] ?? [];
+        $fc         = $reliabilityData['false_consensus'] ?? [];
+        $guardrails = $reliabilityData['guardrails'] ?? [];
+        $evidence   = $reliabilityData['evidence_report'] ?? null;
+        $risk       = $reliabilityData['risk_profile'] ?? null;
+
+        $winningLabel  = $raw['winning_label'] ?? 'unknown';
+        $winningScore  = number_format((float)($raw['winning_score'] ?? 0), 2);
+        $threshold     = number_format((float)($raw['threshold'] ?? 0.65), 2);
+        $decisionLabel = $adj['decision_label'] ?? 'unknown';
+        $decisionStatus= $adj['decision_status'] ?? 'unknown';
+        $finalOutcome  = $adj['final_outcome'] ?? 'unknown';
+
+        $cqLevel       = $cq['level'] ?? 'unknown';
+        $cqScore       = number_format((float)($cq['score'] ?? 0), 0);
+        $dqScore       = number_format((float)($reliabilityData['debate_quality_score'] ?? 0), 0);
+        $fcRisk        = $fc['false_consensus_risk'] ?? 'unknown';
+        $evidenceScore = $evidence ? number_format((float)($evidence['score'] ?? 0), 0) : 'N/A (no evidence layer)';
+        $riskLevel     = $risk['risk_level'] ?? 'unknown';
+
+        return <<<TEXT
+
+## Aggregated Vote Result
+- winning_label: {$winningLabel}
+- winning_score: {$winningScore}
+- threshold: {$threshold}
+- decision_label: {$decisionLabel}
+- decision_status: {$decisionStatus}
+- final_outcome: {$finalOutcome}
+
+## Reliability Signals
+- context_quality: {$cqLevel} (score: {$cqScore})
+- debate_quality_score: {$dqScore}
+- false_consensus_risk: {$fcRisk}
+- evidence_score: {$evidenceScore}
+- risk_level: {$riskLevel}
+
+## Hard Constraints
+You MUST NOT claim there is a clear GO if final_outcome is NO_CONSENSUS, NO_CONSENSUS_FRAGILE or INSUFFICIENT_CONTEXT.
+You MUST NOT describe the decision as reliable if decision_status is FRAGILE or INSUFFICIENT_CONTEXT.
+You MUST explicitly state when the debate was weak or insufficiently adversarial.
+You MUST align the final recommendation with the adjusted_decision above.
+
+TEXT;
+    }
+
+    public function buildSynthesizerOutputFormatInstruction(): string
+    {
+        return <<<TEXT
+
+Respond using EXACTLY this format (no extra sections, no free-form text outside these headings):
+
+## Decision
+GO | NO-GO | ITERATE | NO_CONSENSUS | INSUFFICIENT_CONTEXT
+
+## Confidence
+LOW | MEDIUM | HIGH
+
+## Why
+- (max 3 bullet points explaining the key reasons)
+
+## Main Risks
+- (max 3 bullet points)
+
+## Reliability Warning
+(one sentence — omit this section only if the decision is strong and reliable)
+
+## Next Step
+(one concrete actionable next step)
+
+TEXT;
+    }
+
+    public function buildAutoRetryAdversarialPrompt(float $initialScore): string
+    {
+        $score = number_format($initialScore, 0);
+        return <<<TEXT
+The previous debate quality was weak (score: {$score}/100).
+Agents produced mostly parallel answers with limited genuine interaction.
+You MUST directly challenge one concrete claim made by another agent.
+Reference the target agent explicitly by name (e.g. "I disagree with [Agent]'s claim that...").
+Generic agreement or restating your own position is not allowed.
+TEXT;
+    }
 }

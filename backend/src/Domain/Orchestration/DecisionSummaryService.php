@@ -202,4 +202,84 @@ class DecisionSummaryService {
         }
         return array_slice(array_values(array_unique($out)), 0, 5);
     }
+
+    public function buildDecisionBrief(array $runResult): array
+    {
+        $adj      = $runResult['adjusted_decision'] ?? [];
+        $guardrails = $runResult['guardrails'] ?? [];
+        $qScore   = $runResult['decision_quality_score'] ?? [];
+        $synthOut = $runResult['synthesizer_output'] ?? '';
+        $risk     = $runResult['risk_profile'] ?? null;
+        $relSum   = $runResult['decision_reliability_summary'] ?? [];
+
+        $decisionMap = [
+            'go'                   => 'GO',
+            'no-go'                => 'NO-GO',
+            'no_go'                => 'NO-GO',
+            'iterate'              => 'ITERATE',
+            'no-consensus'         => 'NO_CONSENSUS',
+            'no_consensus'         => 'NO_CONSENSUS',
+            'insufficient_context' => 'INSUFFICIENT_CONTEXT',
+        ];
+        $rawLabel = strtolower($adj['decision_label'] ?? 'no_consensus');
+        $decision = $decisionMap[$rawLabel] ?? 'NO_CONSENSUS';
+
+        $confidence  = strtoupper($adj['confidence_level'] ?? 'LOW');
+        $reliability = $adj['decision_status'] ?? 'FRAGILE';
+
+        $why      = $this->parseSynthesizerSection($synthOut, 'Why');
+        $risks    = $this->parseSynthesizerSection($synthOut, 'Main Risks');
+        $nextStep = $this->parseSynthesizerNextStep($synthOut);
+
+        if (empty($why)) {
+            $why = array_slice(
+                array_map(fn($w) => $w['text'] ?? '', $runResult['key_factors'] ?? []),
+                0, 3
+            );
+        }
+        if (empty($risks)) {
+            $topRisks = $risk['top_risks'] ?? [];
+            $risks    = array_slice(array_map(fn($r) => $r['description'] ?? $r, $topRisks), 0, 3);
+        }
+        if (empty($nextStep)) {
+            $nextStep = $relSum['recommended_action'] ?? ($guardrails['recommended_action'] ?? '');
+        }
+
+        $primaryWarning = $guardrails['warnings'][0] ?? ($runResult['reliability_warnings'][0]['key'] ?? '');
+
+        return [
+            'decision'        => $decision,
+            'confidence'      => $confidence,
+            'reliability'     => $reliability,
+            'why'             => array_values(array_filter($why)),
+            'risks'           => array_values(array_filter($risks)),
+            'next_step'       => $nextStep,
+            'primary_warning' => $primaryWarning,
+            'quality_score'   => $qScore['decision_quality_score'] ?? 0,
+            'quality_level'   => $qScore['level'] ?? 'poor',
+        ];
+    }
+
+    private function parseSynthesizerSection(string $output, string $heading): array
+    {
+        if (empty($output)) return [];
+        $pattern = '/##\s+' . preg_quote($heading, '/') . '\s*\n(.*?)(?=\n##|\z)/si';
+        if (!preg_match($pattern, $output, $m)) return [];
+        $lines = explode("\n", trim($m[1]));
+        $items = [];
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (preg_match('/^-\s+(.+)/', $line, $lm)) {
+                $items[] = trim($lm[1]);
+            }
+        }
+        return array_slice($items, 0, 3);
+    }
+
+    private function parseSynthesizerNextStep(string $output): string
+    {
+        if (empty($output)) return '';
+        if (!preg_match('/##\s+Next Step\s*\n(.+?)(?=\n##|\z)/si', $output, $m)) return '';
+        return trim($m[1]);
+    }
 }

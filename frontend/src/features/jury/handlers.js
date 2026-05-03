@@ -12,6 +12,24 @@ function getCtx() {
   };
 }
 
+function pollRunStatus(sessionId, onUpdate, intervalMs = 2000) {
+  let active = true;
+  let timer  = null;
+  const loop = () => {
+    if (!active) return;
+    const { apiFetch } = getCtx();
+    apiFetch(`/api/sessions/${sessionId}/run-status`)
+      .then(data => {
+        if (!active) return;
+        onUpdate(data.run_status);
+        timer = setTimeout(loop, intervalMs);
+      })
+      .catch(() => { if (active) timer = setTimeout(loop, intervalMs); });
+  };
+  timer = setTimeout(loop, intervalMs);
+  return () => { active = false; if (timer) clearTimeout(timer); };
+}
+
 function registerJuryHandlers() {
   registerAction('open-jury', async ({ element }) => {
     const { state, navigate, SessionService, ContextDocService } = getCtx();
@@ -44,8 +62,21 @@ function registerJuryHandlers() {
 
     state.juryRunning = true;
     state.juryResults = null;
+    state.juryAutoRetryBanner = null;
     state.error       = null;
     try { render(); } catch (_) { /* render errors must not block the jury run */ }
+
+    const stopPolling = pollRunStatus(session.id, (runStatus) => {
+      const { state: s, render: r } = getCtx();
+      if (!runStatus) return;
+      if (runStatus.phase === 'auto_retry') {
+        s.juryAutoRetryBanner = 'running';
+        try { r(); } catch (_) {}
+      } else if (runStatus.phase === 'auto_retry_complete') {
+        s.juryAutoRetryBanner = 'complete';
+        try { r(); } catch (_) {}
+      }
+    });
 
     try {
       const adversarialCfg = state.juryAdversarialConfig ?? {};
@@ -74,6 +105,8 @@ function registerJuryHandlers() {
     } catch (err) {
       state.error = 'Jury failed: ' + err.message;
     } finally {
+      stopPolling();
+      state.juryAutoRetryBanner = null;
       state.juryRunning = false;
       try { render(); } catch (_) { /* prevent render crash from hiding results */ }
     }

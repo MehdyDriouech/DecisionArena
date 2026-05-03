@@ -137,6 +137,7 @@ class ExportController {
                 $routing = $this->redactProviderRouting($routing, $redactionLevel);
             }
             $debateState = ['arguments' => $arguments, 'positions' => $positions, 'edges' => $edges];
+            $sessionResult = json_decode($session['result'] ?? '{}', true) ?? [];
             $payload = [
                 'format'               => 'json',
                 'session'              => $session,
@@ -166,6 +167,11 @@ class ExportController {
                 'evidence_claims'      => $evidenceClaims,
                 'risk_profile'         => $riskProfile,
                 'jury_adversarial'     => $juryAdversarial,
+                'decision_brief'            => $sessionResult['decision_brief'] ?? null,
+                'decision_quality_score'    => $sessionResult['decision_quality_score'] ?? null,
+                'guardrails'                => $sessionResult['guardrails'] ?? null,
+                'auto_retry'                => $sessionResult['auto_retry'] ?? null,
+                'template_used'             => $session['template_id'] ?? null,
                 'memory'               => [
                     'decision_taken'   => $session['decision_taken']    ?? null,
                     'user_learnings'   => $session['user_learnings']    ?? null,
@@ -368,7 +374,30 @@ class ExportController {
             ? implode(', ', $session['selected_agents'])
             : ($session['selected_agents'] ?? '');
 
-        $md  = "# Decision Arena Export\n\n";
+        $sessionResult = json_decode($session['result'] ?? '{}', true) ?? [];
+        $brief = $sessionResult['decision_brief'] ?? null;
+        $md    = '';
+
+        if ($brief) {
+            $decision    = $brief['decision']    ?? 'UNKNOWN';
+            $reliability = $brief['reliability'] ?? '';
+            $confidence  = $brief['confidence']  ?? '';
+            $score       = $brief['quality_score'] ?? 0;
+            $why         = implode(' ', $brief['why']   ?? []);
+            $risks       = implode(' ', $brief['risks'] ?? []);
+            $nextStep    = $brief['next_step']         ?? '';
+            $warning     = $brief['primary_warning']   ?? '';
+
+            $md .= "# Decision Brief\n\n";
+            $md .= "**{$decision}** — {$reliability} · {$confidence} · Score: {$score}/100\n\n";
+            if ($why)      $md .= "**Why:** {$why}\n\n";
+            if ($risks)    $md .= "**Main Risks:** {$risks}\n\n";
+            if ($nextStep) $md .= "**Next Step:** {$nextStep}\n\n";
+            if ($warning)  $md .= "⚠ Warning: {$warning}\n\n";
+            $md .= "---\n\n";
+        }
+
+        $md .= "# Decision Arena Export\n\n";
 
         // ── 1. Session Summary ────────────────────────────────────────────
         $md .= "## 1. Session Summary\n\n";

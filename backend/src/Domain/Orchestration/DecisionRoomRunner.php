@@ -36,6 +36,9 @@ class DecisionRoomRunner {
     private FalseConsensusDetector $falseConsensusDetector;
     private EvidenceReportService $evidenceService;
     private RiskProfileAnalyzer $riskAnalyzer;
+    private \Domain\DecisionReliability\DecisionGuardrailService $guardrailService;
+    private \Domain\DecisionReliability\DecisionQualityScoreService $qualityScoreService;
+    private DecisionSummaryService $summaryService;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -54,6 +57,27 @@ class DecisionRoomRunner {
         $this->falseConsensusDetector = new FalseConsensusDetector();
         $this->evidenceService = new EvidenceReportService();
         $this->riskAnalyzer    = new RiskProfileAnalyzer();
+        $this->guardrailService = new \Domain\DecisionReliability\DecisionGuardrailService();
+        $this->qualityScoreService = new \Domain\DecisionReliability\DecisionQualityScoreService();
+        $this->summaryService = new DecisionSummaryService();
+        // Ensure run_status column exists for auto-retry progress signaling
+        try {
+            $pdo = \Infrastructure\Persistence\Database::getConnection();
+            $pdo->exec("ALTER TABLE sessions ADD COLUMN run_status TEXT DEFAULT NULL");
+        } catch (\Exception $e) {
+            // Column already exists — safe to ignore
+        }
+    }
+
+    private function writeRunStatus(string $sessionId, array $status): void
+    {
+        try {
+            $pdo  = \Infrastructure\Persistence\Database::getConnection();
+            $stmt = $pdo->prepare("UPDATE sessions SET run_status = :s WHERE id = :id");
+            $stmt->execute([':s' => json_encode($status), ':id' => $sessionId]);
+        } catch (\Exception $e) {
+            // Non-fatal — progress signaling is best-effort
+        }
     }
 
     public function run(
@@ -67,7 +91,8 @@ class DecisionRoomRunner {
         bool   $devilAdvocateEnabled = false,
         float  $devilAdvocateThreshold = 0.65,
         array  $agentProviders = [],
-        float  $decisionThreshold = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD
+        float  $decisionThreshold = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD,
+        array  $sessionOptions = []
     ): array {
         $rounds              = min(max($rounds, 1), RoundPolicy::MAX_ROUNDS);
         $decisionThreshold   = ReliabilityConfig::normalizeThreshold($decisionThreshold);
@@ -137,6 +162,49 @@ class DecisionRoomRunner {
                         $socialDynamicsBlock,
                         $forceStrongNext && $agentId !== 'synthesizer'
                     );
+
+                    // Inject synthesizer constraints on the final round
+                    if ($agentId === 'synthesizer' && $round === $rounds) {
+                        try {
+                            $preDecision = $this->voteAggregator->recompute($sessionId, $decisionThreshold);
+                            $preEnvelope = $this->reliabilityService->buildEnvelope(
+                                $objective, $contextDoc, $preDecision,
+                                $this->voteRepo->findVotesBySession($sessionId),
+                                $state['positions'], $state['edges'],
+                                $decisionThreshold, null, null, null, null, null
+                            );
+                            $preFcData       = $preEnvelope['false_consensus'] ?? [];
+                            $preDebateQuality= (float)(($preFcData['diversity_score'] ?? 0.5) * 100);
+                            $preGuardrails   = $this->guardrailService->evaluate(
+                                rawDecision:       $preEnvelope['raw_decision'] ?? [],
+                                adjustedDecision:  $preEnvelope['adjusted_decision'] ?? [],
+                                contextQuality:    $preEnvelope['context_quality'] ?? [],
+                                falseConsensus:    $preFcData,
+                                debateQualityScore:$preDebateQuality,
+                                evidenceReport:    null,
+                                riskProfile:       null,
+                                mode:              'decision-room',
+                                sessionOptions:    []
+                            );
+                            $constraintBlock   = $this->promptBuilder->buildSynthesizerConstraintBlock(
+                                array_merge($preEnvelope, [
+                                    'debate_quality_score' => $preDebateQuality,
+                                    'guardrails'           => $preGuardrails,
+                                ])
+                            );
+                            $formatInstruction = $this->promptBuilder->buildSynthesizerOutputFormatInstruction();
+                            foreach ($messages as &$msg) {
+                                if ($msg['role'] === 'user') {
+                                    $msg['content'] .= $constraintBlock . $formatInstruction;
+                                    break;
+                                }
+                            }
+                            unset($msg);
+                        } catch (\Throwable $e) {
+                            error_log('[DecisionRoomRunner] Synthesizer constraint injection failed: ' . $e->getMessage());
+                        }
+                    }
+
                     $routed  = $this->providerRouter->chat($messages, $agent, null, null, $agentProviders[$agentId] ?? null);
                     $content = $routed['content'];
 
@@ -348,6 +416,132 @@ class DecisionRoomRunner {
             $evidenceReport,
             $riskProfile
         );
+
+        // Debate quality proxy for non-jury modes (derived from diversity score)
+        $falseConsensusData = $reliability['false_consensus'] ?? [];
+        $debateQualityProxy = (float)(($falseConsensusData['diversity_score'] ?? 0.5) * 100);
+
+        $guardrails = $this->guardrailService->evaluate(
+            rawDecision:       $reliability['raw_decision'] ?? [],
+            adjustedDecision:  $reliability['adjusted_decision'] ?? [],
+            contextQuality:    $reliability['context_quality'] ?? [],
+            falseConsensus:    $falseConsensusData,
+            debateQualityScore:$debateQualityProxy,
+            evidenceReport:    $evidenceReport,
+            riskProfile:       $riskProfile,
+            mode:              'decision-room',
+            sessionOptions:    $sessionOptions
+        );
+
+        // Apply final_outcome_override if guardrails mandate it
+        if ($guardrails['final_outcome_override'] !== null) {
+            $reliability['adjusted_decision']['final_outcome'] = $guardrails['final_outcome_override'];
+        }
+
+        $autoRetryResult = ['triggered' => false];
+
+        if (($guardrails['should_auto_retry'] ?? false) === true) {
+            $initialScore = $debateQualityProxy;
+            $this->writeRunStatus($sessionId, [
+                'status'        => 'auto_retry',
+                'reason'        => 'weak_parallel_debate',
+                'initial_score' => $initialScore,
+            ]);
+
+            $retryInstruction = $this->promptBuilder->buildAutoRetryAdversarialPrompt($initialScore);
+
+            foreach ($selectedAgents as $agentId) {
+                if ($agentId === 'synthesizer') continue;
+                $agent = $this->assembler->assemble($agentId);
+                if (!$agent) continue;
+
+                $existingMessages = $this->messageRepo->findBySession($sessionId);
+                $historyText = implode("\n\n", array_map(
+                    fn($m) => "[{$m['agent_id']}]: {$m['content']}",
+                    $existingMessages
+                ));
+
+                $userMsg  = $retryInstruction . "\n\nPrevious debate:\n\n" . $historyText;
+                try {
+                    $routed = $this->providerRouter->chat(
+                        [['role' => 'system', 'content' => $agent->systemPrompt ?? ''], ['role' => 'user', 'content' => $userMsg]],
+                        $agent, null, null, $agentProviders[$agentId] ?? null
+                    );
+                    $this->messageRepo->create([
+                        'id'           => $this->uuid(),
+                        'session_id'   => $sessionId,
+                        'role'         => 'assistant',
+                        'agent_id'     => $agentId,
+                        'round'        => $rounds + 1,
+                        'phase'        => 'retry-round',
+                        'mode_context' => 'decision-room',
+                        'message_type' => 'retry-round',
+                        'content'      => $routed['content'] ?? '',
+                        'created_at'   => date('c'),
+                    ]);
+                } catch (\Throwable $e) {
+                    error_log('[DecisionRoomRunner] Auto-retry agent failed: ' . $e->getMessage());
+                }
+            }
+
+            $allVotesRetry     = $this->voteRepo->findVotesBySession($sessionId);
+            $newFalseConsensus = $this->falseConsensusDetector->detect(
+                $reliability['context_quality'] ?? [],
+                $state['positions'] ?? [],
+                $state['edges'] ?? [],
+                $allVotesRetry
+            );
+            $newDebateProxy    = (float)(($newFalseConsensus['diversity_score'] ?? 0.5) * 100);
+
+            $guardrails = $this->guardrailService->evaluate(
+                rawDecision:       $reliability['raw_decision'] ?? [],
+                adjustedDecision:  $reliability['adjusted_decision'] ?? [],
+                contextQuality:    $reliability['context_quality'] ?? [],
+                falseConsensus:    $newFalseConsensus,
+                debateQualityScore:$newDebateProxy,
+                evidenceReport:    null,
+                riskProfile:       null,
+                mode:              'decision-room',
+                sessionOptions:    [] // empty: max 1 retry enforced
+            );
+
+            $autoRetryResult = [
+                'triggered'                    => true,
+                'reason'                       => 'weak_parallel_debate',
+                'initial_debate_quality_score' => $initialScore,
+                'retry_debate_quality_score'   => $newDebateProxy,
+                'extra_rounds'                 => 1,
+            ];
+
+            $this->writeRunStatus($sessionId, ['status' => 'auto_retry_complete', 'new_score' => $newDebateProxy]);
+        }
+
+        $finalFcData      = $newFalseConsensus ?? $falseConsensusData;
+        $finalDebateScore = $newDebateProxy ?? $debateQualityProxy;
+        $qualityScore = $this->qualityScoreService->compute(
+            contextQuality:     $reliability['context_quality'] ?? [],
+            debateQualityScore: $finalDebateScore,
+            evidenceReport:     $evidenceReport,
+            riskProfile:        $riskProfile,
+            falseConsensus:     $finalFcData
+        );
+
+        $synthesizerOutput = '';
+        foreach ($allMessages[$rounds] ?? [] as $msg) {
+            if (($msg['agent_id'] ?? '') === 'synthesizer') {
+                $synthesizerOutput = $msg['content'] ?? '';
+                break;
+            }
+        }
+        $decisionBrief = $this->summaryService->buildDecisionBrief(
+            array_merge($reliability, [
+                'synthesizer_output'     => $synthesizerOutput,
+                'guardrails'             => $guardrails,
+                'decision_quality_score' => $qualityScore,
+                'risk_profile'           => $riskProfile,
+            ])
+        );
+
         return [
             'rounds' => $allMessages,
             'arguments' => $state['arguments'],
@@ -369,6 +563,10 @@ class DecisionRoomRunner {
             'evidence_report' => $evidenceReport,
             'risk_profile' => $riskProfile,
             'risk_threshold_info' => $reliability['risk_threshold_info'] ?? null,
+            'guardrails' => $guardrails,
+            'auto_retry' => $autoRetryResult,
+            'decision_quality_score' => $qualityScore,
+            'decision_brief' => $decisionBrief,
         ];
     }
 
