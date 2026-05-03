@@ -3,6 +3,7 @@
  */
 
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
+import { renderDecisionBrief } from '../../ui/components.js';
 import { renderExportButtons, renderAgentChatPanel } from '../chat/view.js';
 import { renderConfrontationAgentCard, renderWeightedVotePanel, renderDecisionReliabilityCard, renderVerdictCard } from '../confrontation/index.js';
 import { renderDebateAuditPanel } from '../debateAudit/index.js';
@@ -50,25 +51,31 @@ function renderQuickDecision() {
         ` : ''}
 
         ${results ? `
+          ${renderDecisionBrief(results.decision_brief || null, { sessionId: session.id })}
           ${results.warning ? `<div class="error-banner" style="margin-bottom:16px;">⚠️ ${escHtml(results.warning)}</div>` : ''}
 
-          ${results.round && results.round.length > 0 ? `
-            <div class="phase-section">
-              <div class="phase-header blue"><span>🎯</span><span>${t('qd.analysisRound')}</span></div>
-              <div class="phase-agents-grid">
-                ${results.round.map((msg) => renderConfrontationAgentCard(msg, false)).join('')}
+          <details id="debate-section-${escHtml(session.id)}" data-section="debate-details" ${state.showDebateDetails ? 'open' : ''} style="margin:0 0 16px;">
+            <summary class="btn btn-secondary btn-sm">Voir le debat complet</summary>
+            <div style="margin-top:12px;">
+              ${results.round && results.round.length > 0 ? `
+              <div class="phase-section">
+                <div class="phase-header blue"><span>🎯</span><span>${t('qd.analysisRound')}</span></div>
+                <div class="phase-agents-grid">
+                  ${results.round.map((msg, idx) => renderConfrontationAgentCard(msg, false, `${session.id}-qd-r-${idx}`)).join('')}
+                </div>
               </div>
-            </div>
-          ` : ''}
+              ` : ''}
 
-          ${results.synthesis && results.synthesis.length > 0 ? `
-            <div class="phase-section">
-              <div class="phase-header synthesis"><span>✨</span><span>${t('dr.synthesis')}</span></div>
-              <div class="phase-agents-grid">
-                ${results.synthesis.map((msg) => renderConfrontationAgentCard(msg, true)).join('')}
+              ${results.synthesis && results.synthesis.length > 0 ? `
+              <div class="phase-section">
+                <div class="phase-header synthesis"><span>✨</span><span>${t('dr.synthesis')}</span></div>
+                <div class="phase-agents-grid">
+                  ${results.synthesis.map((msg, idx) => renderConfrontationAgentCard(msg, true, `${session.id}-qd-s-${idx}`)).join('')}
+                </div>
               </div>
+              ` : ''}
             </div>
-          ` : ''}
+          </details>
 
           ${renderWeightedVotePanel(results, session.id)}
           ${renderDecisionReliabilityCard(results)}

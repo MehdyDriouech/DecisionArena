@@ -13,8 +13,36 @@ function getCtx() {
   return { state, escHtml, formatDate, agentIcon, agentName, t };
 }
 
+function extractSessionOutcome(session) {
+  let result = session?.result ?? null;
+  if (typeof result === 'string' && result.trim()) {
+    try { result = JSON.parse(result); } catch (_) { result = null; }
+  }
+  const adjusted = result?.adjusted_decision ?? null;
+  const raw = result?.raw_decision ?? null;
+  const decision = adjusted?.decision || raw?.decision || null;
+  const confidenceRaw = adjusted?.confidence ?? raw?.confidence ?? null;
+  const confidencePct = typeof confidenceRaw === 'number'
+    ? Math.max(0, Math.min(100, Math.round(confidenceRaw * 100)))
+    : null;
+  return { decision, confidencePct };
+}
+
 function renderSessionCard(session, fullActions = false) {
   const { state, escHtml, formatDate, agentIcon, agentName, t } = getCtx();
+  const outcome = extractSessionOutcome(session);
+  const decisionBadge = outcome.decision
+    ? `<span class="badge badge-info">Décision: ${escHtml(String(outcome.decision).replace(/_/g, ' '))}</span>`
+    : '';
+  const confidenceBadge = outcome.confidencePct !== null
+    ? `<span class="badge badge-muted">Confiance: ${outcome.confidencePct}%</span>`
+    : '';
+  const statusInline = session.status
+    ? `<span class="badge ${session.status === 'completed' ? 'badge-success' : session.status === 'error' ? 'badge-danger' : 'badge-muted'}">Statut: ${escHtml(session.status)}</span>`
+    : '';
+  const insightsRow = (decisionBadge || confidenceBadge || statusInline)
+    ? `<div class="session-card-insights" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">${decisionBadge}${confidenceBadge}${statusInline}</div>`
+    : '';
 
   const modeIcons  = { chat: '💬', 'decision-room': '🏛️', confrontation: '⚔️', 'quick-decision': '⚡', 'stress-test': '🔥' };
   const modeLabels = {
@@ -60,6 +88,7 @@ function renderSessionCard(session, fullActions = false) {
             ${agents.map((id) => `<span class="agent-badge">${agentIcon(id)} ${escHtml(agentName(id))}</span>`).join('')}
           </div>
         ` : ''}
+        ${insightsRow}
       </div>
     `;
   }
@@ -84,6 +113,7 @@ function renderSessionCard(session, fullActions = false) {
           ${(session.selected_agents || []).length > 5 ? `<span class="agent-badge">+${(session.selected_agents.length - 5)}</span>` : ''}
         </div>
       ` : ''}
+      ${insightsRow}
       <div class="session-card-full-actions">
         <button class="btn btn-primary btn-sm" data-action="open-session" data-session-id="${escHtml(session.id)}" data-mode="${escHtml(session.mode)}">
           ${t('sessions.open')}
@@ -119,17 +149,40 @@ function renderDashboard() {
       <div class="page-subtitle">${t('dashboard.subtitle')}</div>
     </div>
 
-    <div class="action-buttons">
-      <button class="btn btn-primary btn-lg" data-action="goto-new-session" data-mode="chat">
-        <span class="btn-icon">💬</span> ${t('dashboard.newChat')}
+    <div class="hero-block" style="margin:0 0 20px;padding:24px;border:1px solid var(--border);border-radius:12px;background:linear-gradient(135deg,rgba(99,102,241,0.12),rgba(139,92,246,0.08));">
+      <div style="font-size:28px;font-weight:800;line-height:1.2;margin-bottom:8px;">
+        Que voulez-vous décider aujourd’hui ?
+      </div>
+      <div style="font-size:14px;color:var(--text-secondary);margin-bottom:16px;max-width:680px;">
+        Simulez plusieurs experts IA pour obtenir une décision argumentée.
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-primary btn-lg" data-action="launch-quick-analysis">
+          🔥 Analyser en 1 clic
+        </button>
+        <button class="btn btn-secondary" data-action="dashboard-intent-explore">
+          Explorer une idée
+        </button>
+        <button class="btn btn-secondary" data-action="dashboard-intent-decide">
+          Prendre une décision
+        </button>
+        <button class="btn btn-secondary" data-action="dashboard-intent-test">
+          Tester une idée
+        </button>
+      </div>
+    </div>
+
+    <div class="action-buttons" data-ui="expert-only">
+      <button class="btn btn-secondary btn-sm" data-action="goto-new-session" data-mode="chat">
+        <span class="btn-icon">💬</span> Nouveau Chat Multi-Agent
       </button>
-      <button class="btn btn-secondary btn-lg" data-action="goto-new-session" data-mode="decision-room">
-        <span class="btn-icon">🏛️</span> ${t('dashboard.newDecisionRoom')}
+      <button class="btn btn-secondary btn-sm" data-action="goto-new-session" data-mode="decision-room">
+        <span class="btn-icon">🏛️</span> Nouvelle Decision Room
       </button>
-      <button class="btn btn-secondary btn-lg" data-action="goto-new-session" data-mode="confrontation">
-        <span class="btn-icon">⚔️</span> ${t('dashboard.newConfrontation')}
+      <button class="btn btn-secondary btn-sm" data-action="goto-new-session" data-mode="confrontation">
+        <span class="btn-icon">⚔️</span> Nouvelle Confrontation
       </button>
-      <button class="btn btn-secondary btn-lg" data-nav="session-comparisons">
+      <button class="btn btn-secondary btn-sm" data-nav="session-comparisons">
         <span class="btn-icon">⚖️</span> ${t('dashboard.compareSessions')}
       </button>
     </div>
@@ -142,7 +195,7 @@ function renderDashboard() {
       ${recent.length === 0 ? `
         <div class="empty-state">
           <div class="empty-state-icon">📂</div>
-          <div class="empty-state-text">${t('dashboard.noSessions')}</div>
+          <div class="empty-state-text">Vous n’avez pas encore lancé d’analyse.<br>Commencez en cliquant sur ‘Analyser en 1 clic’.</div>
         </div>
       ` : recent.map((s) => renderSessionCard(s, false)).join('')}
     </div>

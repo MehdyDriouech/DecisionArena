@@ -4,7 +4,7 @@
  * sessionHistory, and stressTest.
  */
 
-import { renderTooltip, renderPanelRecommendBadge, renderCardDescription } from '../../ui/components.js';
+import { renderTooltip, renderPanelRecommendBadge, renderCardDescription, renderDecisionBrief } from '../../ui/components.js';
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
 import { renderExportButtons, renderAgentChatPanel } from '../chat/view.js';
 import { renderDebateAuditPanel } from '../debateAudit/index.js';
@@ -29,14 +29,21 @@ function panelHighlightsFromState(state) {
 
 /* ── Shared sub-renderers ── */
 
-function renderConfrontationAgentCard(msg, isSynthesis) {
-  const { escHtml, renderMarkdown, formatDate, agentIcon, agentName, agentTitleText, t } = getCtx();
+function renderConfrontationAgentCard(msg, isSynthesis, messageKey = '') {
+  const { state, escHtml, renderMarkdown, formatDate, agentIcon, agentName, agentTitleText, t } = getCtx();
   const icon     = agentIcon(msg.agent_id);
   const name     = agentName(msg.agent_id);
   const titleTxt = agentTitleText(msg.agent_id);
   const targetBadge = msg.target_agent_id
     ? `<span class="badge badge-info" style="margin-left:auto;font-size:11px;">→ ${escHtml(msg.target_agent_id)}</span>`
     : '';
+  const messageId = String(msg.id || messageKey || `${msg.agent_id || 'agent'}-${msg.created_at || Date.now()}`);
+  const isLong = String(msg.content || '').length > 650;
+  const collapsed = !!state.collapsedMessages?.[messageId];
+  const preview = escHtml(String(msg.content || '').slice(0, 320));
+  const contentHtml = isLong && collapsed
+    ? `<div class="agent-content md-content"><p>${preview}…</p></div>`
+    : `<div class="agent-content md-content">${renderMarkdown(msg.content)}</div>`;
   return `
     <div class="agent-card ${isSynthesis ? 'synthesis-full' : ''}">
       <div class="agent-card-header">
@@ -47,7 +54,8 @@ function renderConfrontationAgentCard(msg, isSynthesis) {
         </div>
         ${isSynthesis ? `<span class="badge badge-success" style="margin-left:auto;">${t('dr.synthesis')}</span>` : targetBadge}
       </div>
-      <div class="agent-content md-content">${renderMarkdown(msg.content)}</div>
+      ${contentHtml}
+      ${isLong ? `<button class="btn btn-secondary btn-sm" data-action="toggle-agent-message" data-message-id="${escHtml(messageId)}">${collapsed ? 'Voir' : 'Masquer'}</button>` : ''}
       <div class="agent-card-footer">
         ${msg.provider_id ? `<span>${escHtml(msg.provider_id)}</span>` : ''}
         ${msg.model ? `<span>${escHtml(msg.model)}</span>` : ''}
@@ -385,6 +393,8 @@ function renderSessionContextDocPanel(session) {
 
 function renderConfrontationResults(results) {
   const { state, t } = getCtx();
+  const sid = state.currentSession?.id ?? '';
+  const briefHtml = renderDecisionBrief(results.decision_brief || null, { sessionId: sid });
   if (results.rounds && Object.keys(results.rounds).length > 0) {
     const roundNums = Object.keys(results.rounds).map(Number).sort((a, b) => a - b);
     const total     = results.total_rounds || roundNums.length;
@@ -395,10 +405,11 @@ function renderConfrontationResults(results) {
     let html = roundNums.map((r) => {
       const msgs = results.rounds[r] || [];
       if (msgs.length === 0) return '';
-      return `<div class="phase-section"><div class="phase-header blue"><span>${roundIcons(r)}</span><span>${roundLabel(r)}</span></div><div class="phase-agents-grid">${msgs.map((msg) => renderConfrontationAgentCard(msg, false)).join('')}</div></div>`;
+      return `<div class="phase-section"><div class="phase-header blue"><span>${roundIcons(r)}</span><span>${roundLabel(r)}</span></div><div class="phase-agents-grid">${msgs.map((msg, idx) => renderConfrontationAgentCard(msg, false, `${sid}-r${r}-m${idx}`)).join('')}</div></div>`;
     }).join('');
-    if (synthesis.length > 0) html += `<div class="phase-section"><div class="phase-header synthesis"><span>✨</span><span>${t('confrontation.phaseFinal')}</span></div><div class="phase-agents-grid">${synthesis.map((msg) => renderConfrontationAgentCard(msg, true)).join('')}</div></div>`;
-    const sid = state.currentSession?.id ?? '';
+    if (synthesis.length > 0) html += `<div class="phase-section"><div class="phase-header synthesis"><span>✨</span><span>${t('confrontation.phaseFinal')}</span></div><div class="phase-agents-grid">${synthesis.map((msg, idx) => renderConfrontationAgentCard(msg, true, `${sid}-s-${idx}`)).join('')}</div></div>`;
+    html = `<details id="debate-section-${sid}" data-section="debate-details" ${state.showDebateDetails ? 'open' : ''} style="margin:0 0 16px;"><summary class="btn btn-secondary btn-sm">Voir le debat complet</summary><div style="margin-top:12px;">${html}</div></details>`;
+    html = briefHtml + html;
     html += renderDebateInsightsPanels(results);
     html += renderWeightedVotePanel(results, sid);
     html += renderDecisionReliabilityCard(results);
@@ -415,14 +426,16 @@ function renderConfrontationResults(results) {
     { key: 'blue_rebuttal', label: t('confrontation.phase3'),     colorClass: 'blue',      icon: '🔵' },
     { key: 'synthesis',     label: t('confrontation.phaseFinal'), colorClass: 'synthesis', icon: '✨' },
   ];
+  const sid2 = state.currentSession?.id ?? '';
   const legacyHtml = phaseDefs.map(({ key, label, colorClass, icon }) => {
     const messages = phases[key] || [];
     if (messages.length === 0) return '';
     const isSynthesis = key === 'synthesis';
-    return `<div class="phase-section"><div class="phase-header ${colorClass}"><span>${icon}</span><span>${label}</span></div><div class="phase-agents-grid">${messages.map((msg) => renderConfrontationAgentCard(msg, isSynthesis)).join('')}</div></div>`;
+    return `<div class="phase-section"><div class="phase-header ${colorClass}"><span>${icon}</span><span>${label}</span></div><div class="phase-agents-grid">${messages.map((msg, idx) => renderConfrontationAgentCard(msg, isSynthesis, `${sid2}-${key}-${idx}`)).join('')}</div></div>`;
   }).join('');
-  const sid2 = state.currentSession?.id ?? '';
-  return legacyHtml
+  const legacyDebate = `<details id="debate-section-${sid2}" data-section="debate-details" ${state.showDebateDetails ? 'open' : ''} style="margin:0 0 16px;"><summary class="btn btn-secondary btn-sm">Voir le debat complet</summary><div style="margin-top:12px;">${legacyHtml}</div></details>`;
+  return briefHtml
+    + legacyDebate
     + renderWeightedVotePanel(results, sid2)
     + renderDecisionReliabilityCard(results)
     + renderGraphViewPanel(sid2)

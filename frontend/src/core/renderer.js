@@ -58,20 +58,6 @@ function renderSidebar() {
       <button class="language-option ${lang === 'fr' ? 'active' : ''}" data-action="set-language" data-lang="fr">🇫🇷 FR</button>
       <button class="language-option ${lang === 'en' ? 'active' : ''}" data-action="set-language" data-lang="en">🇬🇧 EN</button>
     </div>
-    <div class="complexity-badge-wrapper" style="position:relative;padding:8px 12px;border-top:1px solid var(--border);">
-      <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${t('ui.complexity.label')}</div>
-      <button type="button" class="complexity-badge" data-action="toggle-complexity-dropdown"
-              style="width:100%;text-align:left;padding:5px 8px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);font-size:12px;cursor:pointer;">
-        ${t('ui.complexity.' + state.uiComplexity)} ▾
-      </button>
-      <div id="complexity-dropdown" style="display:none;position:absolute;bottom:100%;left:12px;right:12px;background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.3);z-index:100;overflow:hidden;">
-        ${['basic', 'advanced', 'expert'].map((lvl) => `
-          <div class="complexity-option" data-action="set-ui-complexity" data-complexity="${lvl}"
-               style="padding:8px 12px;font-size:12px;cursor:pointer;color:${state.uiComplexity === lvl ? 'var(--accent)' : 'var(--text-secondary)'};background:${state.uiComplexity === lvl ? 'var(--accent-light)' : 'transparent'};">
-            ${t('ui.complexity.' + lvl)}
-          </div>`).join('')}
-      </div>
-    </div>
   `;
 }
 

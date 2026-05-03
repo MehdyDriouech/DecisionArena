@@ -74,6 +74,8 @@ const createInitialState = () => ({
     } catch (_) { return new Set(); }
   })(),
   sessionHistory: null,
+  collapsedMessages: {},
+  showDebateDetails: false,
   newSession: {
     title: '',
     idea: '',
@@ -99,6 +101,10 @@ const createInitialState = () => ({
     fastDecisionEnabled: true,
     customizing: false,
     selectedTemplateId: null,
+    /** Modèle de départ choisi sur Nouvelle session ({ type, id } | null) */
+    selectedStarter: null,
+    /** Replie la grille « Démarrer avec un modèle » sur Nouvelle session */
+    starterModelsCollapsed: false,
   },
   currentContextDoc: null,
   ctxDocPanelOpen: false,

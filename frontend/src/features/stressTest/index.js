@@ -9,6 +9,7 @@
  */
 
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
+import { renderDecisionBrief } from '../../ui/components.js';
 import { renderDRAgentMessage, renderExportButtons, renderAgentChatPanel } from '../chat/view.js';
 import { renderDebateAuditPanel } from '../debateAudit/index.js';
 import { renderGraphViewPanel } from '../graphView/index.js';
@@ -24,10 +25,11 @@ function getCtx() {
 }
 
 function renderStressTestResults(results) {
-  const { t } = getCtx();
+  const { state, t } = getCtx();
   const shared   = window.DecisionArena.views?.shared || {};
   const rounds   = results.rounds || {};
   const roundKeys = Object.keys(rounds).map(Number).sort((a, b) => a - b);
+  const sessionId = window.DecisionArena.store.state.currentSession?.id ?? '';
 
   const roundsHtml = roundKeys.map((round) => {
     const msgs       = rounds[round] || [];
@@ -44,19 +46,21 @@ function renderStressTestResults(results) {
           }</span>
         </div>
         <div class="dr-round-messages">
-          ${msgs.map((msg) => renderDRAgentMessage(msg, msg.agent_id === 'synthesizer')).join('')}
+          ${msgs.map((msg, idx) => renderDRAgentMessage(msg, msg.agent_id === 'synthesizer', `${sessionId}-r${round}-m${idx}`)).join('')}
         </div>
       </div>
     `;
   }).join('');
 
-  const sessionId      = window.DecisionArena.store.state.currentSession?.id ?? '';
   const insightsHtml   = shared.renderDebateInsightsPanels ? shared.renderDebateInsightsPanels(results) : '';
   const voteHtml       = shared.renderWeightedVotePanel    ? shared.renderWeightedVotePanel(results, sessionId) : '';
   const reliabilityHtml = shared.renderDecisionReliabilityCard ? shared.renderDecisionReliabilityCard(results) : '';
   const verdictHtml    = results.verdict && shared.renderVerdictCard ? shared.renderVerdictCard(results.verdict) : '';
 
-  return roundsHtml + insightsHtml + voteHtml + reliabilityHtml + verdictHtml
+  const briefHtml = renderDecisionBrief(results.decision_brief || null, { sessionId });
+  const debateHtml = `<details id="debate-section-${sessionId}" data-section="debate-details" ${state.showDebateDetails ? 'open' : ''} style="margin:0 0 16px;"><summary class="btn btn-secondary btn-sm">Voir le debat complet</summary><div style="margin-top:12px;">${roundsHtml}</div></details>`;
+
+  return briefHtml + debateHtml + insightsHtml + voteHtml + reliabilityHtml + verdictHtml
     + renderGraphViewPanel(sessionId)
     + renderDebateAuditPanel(sessionId)
     + renderArgumentHeatmapPanel(sessionId)

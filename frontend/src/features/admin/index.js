@@ -214,24 +214,18 @@ function renderAdministration() {
   const adminSections = getFilteredAdminSections(state);
   const canToggleAdvanced = uiC === 'basic';
   const showAdvanced = !!state.adminShowAdvancedTools;
-  const complexityBtn = (val, labelKey) =>
-    `<button class="btn ${uiC === val ? 'btn-primary' : 'btn-secondary'} btn-sm" style="font-size:11px;" data-action="set-ui-complexity" data-complexity="${val}">${t(labelKey)}</button>`;
+  const complexityToolbar = canToggleAdvanced
+    ? `<div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap;">
+        <button type="button" class="btn ${showAdvanced ? 'btn-primary' : 'btn-secondary'} btn-sm" style="font-size:11px;" data-action="toggle-admin-advanced-tools">
+          ${showAdvanced ? t('admin.hideAdvancedTools') : t('admin.showAdvancedTools')}
+        </button>
+      </div>`
+    : '';
   return `
     <div class="page-header">
       <div class="page-title">${t('admin.title')}</div>
       <div class="page-subtitle">${t('admin.home.subtitle')}</div>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap;">
-        <span style="font-size:12px;color:var(--text-muted);">${t('ui.complexity.label')} :</span>
-        ${complexityBtn('basic', 'ui.complexity.basic')}
-        ${complexityBtn('advanced', 'ui.complexity.advanced')}
-        ${complexityBtn('expert', 'ui.complexity.expert')}
-        ${canToggleAdvanced
-          ? `<button class="btn ${showAdvanced ? 'btn-primary' : 'btn-secondary'} btn-sm" style="font-size:11px;" data-action="toggle-admin-advanced-tools">
-              ${showAdvanced ? t('admin.hideAdvancedTools') : t('admin.showAdvancedTools')}
-            </button>`
-          : ''
-        }
-      </div>
+      ${complexityToolbar}
     </div>
     <div class="admin-home">
       ${renderGetStarted(t, escHtml)}

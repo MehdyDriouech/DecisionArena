@@ -8,6 +8,7 @@
  */
 
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
+import { renderDecisionBrief } from '../../ui/components.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -56,10 +57,17 @@ function renderMessage(msg) {
 }
 
 /** Agent card used in DR / confrontation / stress-test results. */
-function renderDRAgentMessage(msg, isSynth = false) {
-  const { escHtml, renderMarkdown, agentIcon, agentName, t } = getCtx();
+function renderDRAgentMessage(msg, isSynth = false, messageKey = '') {
+  const { state, escHtml, renderMarkdown, agentIcon, agentName, t } = getCtx();
   const icon = agentIcon(msg.agent_id);
   const name = agentName(msg.agent_id);
+  const messageId = String(msg.id || messageKey || `${msg.agent_id || 'agent'}-${msg.created_at || Date.now()}`);
+  const isLong = String(msg.content || '').length > 650;
+  const collapsed = !!state.collapsedMessages?.[messageId];
+  const preview = escHtml(String(msg.content || '').slice(0, 320));
+  const contentHtml = isLong && collapsed
+    ? `<div class="agent-content md-content"><p>${preview}…</p></div>`
+    : `<div class="agent-content md-content">${renderMarkdown(msg.content || '')}</div>`;
   return `
     <div class="agent-card ${isSynth ? 'synthesis-card' : ''}">
       <div class="agent-card-header">
@@ -69,7 +77,8 @@ function renderDRAgentMessage(msg, isSynth = false) {
         </div>
         ${isSynth ? `<span class="badge badge-success" style="font-size:11px;">✨ ${t('dr.synthesis')}</span>` : ''}
       </div>
-      <div class="agent-content md-content">${renderMarkdown(msg.content || '')}</div>
+      ${contentHtml}
+      ${isLong ? `<button class="btn btn-secondary btn-sm" data-action="toggle-agent-message" data-message-id="${escHtml(messageId)}">${collapsed ? 'Voir' : 'Masquer'}</button>` : ''}
     </div>
   `;
 }
@@ -384,6 +393,11 @@ function renderChat() {
   const rcRunning = !!rc.running;
   const rcError   = rc.error || null;
   const rcResults = state.reactiveChatResults || null;
+  let brief = null;
+  if (session?.decision_brief && typeof session.decision_brief === 'object') brief = session.decision_brief;
+  if (!brief && session?.decision_brief && typeof session.decision_brief === 'string') {
+    try { brief = JSON.parse(session.decision_brief); } catch (_) {}
+  }
 
   // Determine send button label / action
   const sendAction = rcEnabled ? 'send-reactive-message' : 'send-message';
@@ -424,6 +438,7 @@ function renderChat() {
       ${rcEnabled ? renderReactiveChatPanel() : ''}
 
       ${rcError ? `<div style="padding:8px 12px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;font-size:12px;color:#dc2626;margin-bottom:8px;">${escHtml(rcError)}</div>` : ''}
+      ${renderDecisionBrief(brief, { sessionId: session.id })}
 
       <div class="messages-timeline" id="messages-timeline">
         ${messages.length === 0 && !rcResults ? `

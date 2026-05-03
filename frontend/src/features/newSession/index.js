@@ -24,34 +24,6 @@ function renderFastDecisionBadge() {
   `;
 }
 
-function renderTemplateGrid(templates) {
-  const { escHtml, t } = getCtx();
-  const icons = {
-    'tpl-ship-or-not':      '🚀',
-    'tpl-refactor-vs-ship': '🔧',
-    'tpl-build-vs-buy':     '🛒',
-    'tpl-hire-or-not':      '👤',
-    'tpl-launch-or-wait':   '⏰',
-  };
-  const tiles = templates.map((tpl) => `
-    <div class="template-tile" data-action="select-template" data-template-id="${escHtml(tpl.id)}" role="button" tabindex="0">
-      <div class="tile-icon">${icons[tpl.id] || '📋'}</div>
-      <div class="tile-name">${escHtml(tpl.title)}</div>
-    </div>`).join('');
-  return `
-    <div class="template-grid-section" style="margin-bottom:20px;">
-      <div class="section-label" style="margin-bottom:8px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);">${t('template.section.title')}</div>
-      <div class="template-grid" style="display:flex;flex-wrap:wrap;gap:8px;">
-        ${tiles}
-        <div class="template-tile tile-free" data-action="select-template" data-template-id="" role="button" tabindex="0">
-          <div class="tile-icon">✏️</div>
-          <div class="tile-name">${t('template.free_question')}</div>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
 function renderContextHintBanner(questions) {
   const t = (key) => window.i18n?.t(key) ?? key;
   if (!questions || questions.length === 0) return '';
@@ -79,6 +51,158 @@ function getCtx() {
     return `<span class="info-tooltip" data-tooltip="${safe}" aria-label="${safe}">?</span>`;
   };
   return { state, escHtml, t, tip };
+}
+
+/** Liste fusionnée templates + scénarios (UI « modèles de départ »). */
+function buildStarterCards(state) {
+  const templates = Array.isArray(state.templates) ? state.templates : [];
+  const packs = Array.isArray(state.scenarioPacks) ? state.scenarioPacks : [];
+  const templateIds = new Set(templates.map((x) => x.id));
+  const out = [];
+
+  templates.forEach((tmpl) => {
+    out.push({
+      kind: 'template',
+      id: tmpl.id,
+      title: tmpl.name || tmpl.title || tmpl.id,
+      description: tmpl.description || '',
+      mode: tmpl.mode,
+      agents: Array.isArray(tmpl.selected_agents) ? tmpl.selected_agents : [],
+      rounds: tmpl.rounds,
+      forceDisagreement: !!tmpl.force_disagreement,
+      largeWarning: false,
+      targetProfile: '',
+    });
+  });
+
+  packs.forEach((pack) => {
+    if (templateIds.has(pack.id)) return;
+    out.push({
+      kind: 'scenario',
+      id: pack.id,
+      title: pack.name || pack.id,
+      description: pack.description || '',
+      mode: pack.recommended_mode,
+      agents: Array.isArray(pack.persona_ids) ? pack.persona_ids : [],
+      rounds: pack.rounds,
+      forceDisagreement: !!pack.force_disagreement,
+      largeWarning: !!(pack.max_personas && pack.max_personas > 10),
+      targetProfile: pack.target_profile || '',
+    });
+  });
+
+  return out;
+}
+
+function renderStarterCard(card, ns, { escHtml, t, agentIcon }) {
+  const modeIcons = {
+    chat: '💬', 'decision-room': '🏛️', confrontation: '⚔️', 'quick-decision': '⚡', 'stress-test': '🔥', jury: '⚖️',
+  };
+  const modeLabels = {
+    chat: t('mode.chat').replace(/^💬\s*/, ''),
+    'decision-room': t('mode.decisionRoom').replace(/^🏛️\s*/, ''),
+    confrontation: t('mode.confrontation').replace(/^⚔️\s*/, ''),
+    'quick-decision': t('mode.quickDecision').replace(/^⚡\s*/, ''),
+    'stress-test': t('mode.stressTest').replace(/^🔥\s*/, ''),
+    jury: t('jury.title').replace(/^⚖️\s*/, ''),
+  };
+
+  const icon = modeIcons[card.mode] || '📋';
+
+  let selected = false;
+  if (card.kind === 'template') {
+    selected = ns.selectedStarter?.type === 'template' && ns.selectedStarter?.id === card.id;
+  } else if (card.kind === 'scenario') {
+    selected =
+      (ns.selectedStarter?.type === 'scenario' && ns.selectedStarter?.id === card.id)
+      || (!ns.selectedStarter && ns.selectedScenarioId === card.id);
+  }
+
+  const modeLabel = card.mode ? (modeLabels[card.mode] || card.mode) : '';
+  const roundsPart = card.rounds != null ? `${t('template.rounds')}: ${card.rounds}` : '';
+
+  const titleHtml = escHtml(card.title);
+  const descHtml = card.description ? escHtml(card.description) : '';
+
+  const profileLine = card.kind === 'scenario' && card.targetProfile
+    ? `<div class="template-card-desc starter-card-profile">${escHtml(card.targetProfile)}</div>`
+    : '';
+
+  const flagLine = card.forceDisagreement
+    ? `<div class="template-card-flag">⚠ ${t('template.forceDisagreement')}</div>`
+    : '';
+
+  const warnLine = card.largeWarning
+    ? `<div class="template-card-flag starter-card-warn">⚠️ ${t('scenario.warningLarge')}</div>`
+    : '';
+
+  const agentsRow = card.agents?.length
+    ? `<div class="template-card-agents starter-agents">${card.agents.slice(0, 8).map((id) => `<span class="agent-badge" style="font-size:11px;">${agentIcon(id)}</span>`).join('')}</div>`
+    : '';
+
+  const metaInner = `
+      <span class="badge badge-default">${escHtml(modeLabel)}</span>
+      ${roundsPart ? `<span class="starter-meta-rounds">${escHtml(roundsPart)}</span>` : ''}
+    `;
+
+  const sid = escHtml(card.id);
+
+  return `
+    <div class="template-card starter-card ${selected ? 'selected' : ''}"
+         data-action="select-starter"
+         data-starter-type="${card.kind}"
+         data-starter-id="${sid}"
+         role="button"
+         tabindex="0"
+         aria-pressed="${selected}">
+      <div class="template-card-header starter-card-header">
+        <span class="template-card-icon starter-icon">${icon}</span>
+        <div style="flex:1;min-width:0;">
+          <div class="template-card-name starter-title">${titleHtml}</div>
+          ${descHtml ? `<div class="template-card-desc starter-description">${descHtml}</div>` : ''}
+          ${profileLine}
+          ${flagLine}
+          ${warnLine}
+        </div>
+      </div>
+      <div class="template-card-meta starter-meta">${metaInner}</div>
+      ${agentsRow}
+      <div class="template-card-hint starter-use-hint" aria-hidden="true">${t('starter.use')}</div>
+    </div>`;
+}
+
+function renderStarterModelsSection() {
+  const { state, escHtml, t } = getCtx();
+  const ns = state.newSession;
+  const collapsed = !!ns.starterModelsCollapsed;
+  const agentIcon = (id) => window.DecisionArena.utils.agentIcon(state.personas, id);
+  const cards = buildStarterCards(state);
+  const html = cards.map((c) => renderStarterCard(c, ns, { escHtml, t, agentIcon })).join('');
+  const appliedHint = (ns.selectedStarter || ns.selectedScenarioId) ? `
+      <div class="starter-applied-hint" style="margin-top:10px;font-size:12px;color:var(--success,#10b981);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        ✅ ${t('scenario.applied')}
+        <button type="button" class="btn btn-secondary btn-sm" data-action="clear-scenario" style="font-size:11px;padding:2px 8px;">
+          ${t('scenario.clearSelection')}
+        </button>
+      </div>
+    ` : '';
+  return `
+    <div class="section starter-models-section" style="margin-bottom:24px;max-width:1100px;width:100%;">
+      <div class="starter-section-head">
+        <div class="starter-section-head-text">
+          <div class="section-header" style="margin-bottom:4px;">
+            <span class="section-label">${t('starter.section.title')}</span>
+          </div>
+          ${collapsed ? '' : `<div class="card-description starter-section-subtitle">${t('starter.section.subtitle')}</div>`}
+        </div>
+        <button type="button" class="btn btn-secondary btn-sm starter-toggle-models-btn" data-action="toggle-starter-models" aria-expanded="${!collapsed}">
+          ${collapsed ? t('starter.toggle.show') : t('starter.toggle.hide')}
+        </button>
+      </div>
+      ${collapsed ? '' : `<div class="starter-models-body"><div class="starter-grid">${html}</div></div>`}
+      ${appliedHint}
+    </div>
+  `;
 }
 
 function renderContextDocumentSection() {
@@ -152,8 +276,8 @@ function renderContextDocumentSection() {
 function renderNewSession() {
   const { state, escHtml, t, tip } = getCtx();
   const ns = state.newSession;
-  const renderTemplateCard = window.DecisionArena.views.shared.renderTemplateCard || (() => '');
-  const allModes = ['chat', 'decision-room', 'confrontation', 'quick-decision', 'stress-test', 'jury'];
+  /** Simple vs Expert (sidebar AFFICHAGE) — pas uiComplexity */
+  const isSimpleDisplay = state.uiMode !== 'expert';
   const personas = state.personas.filter((p) => {
     const modes = Array.isArray(p.available_modes) ? p.available_modes : ['chat', 'decision-room', 'confrontation'];
     return modes.includes(ns.mode) || ns.mode === 'quick-decision' || ns.mode === 'stress-test' || ns.mode === 'jury';
@@ -228,68 +352,77 @@ function renderNewSession() {
     : ns.mode === 'jury' ? t('jury.run')
     : t('newSession.launchChat');
 
-  const scenarioSection = (() => {
-    const packs = state.scenarioPacks || [];
-    if (!packs.length) return '';
-    const modeIcon = { chat: '💬', 'decision-room': '🏛️', confrontation: '⚔️', 'quick-decision': '⚡', 'stress-test': '🔥', jury: '⚖️' };
-    const cards = packs.map((pack) => {
-      const sel = ns.selectedScenarioId === pack.id;
-      const isLarge = pack.max_personas && pack.max_personas > 10;
-      return `
-        <div class="scenario-pack-card ${sel ? 'selected' : ''}"
-             data-action="apply-scenario" data-scenario-id="${escHtml(pack.id)}"
-             role="button" tabindex="0" aria-pressed="${sel}">
-          <span class="scenario-pack-card-badge">${modeIcon[pack.recommended_mode] || '🎯'}</span>
-          <div class="scenario-pack-card-target">${escHtml(pack.target_profile || '')}</div>
-          <div class="scenario-pack-card-name">${escHtml(pack.name)}</div>
-          <div class="scenario-pack-card-desc">${escHtml(pack.description || '')}</div>
-          ${isLarge ? `<div class="scenario-pack-card-hint" style="color:var(--warning,#f59e0b);">⚠️ ${t('scenario.warningLarge')}</div>` : `<div class="scenario-pack-card-hint">${t('scenario.hint')}</div>`}
-        </div>
-      `;
-    }).join('');
-
-    const appliedBanner = ns.selectedScenarioId ? `
-      <div style="margin-top:8px;font-size:12px;color:var(--success,#10b981);display:flex;align-items:center;gap:8px;">
-        ✅ ${t('scenario.applied')}
-        <button class="btn btn-secondary btn-sm" data-action="clear-scenario" style="font-size:11px;padding:2px 8px;">
-          ${t('scenario.clearSelection')}
-        </button>
-      </div>
-    ` : '';
+  const isFastDecision = ns.mode === 'decision-room' && ns.fastDecisionEnabled !== false;
+  if (isSimpleDisplay) {
+    const basicIntent = (ns.mode === 'quick-decision' || ns.mode === 'decision-room')
+      ? 'decide'
+      : (ns.mode === 'stress-test' || ns.mode === 'confrontation')
+        ? 'test'
+        : 'explore';
 
     return `
-      <div class="section" style="margin-bottom:24px;max-width:1100px;width:100%;">
-        <div class="section-header">
-          <span class="section-label">${t('scenario.sectionTitle')}</span>
+      <div class="page-header">
+        <div class="page-title">${t('newSession.title')}</div>
+        <div class="page-subtitle">${t('newSession.subtitle')}</div>
+      </div>
+
+      ${renderStarterModelsSection()}
+
+      <div class="card" id="new-session-form-card" style="max-width:1100px;width:100%;">
+        <div class="form-group">
+          <label for="ns-title-basic">Question</label>
+          <input class="input" id="ns-title-basic" type="text" placeholder="${t('newSession.titlePlaceholder')}" value="${escHtml(ns.title)}" data-field="title">
         </div>
-        <div class="card-description" style="margin-bottom:10px;">${t('scenario.sectionDesc')}</div>
-        <div class="scenario-packs-grid">${cards}</div>
-        ${appliedBanner}
+
+        <div class="form-group">
+          <label for="ns-idea-basic">Description</label>
+          <textarea class="textarea" id="ns-idea-basic" placeholder="${t('newSession.ideaPlaceholder')}" style="min-height:120px;" data-field="idea">${escHtml(ns.idea)}</textarea>
+          <div id="context-hint-banner-container">${renderContextHintBanner(ns.contextHintQuestions || null)}</div>
+        </div>
+
+        <div class="form-group">
+          <label>Intention</label>
+          <div class="mode-selector" style="grid-template-columns:1fr 1fr 1fr;">
+            <label class="mode-option ${basicIntent === 'explore' ? 'selected' : ''}" data-action="select-session-intent" data-intent="explore">
+              <input type="radio" name="ns-basic-intent" ${basicIntent === 'explore' ? 'checked' : ''} style="pointer-events:none;">
+              <div><div class="mode-option-label">Explorer</div></div>
+            </label>
+            <label class="mode-option ${basicIntent === 'decide' ? 'selected' : ''}" data-action="select-session-intent" data-intent="decide">
+              <input type="radio" name="ns-basic-intent" ${basicIntent === 'decide' ? 'checked' : ''} style="pointer-events:none;">
+              <div><div class="mode-option-label">Décider</div></div>
+            </label>
+            <label class="mode-option ${basicIntent === 'test' ? 'selected' : ''}" data-action="select-session-intent" data-intent="test">
+              <input type="radio" name="ns-basic-intent" ${basicIntent === 'test' ? 'checked' : ''} style="pointer-events:none;">
+              <div><div class="mode-option-label">Tester</div></div>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>${t('newSession.responseLanguage')}</label>
+          <div class="language-selector">
+            <button class="language-option ${ns.language === 'en' ? 'active' : ''}" data-action="select-language" data-lang="en">🇬🇧 English</button>
+            <button class="language-option ${ns.language === 'fr' ? 'active' : ''}" data-action="select-language" data-lang="fr">🇫🇷 Français</button>
+          </div>
+        </div>
+
+        <button class="btn btn-primary" data-action="launch-session" ${state.isLoading ? 'disabled' : ''}>
+          ${state.isLoading ? '<span class="spinner"></span>' : ''}
+          Lancer l'analyse
+        </button>
       </div>
     `;
-  })();
+  }
 
-  const isFastDecision = ns.mode === 'decision-room' && ns.fastDecisionEnabled !== false;
   return `
     <div class="page-header">
       <div class="page-title">${t('newSession.title')}</div>
       <div class="page-subtitle">${t('newSession.subtitle')}</div>
     </div>
 
-    ${state.templates.length > 0 ? `
-      <div class="section" style="margin-bottom:28px;">
-        <div class="section-header"><span class="section-label">${t('newSession.templates')}</span></div>
-        <div class="templates-grid">${state.templates.map(renderTemplateCard).join('')}</div>
-      </div>
-    ` : ''}
+    ${renderStarterModelsSection()}
 
-    ${scenarioSection}
-
-    <div class="card" style="max-width:1100px;width:100%;">
-      ${(() => {
-        const systemTpls = (state.scenarioPacks || []).filter((p) => p.is_system_template);
-        return systemTpls.length > 0 ? renderTemplateGrid(systemTpls) : '';
-      })()}
+    <div class="card" id="new-session-form-card" style="max-width:1100px;width:100%;">
       <div class="form-group">
         <label for="ns-title">${t('newSession.sessionTitle')}</label>
         <input class="input" id="ns-title" type="text" placeholder="${t('newSession.titlePlaceholder')}" value="${escHtml(ns.title)}" data-field="title">

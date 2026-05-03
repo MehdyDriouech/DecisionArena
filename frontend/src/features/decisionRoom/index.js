@@ -3,40 +3,9 @@
  */
 
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
+import { renderDecisionBrief } from '../../ui/components.js';
 import { renderExportButtons, renderAgentChatPanel } from '../chat/view.js';
 import { renderDebateInsightsPanels, renderWeightedVotePanel, renderDecisionReliabilityCard } from '../confrontation/index.js';
-
-function renderDecisionBrief(brief) {
-  if (!brief) return '';
-  const t = (key) => window.i18n?.t(key) ?? key;
-  const escHtml = window.DecisionArena.utils.escHtml;
-  const colorMap = {
-    GO_CONFIDENT: '#15803d', GO_FRAGILE: '#854d0e',
-    NO_GO_CONFIDENT: '#991b1b', NO_GO_FRAGILE: '#92400e',
-    ITERATE_CONFIDENT: '#92400e', ITERATE_FRAGILE: '#78350f',
-    NO_CONSENSUS: '#7f1d1d', NO_CONSENSUS_FRAGILE: '#7f1d1d',
-    INSUFFICIENT_CONTEXT: '#374151',
-  };
-  const outcome = `${brief.decision}_${brief.reliability}`;
-  const bgColor = colorMap[outcome] || colorMap[brief.decision] || '#374151';
-  const whyHtml  = (brief.why || []).map(w => `<span>${escHtml(w)}</span>`).join(' ');
-  const riskHtml = (brief.risks || []).map(r => `<span>${escHtml(r)}</span>`).join(' ');
-  const warning  = brief.primary_warning
-    ? `<div class="brief-warning">⚠ ${escHtml(brief.primary_warning)}</div>` : '';
-  return `
-<div class="decision-brief-card">
-  <div class="brief-header" style="background:${bgColor}">
-    <span class="brief-decision">${escHtml(brief.decision || '')}</span>
-    <span class="brief-meta">${escHtml(brief.reliability || '')} · ${escHtml(brief.confidence || '')} · ${t('brief.score')}: ${brief.quality_score}/100</span>
-  </div>
-  <div class="brief-body">
-    ${whyHtml ? `<p><strong>${t('brief.why')}:</strong> ${whyHtml}</p>` : ''}
-    ${riskHtml ? `<p><strong>${t('brief.risks')}:</strong> ${riskHtml}</p>` : ''}
-    ${brief.next_step ? `<p><strong>${t('brief.next_step')}:</strong> ${escHtml(brief.next_step)}</p>` : ''}
-    ${warning}
-  </div>
-</div>`;
-}
 import { renderDebateAuditPanel } from '../debateAudit/index.js';
 import { renderGraphViewPanel } from '../graphView/index.js';
 import { renderArgumentHeatmapPanel } from '../argumentHeatmap/index.js';
@@ -53,11 +22,19 @@ function getCtx() {
   return { state, escHtml, renderMarkdown, agentIcon, agentName, agentTitleText, t };
 }
 
-function renderDRAgentCard(msg, isFinal) {
-  const { escHtml, renderMarkdown, agentIcon, agentName, agentTitleText, t } = getCtx();
+function renderDRAgentCard(msg, isFinal, messageKey = '') {
+  const { state, escHtml, renderMarkdown, agentIcon, agentName, agentTitleText, t } = getCtx();
   const icon     = agentIcon(msg.agent_id);
   const name     = agentName(msg.agent_id);
   const titleTxt = agentTitleText(msg.agent_id);
+
+  const messageId = String(msg.id || messageKey || `${msg.agent_id || 'agent'}-${msg.created_at || Date.now()}`);
+  const isLong = String(msg.content || '').length > 650;
+  const collapsed = !!state.collapsedMessages?.[messageId];
+  const preview = escHtml(String(msg.content || '').slice(0, 320));
+  const contentHtml = isLong && collapsed
+    ? `<div class="agent-content md-content"><p>${preview}…</p></div>`
+    : `<div class="agent-content md-content">${renderMarkdown(msg.content)}</div>`;
 
   if (isFinal) {
     return `
@@ -70,7 +47,8 @@ function renderDRAgentCard(msg, isFinal) {
           </div>
           <span class="badge badge-success" style="margin-left:auto;">${t('dr.synthesis')}</span>
         </div>
-        <div class="agent-content md-content" style="padding:18px;">${renderMarkdown(msg.content)}</div>
+        <div style="padding:18px;">${contentHtml}</div>
+        ${isLong ? `<div style="padding:0 18px 14px;"><button class="btn btn-secondary btn-sm" data-action="toggle-agent-message" data-message-id="${escHtml(messageId)}">${collapsed ? 'Voir' : 'Masquer'}</button></div>` : ''}
         ${msg.model ? `<div class="agent-card-footer">${msg.provider_id ? `<span>${escHtml(msg.provider_id)}</span>` : ''}<span>${escHtml(msg.model)}</span></div>` : ''}
       </div>
     `;
@@ -85,7 +63,8 @@ function renderDRAgentCard(msg, isFinal) {
           ${titleTxt ? `<div class="agent-title">${escHtml(titleTxt)}</div>` : ''}
         </div>
       </div>
-      <div class="agent-content md-content">${renderMarkdown(msg.content)}</div>
+      ${contentHtml}
+      ${isLong ? `<button class="btn btn-secondary btn-sm" data-action="toggle-agent-message" data-message-id="${escHtml(messageId)}">${collapsed ? 'Voir' : 'Masquer'}</button>` : ''}
       ${msg.model ? `<div class="agent-card-footer">${msg.provider_id ? `<span>${escHtml(msg.provider_id)}</span>` : ''}<span>${escHtml(msg.model)}</span></div>` : ''}
     </div>
   `;
@@ -96,6 +75,7 @@ function renderDRResults(results) {
   const rounds      = results.rounds || {};
   const totalRounds = results.total_rounds || Object.keys(rounds).length;
   const roundNums   = Object.keys(rounds).map(Number).sort((a, b) => a - b);
+  const sessionId = state.currentSession?.id ?? '';
   const roundTitles = ['Independent Analysis', 'Critical Review', 'Synthesis & Recommendations', 'Decision & Action Plan', 'Final Consensus'];
 
   const roundsHtml = roundNums.map((rNum) => {
@@ -110,15 +90,14 @@ function renderDRResults(results) {
           ${isFinal ? `<span class="badge badge-success">${t('dr.final')}</span>` : ''}
         </div>
         <div class="round-agents-grid">
-          ${messages.map((msg) => renderDRAgentCard(msg, isFinal)).join('')}
+          ${messages.map((msg, idx) => renderDRAgentCard(msg, isFinal, `${sessionId}-r${rNum}-m${idx}`)).join('')}
         </div>
       </div>
     `;
   }).join('');
 
-  const sessionId = state.currentSession?.id ?? '';
-  return renderDecisionBrief(results.decision_brief || null)
-    + roundsHtml
+  return renderDecisionBrief(results.decision_brief || null, { sessionId })
+    + `<details id="debate-section-${sessionId}" data-section="debate-details" ${state.showDebateDetails ? 'open' : ''} style="margin:0 0 16px;"><summary class="btn btn-secondary btn-sm">Voir le debat complet</summary><div style="margin-top:12px;">${roundsHtml}</div></details>`
     + renderDebateInsightsPanels(results)
     + renderWeightedVotePanel(results, sessionId)
     + renderDecisionReliabilityCard(results)

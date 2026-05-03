@@ -43,10 +43,74 @@ function renderPanelRecommendBadge(panelType, highlights, t) {
   return `<span class="panel-rec-badge"><span class="badge badge-info" style="font-size:10px;">${t('highlight.recommended')}</span>${renderTooltip(text)}</span>`;
 }
 
+/**
+ * Decision-first summary card, safe for missing fields.
+ * @param {{ decision?: string, confidence?: string|number, why?: string[]|string, risks?: string[]|string, next_step?: string, primary_warning?: string, quality_score?: number, reliability?: string }} data
+ * @param {{ sessionId?: string }} opts
+ */
+function renderDecisionBrief(data, opts = {}) {
+  if (!data || typeof data !== 'object') return '';
+  const d = data || {};
+  const hasCore = Boolean(d.decision || d.confidence || d.next_step || d.primary_warning || d.quality_score != null);
+  const whyList = Array.isArray(d.why) ? d.why.filter(Boolean) : (d.why ? [String(d.why)] : []);
+  const riskList = Array.isArray(d.risks) ? d.risks.filter(Boolean) : (d.risks ? [String(d.risks)] : []);
+  if (!hasCore && whyList.length === 0 && riskList.length === 0) return '';
+
+  const escHtml = window.DecisionArena?.utils?.escHtml || ((v) => String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;'));
+  const t = (key) => window.i18n?.t(key) ?? key;
+
+  const colorMap = {
+    GO_CONFIDENT: '#15803d', GO_FRAGILE: '#854d0e',
+    NO_GO_CONFIDENT: '#991b1b', NO_GO_FRAGILE: '#92400e',
+    ITERATE_CONFIDENT: '#92400e', ITERATE_FRAGILE: '#78350f',
+    NO_CONSENSUS: '#7f1d1d', NO_CONSENSUS_FRAGILE: '#7f1d1d',
+    INSUFFICIENT_CONTEXT: '#374151',
+  };
+  const outcome = `${String(d.decision || '').toUpperCase()}_${String(d.reliability || '').toUpperCase()}`;
+  const bgColor = colorMap[outcome] || colorMap[String(d.decision || '').toUpperCase()] || '#374151';
+  const sessionId = opts.sessionId || '';
+  const hasSessionActions = Boolean(sessionId);
+
+  const confidenceLabel = d.confidence != null ? String(d.confidence) : '—';
+  const scoreLabel = d.quality_score != null ? `${d.quality_score}/100` : '—';
+
+  return `
+<div class="decision-brief-card" style="margin-bottom:16px;">
+  <div class="brief-header" style="background:${bgColor}">
+    <span class="brief-decision">${escHtml(d.decision || 'Decision')}</span>
+    <span class="brief-meta">${escHtml(String(d.reliability || ''))} · ${escHtml(confidenceLabel)} · ${t('brief.score')}: ${escHtml(scoreLabel)}</span>
+  </div>
+  <div class="brief-body">
+    ${whyList.length ? `<p><strong>${t('brief.why')}:</strong> ${whyList.map((w) => `<span>${escHtml(w)}</span>`).join(' ')}</p>` : ''}
+    ${riskList.length ? `<p><strong>${t('brief.risks')}:</strong> ${riskList.map((r) => `<span>${escHtml(r)}</span>`).join(' ')}</p>` : ''}
+    ${d.next_step ? `<p><strong>${t('brief.next_step')}:</strong> ${escHtml(d.next_step)}</p>` : ''}
+    ${d.primary_warning ? `<div class="brief-warning">⚠ ${escHtml(d.primary_warning)}</div>` : ''}
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;padding:0 14px 14px;">
+    ${hasSessionActions ? `<button class="btn btn-secondary btn-sm" data-action="show-debate-details">Voir le debat complet</button>` : ''}
+    <details>
+      <summary class="btn btn-secondary btn-sm" style="list-style:none;">Voir details</summary>
+      <div style="margin-top:8px;font-size:12px;color:var(--text-secondary);">
+        <div><strong>Decision:</strong> ${escHtml(d.decision || '—')}</div>
+        <div><strong>Confiance:</strong> ${escHtml(confidenceLabel)}</div>
+        <div><strong>Qualite:</strong> ${escHtml(scoreLabel)}</div>
+      </div>
+    </details>
+    ${hasSessionActions ? `<button class="btn btn-secondary btn-sm" data-action="rerun-with-contradiction" data-session-id="${escHtml(sessionId)}">Relancer avec contradiction</button>` : ''}
+  </div>
+</div>`;
+}
+
 export {
   createErrorBanner,
   mountHtml,
   renderCardDescription,
   renderTooltip,
   renderPanelRecommendBadge,
+  renderDecisionBrief,
 };

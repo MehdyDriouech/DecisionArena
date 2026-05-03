@@ -15,6 +15,48 @@ function getCtx() {
 function renderLaunchAssistant() {
   const { state, escHtml, agentIcon, agentName, t } = getCtx();
   const la = state.launchAssistant;
+  const intentMeta = {
+    'validate-idea': {
+      description: "Obtenir rapidement un avis structure avant d'investir plus de temps",
+      duration: '30s',
+      depth: 'Rapide',
+    },
+    'challenge-product': {
+      description: 'Confronter votre produit a des objections pour renforcer votre plan',
+      duration: '2-3 min',
+      depth: 'Intermediaire',
+    },
+    'review-architecture': {
+      description: 'Evaluer une architecture avec plusieurs angles techniques',
+      duration: '3-5 min',
+      depth: 'Approfondi',
+    },
+    'find-risks': {
+      description: 'Identifier les risques majeurs avant execution',
+      duration: '1-2 min',
+      depth: 'Intermediaire',
+    },
+    'compare-options': {
+      description: 'Comparer des options et clarifier les compromis',
+      duration: '2-4 min',
+      depth: 'Approfondi',
+    },
+    'prepare-decision': {
+      description: 'Structurer les arguments pour une decision defendable',
+      duration: '2-4 min',
+      depth: 'Approfondi',
+    },
+    'stress-test-idea': {
+      description: 'Tester la robustesse de votre idee sous pression',
+      duration: '3-5 min',
+      depth: 'Approfondi',
+    },
+    custom: {
+      description: 'Configurer manuellement le mode, les agents et le niveau de detail',
+      duration: 'Variable',
+      depth: 'Avance',
+    },
+  };
 
   const intents = [
     { id: 'validate-idea',       icon: '💡', label: t('la.intentValidateIdea') },
@@ -24,10 +66,21 @@ function renderLaunchAssistant() {
     { id: 'compare-options',     icon: '⚖️', label: t('la.intentCompareOptions') },
     { id: 'prepare-decision',    icon: '🎯', label: t('la.intentPrepareDecision') },
     { id: 'stress-test-idea',    icon: '🔥', label: t('la.intentStressTest') },
-    { id: 'custom',              icon: '🔧', label: t('la.intentCustom') },
+    { id: 'custom',              icon: '🔧', label: 'Configuration avancee' },
   ];
 
   const rec = la.recommendation;
+  const selectedMeta = la.intent ? intentMeta[la.intent] : null;
+  const analysisPreview = `
+    <div style="margin-top:14px;padding:14px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);">
+      <div style="font-weight:700;font-size:13px;margin-bottom:8px;">Voici comment l'analyse va se derouler :</div>
+      <div style="font-size:13px;color:var(--text-secondary);line-height:1.5;">
+        <div><strong>Etape 1 :</strong> analyse</div>
+        <div><strong>Etape 2 :</strong> debat</div>
+        <div><strong>Etape 3 :</strong> synthese</div>
+      </div>
+    </div>
+  `;
 
   return `
     <div style="max-width:800px;margin:0 auto;padding:24px 20px;">
@@ -40,15 +93,36 @@ function renderLaunchAssistant() {
       ${la.step === 1 ? `
         <div class="card" style="padding:24px;">
           <div style="font-weight:700;font-size:15px;margin-bottom:16px;">${t('la.step1Question')}</div>
-          <div class="agents-select-grid" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr));">
+          <div class="la-options-grid">
             ${intents.map((i) => `
-              <label class="agent-select-card ${la.intent === i.id ? 'selected' : ''}" style="cursor:pointer;" data-action="la-select-intent" data-intent="${escHtml(i.id)}">
-                <span style="font-size:24px;">${i.icon}</span>
-                <div style="font-size:13px;font-weight:600;text-align:center;">${i.label}</div>
-              </label>
+              <div class="la-option-card ${la.intent === i.id ? 'selected' : ''}" role="button" tabindex="0" data-action="la-select-intent" data-intent="${escHtml(i.id)}">
+                <div class="la-option-main">
+                  <div class="la-option-icon">${i.icon}</div>
+                  <div class="la-option-content">
+                    <div class="la-option-title">${i.label}</div>
+                    <div class="la-option-description">${escHtml(intentMeta[i.id]?.description || '')}</div>
+                  </div>
+                </div>
+                <div class="la-option-meta">
+                  <span class="badge badge-muted">⏱ ${escHtml(intentMeta[i.id]?.duration || '')}</span>
+                  <span class="badge badge-info">🎯 ${escHtml(intentMeta[i.id]?.depth || '')}</span>
+                </div>
+              </div>
             `).join('')}
           </div>
-          <button class="btn btn-primary" style="margin-top:20px;" data-action="la-next-step" ${!la.intent ? 'disabled' : ''}>${t('la.next')}</button>
+          ${selectedMeta ? `
+            <div style="margin-top:16px;padding:14px;border:1px solid var(--border);border-radius:8px;background:rgba(99,102,241,0.06);">
+              <div style="font-size:13px;color:var(--text-secondary);">
+                On va simuler plusieurs experts qui vont analyser votre idee et produire une decision argumentee.
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                <span class="badge badge-muted">⏱ ${escHtml(selectedMeta.duration)}</span>
+                <span class="badge badge-info">🎯 ${escHtml(selectedMeta.depth)}</span>
+              </div>
+            </div>
+            ${analysisPreview}
+          ` : ''}
+          <button class="btn btn-primary" style="margin-top:20px;" data-action="la-next-step" ${!la.intent ? 'disabled' : ''}>Lancer l'analyse</button>
         </div>
       ` : ''}
 
@@ -59,9 +133,10 @@ function renderLaunchAssistant() {
           <div style="display:flex;gap:10px;margin-top:16px;">
             <button class="btn btn-secondary" data-action="la-prev-step">${t('la.back')}</button>
             <button class="btn btn-primary" data-action="la-get-recommendation" ${la.loading ? 'disabled' : ''}>
-              ${la.loading ? '<span class="spinner"></span>' : '✨'} ${t('la.getRecommendation')}
+              ${la.loading ? '<span class="spinner"></span>' : '✨'} Lancer l'analyse
             </button>
           </div>
+          ${analysisPreview}
         </div>
       ` : ''}
 
@@ -96,8 +171,8 @@ function renderLaunchAssistant() {
           </div>
 
           <div style="display:flex;gap:10px;flex-wrap:wrap;">
-            <button class="btn btn-primary" data-action="la-launch-session">
-              🚀 ${t('la.launchRecommended')}
+            <button class="btn btn-primary" data-action="la-launch-from-intent" data-intent="${escHtml(la.intent || '')}">
+              🚀 Lancer l'analyse
             </button>
             <button class="btn btn-secondary" data-action="la-edit-recommendation">
               ✏️ ${t('la.editRecommendation')}

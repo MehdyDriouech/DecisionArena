@@ -61,6 +61,49 @@ function registerLaunchAssistantHandlers() {
 
   registerAction('la-launch-session',     () => _launchFromAssistant());
   registerAction('la-launch-from-edit',   () => _launchFromAssistant());
+  registerAction('la-launch-from-intent', ({ event, element }) => {
+    const intentRaw = event?.target?.closest('[data-intent]')?.dataset?.intent || element?.dataset?.intent || '';
+    if (!intentRaw) return;
+
+    const normalizeIntent = (value) => ({
+      'validate-idea': 'validate',
+      'challenge-product': 'challenge',
+      'review-architecture': 'architecture',
+      'find-risks': 'risks',
+      'compare-options': 'compare',
+      'prepare-decision': 'decision',
+      'stress-test-idea': 'stress',
+      custom: 'custom',
+      validate: 'validate',
+      challenge: 'challenge',
+      architecture: 'architecture',
+      risks: 'risks',
+      compare: 'compare',
+      decision: 'decision',
+      stress: 'stress',
+    }[value] || 'decision');
+
+    const intent = normalizeIntent(intentRaw);
+    const modeByIntent = {
+      validate: 'quick-decision',
+      challenge: 'confrontation',
+      architecture: 'decision-room',
+      risks: 'stress-test',
+      compare: 'decision-room',
+      decision: 'quick-decision',
+      stress: 'stress-test',
+      custom: 'decision-room',
+    };
+    const DA = window.DecisionArena;
+    DA.store.state.newSession = {
+      ...DA.store.state.newSession,
+      intent,
+      mode: modeByIntent[intent] || 'quick-decision',
+      fastDecisionEnabled: intent !== 'custom',
+    };
+    DA.router.navigate('new-session');
+    DA.render?.();
+  });
 
   registerAction('la-edit-recommendation', () => {
     const { state, render } = getCtx();

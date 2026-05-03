@@ -31,6 +31,8 @@ function resetNewSessionState() {
     // LLM Assignment
     llmAssignmentMode: 'global',
     teamProviderAssignments: { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } },
+    selectedStarter: null,
+    starterModelsCollapsed: false,
   };
 }
 
@@ -77,7 +79,58 @@ function _debouncedContextCheck(text, state) {
 }
 
 function registerNewSessionHandlers() {
-  registerAction('goto-new-session', () => getCtx().navigate('new-session'));
+  registerAction('toggle-starter-models', () => {
+    const { state, render } = getCtx();
+    state.newSession.starterModelsCollapsed = !state.newSession.starterModelsCollapsed;
+    render();
+  });
+
+  registerAction('select-session-intent', ({ event, element }) => {
+    const intent = event?.target?.closest('[data-intent]')?.dataset?.intent || element?.dataset?.intent;
+    if (!intent) return;
+    const modeByIntent = {
+      explore: 'chat',
+      decide: 'quick-decision',
+      test: 'stress-test',
+    };
+    const DA = window.DecisionArena;
+    DA.store.state.newSession = {
+      ...DA.store.state.newSession,
+      intent,
+      mode: modeByIntent[intent] || 'quick-decision',
+      selectedStarter: null,
+      selectedScenarioId: null,
+    };
+    DA.render?.();
+  });
+
+  // Backward-compatible alias for already-rendered templates.
+  registerAction('ns-set-basic-intent', ({ event, element }) => {
+    const intent = event?.target?.closest('[data-intent]')?.dataset?.intent || element?.dataset?.intent;
+    if (!intent) return;
+    const DA = window.DecisionArena;
+    DA.store.state.newSession = {
+      ...DA.store.state.newSession,
+      intent,
+      mode: intent === 'explore' ? 'chat' : intent === 'test' ? 'stress-test' : 'quick-decision',
+      selectedStarter: null,
+      selectedScenarioId: null,
+    };
+    DA.render?.();
+  });
+
+  registerAction('goto-new-session', ({ element }) => {
+    const { state, navigate, render } = getCtx();
+    const mode = element?.dataset?.mode;
+    if (mode) {
+      state.newSession = {
+        ...(state.newSession || {}),
+        mode,
+      };
+    }
+    navigate('new-session');
+    render();
+  });
 
   registerAction('toggle-agent', ({ element }) => {
     const { state, render } = getCtx();
@@ -129,6 +182,32 @@ function registerNewSessionHandlers() {
   registerAction('launch-session', async () => {
     const { state, render, navigate, SessionService, ContextDocService, t } = getCtx();
     const ns = state.newSession;
+    // Mode affichage Simple (sidebar) : préremplir les champs avancés masqués pour éviter les erreurs de validation.
+    const isSimpleDisplay = state.uiMode !== 'expert';
+    const starterLocksConfig = Boolean(
+      ns.selectedScenarioId
+      || (ns.selectedStarter && (ns.selectedStarter.type === 'template' || ns.selectedStarter.type === 'scenario')),
+    );
+    if (isSimpleDisplay && !starterLocksConfig) {
+      if (ns.mode === 'quick-decision' || ns.mode === 'decision-room') {
+        ns.mode = 'quick-decision';
+        ns.selectedAgents = ['pm', 'architect', 'ux-expert', 'critic'];
+        ns.rounds = 1;
+        ns.forceDisagreement = true;
+        ns.fastDecisionEnabled = false;
+      } else if (ns.mode === 'stress-test' || ns.mode === 'confrontation') {
+        ns.mode = 'stress-test';
+        ns.selectedAgents = ['pm', 'architect', 'critic', 'analyst'];
+        ns.rounds = Math.max(2, ns.rounds || 2);
+        ns.forceDisagreement = true;
+        ns.fastDecisionEnabled = false;
+      } else {
+        ns.mode = 'chat';
+        ns.selectedAgents = ns.selectedAgents?.length ? ns.selectedAgents : ['pm', 'architect'];
+        ns.rounds = 2;
+        ns.fastDecisionEnabled = false;
+      }
+    }
 
     const isFastMode = ns.mode === 'decision-room' && ns.fastDecisionEnabled !== false;
     if (!ns.title.trim()) {
@@ -265,7 +344,44 @@ function registerNewSessionHandlers() {
     const template   = state.templates.find((tmpl) => tmpl.id === templateId);
     if (!template) return;
     _applyTemplate(state, template);
+    state.newSession.selectedStarter = { type: 'template', id: template.id };
+    state.newSession.selectedScenarioId = null;
     navigate('new-session');
+  });
+
+  registerAction('select-starter', ({ event }) => {
+    const { state, render } = getCtx();
+    const el = event?.target?.closest?.('[data-starter-type]');
+    if (!el) return;
+    const type = el.dataset.starterType;
+    const id = el.dataset.starterId || '';
+    const ns = state.newSession;
+
+    if (type === 'template') {
+      const template = state.templates.find((tmpl) => tmpl.id === id);
+      if (!template) return;
+      ns.selectedStarter = { type: 'template', id };
+      ns.selectedScenarioId = null;
+      ns.selectedTemplateId = null;
+      _applyTemplate(state, template);
+      render();
+      requestAnimationFrame(() => {
+        document.getElementById('new-session-form-card')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
+      return;
+    }
+
+    if (type === 'scenario') {
+      const pack = (state.scenarioPacks || []).find((p) => p.id === id);
+      if (!pack) return;
+      ns.selectedStarter = { type: 'scenario', id };
+      ns.selectedTemplateId = null;
+      _applyScenarioPack(state, pack);
+      render();
+      requestAnimationFrame(() => {
+        document.getElementById('new-session-form-card')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
+    }
   });
 
   /* ── change listeners for new-session fields ─────────────────────────── */
@@ -363,6 +479,8 @@ function _applyTemplate(state, template) {
     ns.redTeam      = nonSynth.slice(half);
   }
   if (!ns.idea && template.prompt_starter) ns.idea = template.prompt_starter;
+  ns.selectedScenarioId = null;
+  if (ns.mode === 'decision-room') ns.fastDecisionEnabled = false;
 }
 
 /** Apply a scenario pack's prefill to newSession state — does NOT create a session. */
@@ -383,6 +501,8 @@ function _applyScenarioPack(state, pack) {
   }
   if (!ns.idea && pack.prompt_starter) ns.idea = pack.prompt_starter;
   ns.selectedScenarioId = pack.id;
+  ns.selectedTemplateId = null;
+  if (ns.mode === 'decision-room') ns.fastDecisionEnabled = false;
 }
 
 function registerScenarioHandlers() {
@@ -392,11 +512,14 @@ function registerScenarioHandlers() {
     state.newSession.selectedTemplateId = tplId || null;
     if (!tplId) {
       state.newSession.fastDecisionEnabled = false;
+      state.newSession.selectedScenarioId = null;
+      state.newSession.selectedStarter = null;
       render();
       return;
     }
     const pack = (state.scenarioPacks || []).find((p) => p.id === tplId);
     if (!pack) { render(); return; }
+    state.newSession.selectedStarter = { type: 'scenario', id: tplId };
     _applyScenarioPack(state, pack);
     render();
     requestAnimationFrame(() => {
@@ -413,12 +536,14 @@ function registerScenarioHandlers() {
     // Toggle off if already selected
     if (state.newSession.selectedScenarioId === packId) {
       state.newSession.selectedScenarioId = null;
+      state.newSession.selectedStarter = null;
       render();
       return;
     }
 
     const pack = (state.scenarioPacks || []).find((p) => p.id === packId);
     if (!pack) return;
+    state.newSession.selectedStarter = { type: 'scenario', id: packId };
     _applyScenarioPack(state, pack);
     render();
 
@@ -432,6 +557,8 @@ function registerScenarioHandlers() {
   registerAction('clear-scenario', ({ }) => {
     const { state, render } = getCtx();
     state.newSession.selectedScenarioId = null;
+    state.newSession.selectedStarter = null;
+    state.newSession.selectedTemplateId = null;
     render();
   });
 

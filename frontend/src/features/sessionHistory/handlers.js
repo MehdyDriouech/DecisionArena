@@ -88,6 +88,74 @@ function upsertRerunModal() {
 }
 
 function registerSessionHistoryHandlers() {
+  registerAction('toggle-agent-message', ({ event, element }) => {
+    const messageId = event?.target?.closest('[data-message-id]')?.dataset?.messageId || element?.dataset?.messageId;
+    if (!messageId) return;
+    const DA = window.DecisionArena;
+    DA.store.state.collapsedMessages = DA.store.state.collapsedMessages || {};
+    DA.store.state.collapsedMessages[messageId] = !DA.store.state.collapsedMessages[messageId];
+    DA.render?.();
+  });
+
+  registerAction('show-debate-details', () => {
+    const DA = window.DecisionArena;
+    DA.store.state.showDebateDetails = true;
+    DA.render?.();
+    requestAnimationFrame(() => {
+      document.querySelector('[data-section="debate-details"]')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
+  });
+
+  registerAction('rerun-with-contradiction', async ({ event, element }) => {
+    const sessionId = event?.target?.closest('[data-session-id]')?.dataset?.sessionId || element?.dataset?.sessionId;
+    if (!sessionId) return;
+    const DA = window.DecisionArena;
+    const { store, services, router } = DA;
+    try {
+      store.state.isLoading = true;
+      DA.render?.();
+      const result = await services.SessionService.rerun(sessionId, {
+        variations: ['more-disagreement', 'more-critical-agents'],
+      });
+      if (result?.session) {
+        store.state.currentSession = result.session;
+        try {
+          const full = await services.SessionService.get(result.session.id);
+          const session = full.session || full;
+          store.state.sessionHistory = {
+            session,
+            messages: full.messages || [],
+            arguments: full.arguments || [],
+            positions: full.positions || [],
+            interaction_edges: full.interaction_edges || [],
+            weighted_analysis: full.weighted_analysis || {},
+            dominance_indicator: full.dominance_indicator || '',
+            votes: full.votes || [],
+            automatic_decision: full.automatic_decision || null,
+            raw_decision: full.raw_decision || null,
+            adjusted_decision: full.adjusted_decision || null,
+            decision_brief: full.decision_brief || null,
+          };
+        } catch (_) {}
+        router.navigate('session-history');
+      } else if (result?.prefill) {
+        store.state.newSession = {
+          ...store.state.newSession,
+          ...result.prefill,
+        };
+        router.navigate('new-session');
+      }
+    } catch (error) {
+      store.state.error = error?.message || 'Impossible de relancer avec contradiction.';
+    } finally {
+      store.state.isLoading = false;
+      DA.render?.();
+    }
+  });
+
   /* ── Rerun Modal ──────────────────────────────────────────────────────── */
   registerAction('open-rerun-modal', ({ element }) => {
     const { state, render } = getCtx();

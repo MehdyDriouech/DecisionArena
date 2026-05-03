@@ -27,6 +27,53 @@ function downloadBlob(blob, filename) {
 }
 
 function registerSessionsHandlers() {
+  registerAction('launch-quick-analysis', () => {
+    const DA = window.DecisionArena;
+    DA.store.state.newSession = {
+      ...DA.store.state.newSession,
+      mode: 'quick-decision',
+      title: '',
+      idea: '',
+      language: window.i18n?.getLanguage?.() || 'fr',
+      fastDecisionEnabled: true,
+    };
+    DA.router.navigate('new-session');
+    DA.render?.();
+  });
+
+  registerAction('dashboard-intent-explore', () => {
+    const DA = window.DecisionArena;
+    DA.store.state.newSession = {
+      ...DA.store.state.newSession,
+      mode: 'chat',
+      intent: 'explore',
+    };
+    DA.router.navigate('new-session');
+    DA.render?.();
+  });
+
+  registerAction('dashboard-intent-decide', () => {
+    const DA = window.DecisionArena;
+    DA.store.state.newSession = {
+      ...DA.store.state.newSession,
+      mode: 'quick-decision',
+      intent: 'decide',
+    };
+    DA.router.navigate('new-session');
+    DA.render?.();
+  });
+
+  registerAction('dashboard-intent-test', () => {
+    const DA = window.DecisionArena;
+    DA.store.state.newSession = {
+      ...DA.store.state.newSession,
+      mode: 'stress-test',
+      intent: 'test',
+    };
+    DA.router.navigate('new-session');
+    DA.render?.();
+  });
+
   registerAction('open-session', async ({ element }) => {
     const { state, render, navigate, SessionService } = getCtx();
     const sessionId = element.dataset.sessionId;
@@ -35,6 +82,7 @@ function registerSessionsHandlers() {
 
     try {
       state.isLoading      = true;
+      state.showDebateDetails = false;
       state.currentContextDoc = null;
       state.ctxDocPanelOpen   = false;
       state.ctxDocEditor      = null;
