@@ -181,3 +181,278 @@ body.ui-simple [data-ui="expert-only"] {
   margin-left: 4px;
   flex-wrap: wrap;
 }
+
+/* ── Decision dynamics (personas admin + session transparency) ───────────── */
+
+.decision-dynamics-panel .section-header h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.dynamics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px 18px;
+  padding: 8px 0 4px;
+}
+
+.dynamics-field .dynamics-label {
+  font-weight: 600;
+  font-size: 12px;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.dynamics-field select.select {
+  width: 100%;
+}
+
+.dynamics-option-desc {
+  font-size: 11px;
+  margin: 0 0 8px;
+  line-height: 1.4;
+}
+
+.dynamics-warning {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border-left: 3px solid var(--warning, #f59e0b);
+  background: var(--bg-secondary);
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.dynamics-actions {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.decision-dynamics-summary .dynamics-summary-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.dynamics-agent-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--bg-secondary);
+}
+
+.dynamics-agent-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dynamics-agent-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.dynamics-agent-meta {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.dynamics-agent-meta li {
+  margin-bottom: 4px;
+}
+
+.dynamics-meta-k {
+  color: var(--text-muted);
+  margin-right: 6px;
+}
+
+.dynamics-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.dynamics-badge--neutral {
+  background: rgba(148, 163, 184, 0.2);
+  color: var(--text-secondary);
+}
+
+.dynamics-badge--boost {
+  background: rgba(52, 211, 153, 0.18);
+  color: #34d399;
+}
+
+.dynamics-badge--reduce {
+  background: rgba(248, 113, 113, 0.14);
+  color: #f97373;
+}
+
+.dynamics-muted {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.brief-dynamics-hint {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  font-size: 12px;
+}
+
+.dynamics-summary-not-applicable {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ── Trade-off matrix + radar ───────────────────────────────────────────── */
+
+.tradeoff-card {
+  margin-bottom: 16px;
+}
+
+.tradeoff-toggle-btn {
+  margin-bottom: 8px;
+}
+
+.tradeoff-panel[hidden] {
+  display: none !important;
+}
+
+.tradeoff-option-pane[hidden] {
+  display: none !important;
+}
+
+.tradeoff-options-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.tradeoff-option-select {
+  min-width: 200px;
+}
+
+.tradeoff-pane-label {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tradeoff-inner {
+  padding: 0 4px 4px;
+  border-radius: 8px;
+}
+
+.tradeoff-head {
+  margin-bottom: 8px;
+}
+
+.tradeoff-title {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.tradeoff-desc,
+.tradeoff-muted {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.tradeoff-summary-line {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  margin: 0 0 10px;
+}
+
+.tradeoff-table-note {
+  font-size: 11px;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tradeoff-table-wrap {
+  overflow-x: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border, rgba(148, 163, 184, 0.25));
+  background: var(--bg-secondary);
+}
+
+.tradeoff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.tradeoff-table th,
+.tradeoff-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border, rgba(148, 163, 184, 0.2));
+  vertical-align: top;
+}
+
+.tradeoff-table th {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.tradeoff-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.tradeoff-score {
+  font-weight: 600;
+  white-space: nowrap;
+  width: 4rem;
+}
+
+.tradeoff-radar {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border, rgba(148, 163, 184, 0.35));
+}
+
+.tradeoff-radar-caption {
+  font-size: 11px;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tradeoff-radar-svg {
+  display: block;
+  max-width: min(340px, 100%);
+  height: auto;
+  margin: 0 auto;
+}
+
+.tradeoff-radar-svg text {
+  font-family: inherit;
+}
+

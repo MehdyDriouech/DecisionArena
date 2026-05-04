@@ -129,6 +129,9 @@ function registerSessionsHandlers() {
           reliability_warnings: data.reliability_warnings || [],
           decision_reliability_summary: data.decision_reliability_summary ?? null,
           context_clarification: data.context_clarification ?? null,
+          decision_brief:       data.decision_brief ?? null,
+          premortem_summary:   data.premortem_summary ?? null,
+          jury_adversarial:    data.jury_adversarial || null,
         };
         try {
           const vd = await SessionService.getVerdict(sessionId);

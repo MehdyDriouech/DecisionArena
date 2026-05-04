@@ -80,10 +80,12 @@ class ConfrontationRunner {
         bool   $devilAdvocateEnabled   = false,
         float  $devilAdvocateThreshold = 0.65,
         array  $agentProviders         = [],
-        float  $decisionThreshold      = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD
+        float  $decisionThreshold      = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD,
+        ?string $decisionDynamicsPreset = null
     ): array {
         $rounds = min(max($rounds, 1), 15);
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($decisionThreshold);
+        $dynamicsPreset    = \Domain\Agents\DecisionDynamicsPreset::normalizeId($decisionDynamicsPreset);
 
         // Split synthesizer out — it runs separately at the end
         $activeAgents = array_values(array_filter($selectedAgents, fn($a) => $a !== 'synthesizer'));
@@ -200,7 +202,7 @@ class ConfrontationRunner {
         }
 
         // Optional synthesis by the synthesizer agent
-        $automaticDecision = $this->voteAggregator->recompute($sessionId, $decisionThreshold);
+        $automaticDecision = $this->voteAggregator->recompute($sessionId, $decisionThreshold, $dynamicsPreset);
         $synthesis = [];
         $verdict   = null;
         if ($includeSynthesis) {
@@ -326,6 +328,13 @@ class ConfrontationRunner {
             falseConsensus:     $falseConsensusData
         );
 
+        $verdictRow = null;
+        if (is_array($verdict) && $verdict !== []) {
+            $verdictRow = $verdict;
+        } else {
+            $verdictRow = $this->verdictRepo->findBySession($sessionId);
+        }
+
         $synthesizerOutput = $synthesis[0]['content'] ?? '';
         $decisionBrief = $this->summaryService->buildDecisionBrief(
             array_merge($reliability, [
@@ -334,6 +343,7 @@ class ConfrontationRunner {
                 'decision_quality_score' => $qualityScore,
                 'risk_profile'           => $riskProfile,
                 'evidence_report'        => $evidenceReport,
+                'verdict'                => $verdictRow,
             ])
         );
 
@@ -394,7 +404,7 @@ class ConfrontationRunner {
         $respondingAgents = $this->selectRespondingAgents($agents, $prevMessages, $currentRound, $interactionStyle, $replyPolicy);
 
         foreach ($respondingAgents as $agentId) {
-            $agent = $this->assembler->assemble($agentId);
+            $agent = $this->assembler->assemble($agentId, null, null, $dynamicsPreset);
             if (!$agent) continue;
 
             $assignedTarget = ($currentRound > 1 && $agentId !== 'synthesizer')
@@ -541,7 +551,7 @@ class ConfrontationRunner {
         ?array $memoryContext = null,
         ?string $extraUserContent = null
     ): array {
-        $agent = $this->assembler->assemble('synthesizer');
+        $agent = $this->assembler->assemble('synthesizer', null, null, $dynamicsPreset);
         if (!$agent) return [[], null];
 
         try {

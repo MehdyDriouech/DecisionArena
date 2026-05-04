@@ -1,5 +1,6 @@
 /* Admin feature — action handlers and change/input listeners for providers, personas, templates */
 import { registerAction, registerChangeListener, registerInputListener, registerSubmit } from '../../core/events.js';
+import { normalizeDecisionDynamics } from '../../utils/decisionDynamics.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -119,6 +120,103 @@ function registerAdminHandlers() {
       if (statusEl) { statusEl.textContent = t('personas.modesError'); statusEl.className = 'mode-save-status fail'; }
       setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2500);
     }
+  });
+
+  registerAction('update-persona-dynamics', ({ element }) => {
+    const { state, render } = getCtx();
+    const personaId = element?.dataset?.personaId ?? '';
+    const field = element?.dataset?.field ?? '';
+    if (!personaId || !field) return;
+    const p = state.personas.find((x) => x.id === personaId);
+    if (!p) return;
+    const cur = normalizeDecisionDynamics(p.decision_dynamics);
+    const rawVal = element.value;
+    const next = { ...cur };
+    if (field === 'reputation') {
+      const n = parseFloat(rawVal);
+      next.reputation = Number.isFinite(n) ? n : cur.reputation;
+    } else if (field === 'consensus_resistance') {
+      next.consensus_resistance = rawVal;
+    } else if (field === 'evidence_sensitivity') {
+      next.evidence_sensitivity = rawVal;
+    } else if (field === 'risk_tolerance') {
+      next.risk_tolerance = rawVal;
+    } else {
+      return;
+    }
+    p.decision_dynamics = normalizeDecisionDynamics(next);
+    render();
+  });
+
+  async function persistPersonaDecisionDynamics(personaId) {
+    const { state, render, apiFetch, t } = getCtx();
+    if (!personaId) return;
+    const statusEl = document.getElementById(`dd-dyn-status-${personaId}`);
+    const p = state.personas.find((x) => x.id === personaId);
+    const fromDom = () => {
+      const rep = parseFloat(document.querySelector(`select.dd-reputation-select[data-persona-id="${CSS.escape(personaId)}"]`)?.value ?? '');
+      const consensus = document.querySelector(`select.dd-consensus-select[data-persona-id="${CSS.escape(personaId)}"]`)?.value ?? '';
+      const evidence = document.querySelector(`select.dd-evidence-select[data-persona-id="${CSS.escape(personaId)}"]`)?.value ?? '';
+      const risk = document.querySelector(`select.dd-risk-select[data-persona-id="${CSS.escape(personaId)}"]`)?.value ?? '';
+      if (p?.decision_dynamics) {
+        return normalizeDecisionDynamics({
+          ...p.decision_dynamics,
+          reputation: Number.isFinite(rep) ? rep : undefined,
+          consensus_resistance: consensus || undefined,
+          evidence_sensitivity: evidence || undefined,
+          risk_tolerance: risk || undefined,
+        });
+      }
+      return normalizeDecisionDynamics({
+        reputation: Number.isFinite(rep) ? rep : 1,
+        consensus_resistance: consensus || 'normal',
+        evidence_sensitivity: evidence || 'normal',
+        risk_tolerance: risk || 'balanced',
+      });
+    };
+    const normalized = fromDom();
+    try {
+      const res = await apiFetch('/api/personas/decision-dynamics', {
+        method: 'POST',
+        body: JSON.stringify({
+          persona_id: personaId,
+          decision_dynamics: normalized,
+        }),
+      });
+      const norm = res.decision_dynamics || normalized;
+      if (p) p.decision_dynamics = norm;
+      if (statusEl) { statusEl.textContent = t('admin.dynamics.saved'); statusEl.className = 'mode-save-status ok'; }
+      setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2500);
+      render();
+    } catch (err) {
+      if (statusEl) { statusEl.textContent = t('admin.dynamics.error'); statusEl.className = 'mode-save-status fail'; }
+      setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 3500);
+    }
+  }
+
+  registerAction('save-persona-decision-dynamics', async ({ element }) => {
+    await persistPersonaDecisionDynamics(element?.dataset?.personaId || '');
+  });
+
+  registerAction('save-persona-dynamics', async ({ element }) => {
+    await persistPersonaDecisionDynamics(element?.dataset?.personaId || '');
+  });
+
+  registerAction('load-dynamics-reco-admin', async () => {
+    const { state, render, apiFetch } = getCtx();
+    state.adminDynamicsReco = { loading: true, suggestions: [] };
+    render();
+    try {
+      const res = await apiFetch('/api/analysis/agent-dynamics-suggestions');
+      state.adminDynamicsReco = res;
+    } catch (err) {
+      state.adminDynamicsReco = {
+        error: err.message || String(err),
+        suggestions: [],
+        disclaimer: '',
+      };
+    }
+    render();
   });
 
   registerAction('pm-generate',         () => _generatePersonaMake(false));
@@ -539,7 +637,6 @@ function registerAdminHandlers() {
       render();
     }
   });
-
   /* ── Provider form submit ─────────────────────────────────────────────── */
   registerSubmit('provider-form', () => doSaveProvider());
 
@@ -943,14 +1040,41 @@ function registerScenarioPackAdminHandlers() {
    Feature 5 — Post-mortem stats (admin retrospective)
 ═══════════════════════════════════════════════════════════════════════ */
 
+let _postmortemStatsFetchGen = 0;
+
 function registerRetrospectiveHandlers() {
   registerAction('load-postmortem-stats', async () => {
     const { state, render, apiFetch } = getCtx();
-    state.postmortemStatsLoading = true;
+    const myGen = ++_postmortemStatsFetchGen;
+    const hadStatsAlready = !!state.postmortemStats;
+
+    state.postmortemStatsLoading = false;
+    state.postmortemStatsAwaiting = true;
     state.postmortemStatsError = null;
     render();
+
+    let spinnerShown = false;
+    let spinnerShownAt = 0;
+    const SHOW_SPINNER_AFTER_MS = 220;
+    const MIN_SPINNER_MS = 340;
+
+    const spinTimer = setTimeout(() => {
+      if (myGen !== _postmortemStatsFetchGen || hadStatsAlready) return;
+      spinnerShown = true;
+      spinnerShownAt = Date.now();
+      state.postmortemStatsLoading = true;
+      render();
+    }, SHOW_SPINNER_AFTER_MS);
+
+    const finishSpinnerUi = () => {
+      state.postmortemStatsAwaiting = false;
+      state.postmortemStatsLoading = false;
+      render();
+    };
+
     try {
       const result = await apiFetch('/api/postmortems/stats');
+      if (myGen !== _postmortemStatsFetchGen) return;
       const total = Number(result?.total ?? 0);
       state.postmortemStats = {
         total,
@@ -962,11 +1086,28 @@ function registerRetrospectiveHandlers() {
       };
       state.postmortemStatsError = null;
     } catch (err) {
+      if (myGen !== _postmortemStatsFetchGen) return;
       console.error('postmortem-stats', err);
       state.postmortemStatsError = err?.message || String(err);
     } finally {
-      state.postmortemStatsLoading = false;
-      render();
+      clearTimeout(spinTimer);
+      if (myGen !== _postmortemStatsFetchGen) return;
+
+      if (!spinnerShown) {
+        finishSpinnerUi();
+        return;
+      }
+
+      const visibleFor = Date.now() - spinnerShownAt;
+      const waitMore = MIN_SPINNER_MS - visibleFor;
+      if (waitMore > 0) {
+        setTimeout(() => {
+          if (myGen !== _postmortemStatsFetchGen) return;
+          finishSpinnerUi();
+        }, waitMore);
+      } else {
+        finishSpinnerUi();
+      }
     }
   });
 }

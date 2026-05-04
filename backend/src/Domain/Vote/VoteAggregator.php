@@ -2,31 +2,30 @@
 namespace Domain\Vote;
 
 use Domain\DecisionReliability\ReliabilityConfig;
+use Infrastructure\Persistence\PersonaDecisionDynamicsRepository;
 use Infrastructure\Persistence\VoteRepository;
 
 class VoteAggregator {
-    private VoteRepository $repo;
+    private VoteRepository $voteRepo;
+    private PersonaDecisionDynamicsRepository $dynamicsRepo;
 
-    public function __construct(?VoteRepository $repo = null) {
-        $this->repo = $repo ?? new VoteRepository();
+    public function __construct(?VoteRepository $repo = null, ?PersonaDecisionDynamicsRepository $dynamicsRepo = null) {
+        $this->voteRepo     = $repo ?? new VoteRepository();
+        $this->dynamicsRepo = $dynamicsRepo ?? new PersonaDecisionDynamicsRepository();
     }
 
-    public function recompute(string $sessionId, float $threshold = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD): ?array {
+    public function recompute(string $sessionId, float $threshold = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD, ?string $presetId = null): ?array {
         $threshold = ReliabilityConfig::normalizeThreshold($threshold);
-        $votes = $this->repo->findVotesBySession($sessionId);
+        $votes = $this->voteRepo->findVotesBySession($sessionId);
         if (empty($votes)) {
             return null;
         }
 
-        $voteTotals = [];
-        $totalWeight = 0.0;
-        foreach ($votes as $vote) {
-            $label = $vote['vote'] ?? '';
-            $weight = (float)($vote['weight_score'] ?? 0);
-            if ($label === '') continue;
-            $voteTotals[$label] = ($voteTotals[$label] ?? 0.0) + $weight;
-            $totalWeight += $weight;
-        }
+        $agg              = $this->aggregateReputationWeightedVotes($votes, $presetId);
+        $voteTotals       = $agg['vote_totals'];
+        $totalWeight      = $agg['total_weight'];
+        $perVoteWeighting = $agg['per_vote_weighting'];
+
         if ($totalWeight <= 0) {
             return null;
         }
@@ -73,20 +72,57 @@ class VoteAggregator {
                 'total_weight' => round($totalWeight, 4),
                 'winning_label' => $winningLabel,
                 'notes' => $notes,
+                'per_vote_weighting' => $perVoteWeighting,
             ],
             'created_at' => date('c'),
         ];
 
-        return $this->repo->replaceDecision($sessionId, $decision);
+        return $this->voteRepo->replaceDecision($sessionId, $decision);
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $votes
+     * @return array{vote_totals:array<string,float>,total_weight:float,per_vote_weighting:list<array<string,mixed>>}
+     */
+    private function aggregateReputationWeightedVotes(array $votes, ?string $presetId = null): array {
+        $voteTotals       = [];
+        $totalWeight      = 0.0;
+        $perVoteWeighting = [];
+
+        foreach ($votes as $vote) {
+            $label   = $vote['vote'] ?? '';
+            $weight  = (float)($vote['weight_score'] ?? 0);
+            $agentId = (string)($vote['agent_id'] ?? '');
+            if ($label === '') {
+                continue;
+            }
+            $rep   = $this->dynamicsRepo->resolveEffectiveForPersona($agentId, null, $presetId)['reputation'];
+            $wVote = $weight * $rep;
+            $voteTotals[$label] = ($voteTotals[$label] ?? 0.0) + $wVote;
+            $totalWeight += $wVote;
+            $perVoteWeighting[] = [
+                'agent_id'               => $agentId,
+                'vote'                   => $label,
+                'weight_score'           => round($weight, 4),
+                'applied_reputation'     => round($rep, 4),
+                'weighted_contribution'  => round($wVote, 4),
+            ];
+        }
+
+        return [
+            'vote_totals'         => $voteTotals,
+            'total_weight'        => $totalWeight,
+            'per_vote_weighting' => $perVoteWeighting,
+        ];
     }
 
     /**
      * Build a human-readable explanation of the automatic decision.
      */
-    public function getDecisionExplanation(string $sessionId, float $threshold = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD): array {
+    public function getDecisionExplanation(string $sessionId, float $threshold = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD, ?string $presetId = null): array {
         $threshold = ReliabilityConfig::normalizeThreshold($threshold);
-        $votes    = $this->repo->findVotesBySession($sessionId);
-        $decision = $this->repo->findDecisionBySession($sessionId);
+        $votes    = $this->voteRepo->findVotesBySession($sessionId);
+        $decision = $this->voteRepo->findDecisionBySession($sessionId);
 
         if (empty($votes)) {
             return [
@@ -100,15 +136,9 @@ class VoteAggregator {
             ];
         }
 
-        $voteTotals  = [];
-        $totalWeight = 0.0;
-        foreach ($votes as $vote) {
-            $label  = $vote['vote'] ?? '';
-            $weight = (float)($vote['weight_score'] ?? 0);
-            if ($label === '') continue;
-            $voteTotals[$label] = ($voteTotals[$label] ?? 0.0) + $weight;
-            $totalWeight += $weight;
-        }
+        $agg         = $this->aggregateReputationWeightedVotes($votes, $presetId);
+        $voteTotals  = $agg['vote_totals'];
+        $totalWeight = $agg['total_weight'];
 
         $scores = [];
         foreach ($voteTotals as $label => $w) {
@@ -131,14 +161,18 @@ class VoteAggregator {
         }
 
         $explanation = $this->buildExplanation(
-            $winningLabel, $winningScore, $decisionLabel, $scores, $overrides, $votes, $threshold
+            $winningLabel, $winningScore, $decisionLabel, $scores, $overrides, $votes, $threshold, $agg['per_vote_weighting']
         );
 
         $formattedVotes = array_map(fn($v) => [
-            'agent_id'     => $v['agent_id']     ?? '',
-            'vote'         => $v['vote']          ?? '',
-            'weight_score' => round((float)($v['weight_score'] ?? 0), 2),
-            'rationale'    => $v['rationale']     ?? '',
+            'agent_id'           => $v['agent_id'] ?? '',
+            'vote'               => $v['vote'] ?? '',
+            'weight_score'       => round((float)($v['weight_score'] ?? 0), 2),
+            'applied_reputation' => round(
+                $this->dynamicsRepo->resolveEffectiveForPersona((string)($v['agent_id'] ?? ''), null, $presetId)['reputation'],
+                2
+            ),
+            'rationale'          => $v['rationale'] ?? '',
         ], $votes);
 
         return [
@@ -159,12 +193,13 @@ class VoteAggregator {
         array  $scores,
         array  $overrides,
         array  $votes,
-        float  $threshold
+        float  $threshold,
+        array  $perVoteWeighting = []
     ): string {
         $pct          = (int) round($score * 100);
         $thresholdPct = (int) round($threshold * 100);
 
-        $text  = "The most common vote was '{$winning}' with {$pct}% of weighted votes. ";
+        $text  = "The most common vote was '{$winning}' with {$pct}% of weighted votes (weight × reputation). ";
 
         if ($winning !== $decision) {
             $text .= "The final decision was changed to '{$decision}'. ";
@@ -179,13 +214,28 @@ class VoteAggregator {
             $text .= "The winning score ({$pct}%) did not reach the consensus threshold ({$thresholdPct}%), so the result is 'no-consensus'. ";
         }
 
-        usort($votes, fn($a, $b) => (float)($b['weight_score'] ?? 0) <=> (float)($a['weight_score'] ?? 0));
-        $topVoters = array_slice($votes, 0, 3);
-        $topNames  = array_map(
-            fn($v) => sprintf('%s (%s, w=%.1f)', $v['agent_id'], $v['vote'], (float)($v['weight_score'] ?? 0)),
-            $topVoters
-        );
-        $text .= 'Top contributors: ' . implode(', ', $topNames) . '.';
+        if (!empty($perVoteWeighting)) {
+            $ranked = $perVoteWeighting;
+            usort($ranked, fn($a, $b) => (float)($b['weighted_contribution'] ?? 0) <=> (float)($a['weighted_contribution'] ?? 0));
+            $topVoters = array_slice($ranked, 0, 3);
+            $topNames  = array_map(
+                fn($row) => sprintf(
+                    '%s (%s, score×rep=%.2f)',
+                    $row['agent_id'] ?? '',
+                    $row['vote'] ?? '',
+                    (float)($row['weighted_contribution'] ?? 0)
+                ),
+                $topVoters
+            );
+        } else {
+            usort($votes, fn($a, $b) => (float)($b['weight_score'] ?? 0) <=> (float)($a['weight_score'] ?? 0));
+            $topVoters = array_slice($votes, 0, 3);
+            $topNames  = array_map(
+                fn($v) => sprintf('%s (%s, w=%.1f)', $v['agent_id'], $v['vote'], (float)($v['weight_score'] ?? 0)),
+                $topVoters
+            );
+        }
+        $text .= 'Top contributors (reputation-weighted): ' . implode(', ', $topNames) . '.';
 
         return $text;
     }

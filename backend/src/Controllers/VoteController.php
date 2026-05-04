@@ -13,6 +13,7 @@ use Infrastructure\Persistence\PersonaScoreRepository;
 use Infrastructure\Persistence\BiasReportRepository;
 use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\VoteRepository;
+use Infrastructure\Persistence\PersonaDecisionDynamicsRepository;
 use Domain\Orchestration\PromptBuilder;
 
 class VoteController {
@@ -76,7 +77,15 @@ class VoteController {
             'reliability_warnings' => $reliability['reliability_warnings'],
             'decision_reliability_summary' => $reliability['decision_reliability_summary'] ?? null,
             'context_clarification' => $reliability['context_clarification'] ?? null,
+            'agent_decision_dynamics' => $this->agentDecisionDynamicsRowsForSession($session, $votes),
         ];
+    }
+
+    /**
+     * @param array<string,mixed> $session
+     */
+    private function agentDecisionDynamicsRowsForSession(array $session, array $votes): array {
+        return (new PersonaDecisionDynamicsRepository())->transparencyForSession($session, $votes);
     }
 
     public function explanation(Request $req): array {
@@ -86,7 +95,8 @@ class VoteController {
             return Response::error('Session not found', 404);
         }
         $threshold = ReliabilityConfig::normalizeThreshold($session['decision_threshold'] ?? null);
-        return $this->aggregator->getDecisionExplanation($sessionId, $threshold);
+        $preset    = $session['decision_dynamics_preset'] ?? null;
+        return $this->aggregator->getDecisionExplanation($sessionId, $threshold, $preset);
     }
 
     public function recompute(Request $req): array {
@@ -96,7 +106,8 @@ class VoteController {
             return Response::error('Session not found', 404);
         }
         $threshold = ReliabilityConfig::normalizeThreshold($session['decision_threshold'] ?? null);
-        $decision = $this->aggregator->recompute($sessionId, $threshold);
+        $preset    = $session['decision_dynamics_preset'] ?? null;
+        $decision = $this->aggregator->recompute($sessionId, $threshold, $preset);
         $votes    = $this->voteRepo->findVotesBySession($sessionId);
         $timelineRows = $this->timelineRepo->findBySession($sessionId);
         $reliability = $this->reliabilityService->buildEnvelope(
@@ -127,6 +138,7 @@ class VoteController {
             'reliability_warnings' => $reliability['reliability_warnings'],
             'decision_reliability_summary' => $reliability['decision_reliability_summary'] ?? null,
             'context_clarification' => $reliability['context_clarification'] ?? null,
+            'agent_decision_dynamics' => $this->agentDecisionDynamicsRowsForSession($session, $votes),
         ];
     }
 }

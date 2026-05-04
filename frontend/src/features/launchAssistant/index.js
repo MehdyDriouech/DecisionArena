@@ -46,6 +46,11 @@ function renderLaunchAssistant() {
       duration: '2-4 min',
       depth: 'Approfondi',
     },
+    'facilitation-workshop': {
+      description: '',
+      duration: '3-5 min',
+      depth: 'Approfondi',
+    },
     'stress-test-idea': {
       description: 'Tester la robustesse de votre idee sous pression',
       duration: '3-5 min',
@@ -58,6 +63,11 @@ function renderLaunchAssistant() {
     },
   };
 
+  ['facilitation-workshop'].forEach((k) => {
+    if (!intentMeta[k]) return;
+    intentMeta[k].description = String(t(`la.${k}Desc`) || '').trim() || intentMeta[k].description;
+  });
+
   const intents = [
     { id: 'validate-idea',       icon: '💡', label: t('la.intentValidateIdea') },
     { id: 'challenge-product',   icon: '⚔️', label: t('la.intentChallengeProduct') },
@@ -65,6 +75,7 @@ function renderLaunchAssistant() {
     { id: 'find-risks',          icon: '⚠️', label: t('la.intentFindRisks') },
     { id: 'compare-options',     icon: '⚖️', label: t('la.intentCompareOptions') },
     { id: 'prepare-decision',    icon: '🎯', label: t('la.intentPrepareDecision') },
+    { id: 'facilitation-workshop', icon: '🎩', label: t('la.intentFacilitationWorkshop') },
     { id: 'stress-test-idea',    icon: '🔥', label: t('la.intentStressTest') },
     { id: 'custom',              icon: '🔧', label: 'Configuration avancee' },
   ];
@@ -110,7 +121,7 @@ function renderLaunchAssistant() {
               </div>
             `).join('')}
           </div>
-          ${selectedMeta ? `
+            ${selectedMeta ? `
             <div style="margin-top:16px;padding:14px;border:1px solid var(--border);border-radius:8px;background:rgba(99,102,241,0.06);">
               <div style="font-size:13px;color:var(--text-secondary);">
                 On va simuler plusieurs experts qui vont analyser votre idee et produire une decision argumentee.
@@ -118,6 +129,7 @@ function renderLaunchAssistant() {
               <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
                 <span class="badge badge-muted">⏱ ${escHtml(selectedMeta.duration)}</span>
                 <span class="badge badge-info">🎯 ${escHtml(selectedMeta.depth)}</span>
+                ${la.intent === 'facilitation-workshop' ? `<span class="badge badge-info" style="text-transform:none;">${escHtml(t('sixHats.frameworkBadge'))}</span>` : ''}
               </div>
             </div>
             ${analysisPreview}
@@ -144,6 +156,7 @@ function renderLaunchAssistant() {
         <div class="card" style="padding:24px;margin-bottom:16px;">
           <div style="font-weight:700;font-size:15px;margin-bottom:4px;">✅ ${t('la.recommendationTitle')}</div>
           <div style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">${escHtml(rec.explanation || '')}</div>
+          ${rec.recommended_template_id === 'six-thinking-hats' ? `<div style="margin-bottom:12px;"><span class="badge badge-info" style="text-transform:none;">${escHtml(t('sixHats.shortTitle'))}</span></div>` : ''}
 
           <div class="form-row" style="margin-bottom:12px;">
             <div>

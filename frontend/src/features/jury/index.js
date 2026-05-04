@@ -3,13 +3,14 @@
  */
 
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
-import { renderDecisionBrief } from '../../ui/components.js';
+import { renderDecisionBrief, renderDecisionDynamicsSummary, renderPremortemStructuredCard, renderTradeoffSection } from '../../ui/components.js';
 import { renderExportButtons, renderAgentChatPanel } from '../chat/view.js';
 import { renderWeightedVotePanel, renderDecisionReliabilityCard } from '../confrontation/index.js';
 import { renderDebateAuditPanel } from '../debateAudit/index.js';
 import { renderArgumentHeatmapPanel } from '../argumentHeatmap/index.js';
 import { renderDebateReplayPanel } from '../debateReplay/index.js';
 import { renderGraphViewPanel } from '../graphView/index.js';
+import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -271,9 +272,12 @@ function renderLiveVotePanel(results, sessionId) {
 }
 
 function renderJuryResults(results) {
-  const { state, t } = getCtx();
+  const { state, t, escHtml, agentName } = getCtx();
   const sessionId   = state.currentSession?.id ?? '';
   const rounds      = results.rounds ?? {};
+  const dynamicsHtml = renderDecisionDynamicsSummary(results.agent_decision_dynamics || [], {
+    escHtml, agentName, t, session: state.currentSession, votes: results.votes || [],
+  });
 
   // Separate special rounds from numeric rounds
   const numericKeys = Object.keys(rounds)
@@ -338,7 +342,14 @@ function renderJuryResults(results) {
     </div>
   ` : '';
 
-  return renderDecisionBrief(results.decision_brief || null, { sessionId })
+  return renderDecisionBrief(results.decision_brief || null, {
+    sessionId,
+    agentDecisionDynamics: results.agent_decision_dynamics,
+    uiComplexity: state.uiComplexity || 'advanced',
+  })
+    + renderTradeoffSection(results.decision_brief || null, { uiComplexity: state.uiComplexity || 'advanced', tradeoffUid: sessionId })
+    + renderPremortemStructuredCard(results.premortem_summary || null, t, escHtml)
+    + dynamicsHtml
     + `<details id="debate-section-${sessionId}" data-section="debate-details" ${state.showDebateDetails ? 'open' : ''} style="margin:0 0 16px;"><summary class="btn btn-secondary btn-sm">Voir le debat complet</summary><div style="margin-top:12px;">${roundsHtml}${miniChallengeHtml}${minorityHtml}${synthHtml}</div></details>`
     + renderAdversarialCard(results.jury_adversarial)
     + renderRerunButton(results)
@@ -362,6 +373,7 @@ function renderJury() {
         <div class="dr-header-info">
           <div class="dr-title">⚖️ ${escHtml(session.title || t('jury.title'))}</div>
           <div class="dr-objective">${escHtml(session.initial_prompt || session.idea || '')}</div>
+          ${renderSessionPresetUsedBanner(session, escHtml, t)}
           ${renderContextDocBadge()}
         </div>
         ${!state.juryRunning ? `<button class="btn btn-primary" data-action="run-jury">${t('jury.run')}</button>` : ''}

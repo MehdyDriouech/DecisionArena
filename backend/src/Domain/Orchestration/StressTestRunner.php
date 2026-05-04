@@ -4,6 +4,7 @@ namespace Domain\Orchestration;
 use Domain\Agents\AgentAssembler;
 use Domain\DecisionReliability\DecisionReliabilityService;
 use Domain\DecisionReliability\DevilAdvocateTriggerPolicy;
+use Domain\DecisionReliability\DecisionQualityScoreService;
 use Domain\DecisionReliability\ReliabilityConfig;
 use Domain\Evidence\EvidencePromptBuilder;
 use Domain\Evidence\EvidenceReportService;
@@ -37,6 +38,8 @@ class StressTestRunner {
     private FalseConsensusDetector $falseConsensusDetector;
     private EvidenceReportService $evidenceService;
     private RiskProfileAnalyzer $riskAnalyzer;
+    private DecisionQualityScoreService $qualityScoreService;
+    private DecisionSummaryService $summaryService;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -55,6 +58,8 @@ class StressTestRunner {
         $this->falseConsensusDetector = new FalseConsensusDetector();
         $this->evidenceService = new EvidenceReportService();
         $this->riskAnalyzer    = new RiskProfileAnalyzer();
+        $this->qualityScoreService = new DecisionQualityScoreService();
+        $this->summaryService      = new DecisionSummaryService();
     }
 
     public function run(
@@ -68,10 +73,12 @@ class StressTestRunner {
         bool   $devilAdvocateEnabled = false,
         float  $devilAdvocateThreshold = 0.65,
         array  $agentProviders = [],
-        float  $decisionThreshold = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD
+        float  $decisionThreshold = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD,
+        ?string $decisionDynamicsPreset = null
     ): array {
         $rounds = min(max($rounds, 1), RoundPolicy::MAX_ROUNDS);
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($decisionThreshold);
+        $dynamicsPreset = \Domain\Agents\DecisionDynamicsPreset::normalizeId($decisionDynamicsPreset);
 
         // Critic goes first if selected (risk-first posture)
         $nonSynthesizers = array_values(array_filter($selectedAgents, fn($a) => $a !== 'synthesizer'));
@@ -115,7 +122,7 @@ class StressTestRunner {
             }
 
             foreach ($agentsForRound as $agentId) {
-                $agent = $this->assembler->assemble($agentId);
+                $agent = $this->assembler->assemble($agentId, null, null, $dynamicsPreset);
                 if (!$agent) continue;
 
                 $assignedTarget = ($round > 1 && $agentId !== 'synthesizer')
@@ -333,7 +340,7 @@ class StressTestRunner {
             $allMessages[$round]   = $roundMessages;
         }
 
-        $automaticDecision = $this->voteAggregator->recompute($sessionId, $decisionThreshold);
+        $automaticDecision = $this->voteAggregator->recompute($sessionId, $decisionThreshold, $dynamicsPreset);
         $allSessionMessages = $this->messageRepo->findBySession($sessionId);
         $evidenceReport = null;
         try {
@@ -366,6 +373,38 @@ class StressTestRunner {
             $evidenceReport,
             $riskProfile
         );
+
+        $fc = $reliability['false_consensus'] ?? [];
+        $fc = is_array($fc) ? $fc : [];
+        $debateProxy = (float)(($fc['diversity_score'] ?? 0.5) * 100);
+        $qualityScore = $this->qualityScoreService->compute(
+            $reliability['context_quality'] ?? [],
+            $debateProxy,
+            $evidenceReport,
+            $riskProfile,
+            $fc
+        );
+        $synthOut = '';
+        foreach ($allMessages[$rounds] ?? [] as $m) {
+            if (($m['agent_id'] ?? '') === 'synthesizer') {
+                $synthOut = (string)($m['content'] ?? '');
+                break;
+            }
+        }
+        $verdictRow = $this->verdictRepo->findBySession($sessionId);
+        $decisionBrief = $this->summaryService->buildDecisionBrief(
+            array_merge($reliability, [
+                'synthesizer_output'     => $synthOut,
+                'guardrails'             => [],
+                'decision_quality_score' => $qualityScore,
+                'risk_profile'           => $riskProfile,
+                'evidence_report'        => $evidenceReport,
+                'false_consensus'        => $fc,
+                'verdict'                => $verdictRow ?: null,
+                'session_mode_hint'      => 'stress',
+            ])
+        );
+
         return [
             'rounds' => $allMessages,
             'arguments' => $state['arguments'],
@@ -387,6 +426,8 @@ class StressTestRunner {
             'evidence_report' => $evidenceReport,
             'risk_profile' => $riskProfile,
             'risk_threshold_info' => $reliability['risk_threshold_info'] ?? null,
+            'decision_quality_score' => $qualityScore,
+            'decision_brief' => $decisionBrief,
         ];
     }
 

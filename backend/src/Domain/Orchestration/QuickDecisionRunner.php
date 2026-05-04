@@ -2,6 +2,7 @@
 namespace Domain\Orchestration;
 
 use Domain\Agents\AgentAssembler;
+use Domain\DecisionReliability\DecisionQualityScoreService;
 use Domain\DecisionReliability\DecisionReliabilityService;
 use Domain\DecisionReliability\ReliabilityConfig;
 use Domain\Evidence\EvidenceReportService;
@@ -30,6 +31,8 @@ class QuickDecisionRunner {
     private SocialPromptContextBuilder $socialPrompt;
     private EvidenceReportService $evidenceService;
     private RiskProfileAnalyzer $riskAnalyzer;
+    private DecisionQualityScoreService $qualityScoreService;
+    private DecisionSummaryService $summaryService;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -45,6 +48,8 @@ class QuickDecisionRunner {
         $this->socialPrompt   = new SocialPromptContextBuilder();
         $this->evidenceService = new EvidenceReportService();
         $this->riskAnalyzer    = new RiskProfileAnalyzer();
+        $this->qualityScoreService = new DecisionQualityScoreService();
+        $this->summaryService      = new DecisionSummaryService();
     }
 
     public function run(
@@ -54,10 +59,12 @@ class QuickDecisionRunner {
         string $language          = 'en',
         bool   $forceDisagreement = false,
         ?array $contextDoc        = null,
-        float  $decisionThreshold = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD
+        float  $decisionThreshold = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD,
+        ?string $decisionDynamicsPreset = null
     ): array {
         $warning = null;
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($decisionThreshold);
+        $dynamicsPreset = \Domain\Agents\DecisionDynamicsPreset::normalizeId($decisionDynamicsPreset);
         $this->voteRepo->clearSession($sessionId);
         $this->socialDynamics->clearSession($sessionId);
 
@@ -73,7 +80,7 @@ class QuickDecisionRunner {
         $roundMessages = [];
 
         foreach ($nonSynth as $agentId) {
-            $agent = $this->assembler->assemble($agentId);
+            $agent = $this->assembler->assemble($agentId, null, null, $dynamicsPreset);
             if (!$agent) continue;
 
             try {
@@ -168,9 +175,9 @@ class QuickDecisionRunner {
 
         $synthesis = [];
         $verdict   = null;
-        $automaticDecision = $this->voteAggregator->recompute($sessionId, $decisionThreshold);
+        $automaticDecision = $this->voteAggregator->recompute($sessionId, $decisionThreshold, $dynamicsPreset);
 
-        $synthAgent = $this->assembler->assemble('synthesizer');
+        $synthAgent = $this->assembler->assemble('synthesizer', null, null, $dynamicsPreset);
         if ($synthAgent) {
             try {
                 $messages = $this->promptBuilder->buildQuickDecisionMessages(
@@ -267,6 +274,31 @@ class QuickDecisionRunner {
             $riskProfile
         );
 
+        $fc = $reliability['false_consensus'] ?? [];
+        $fc = is_array($fc) ? $fc : [];
+        $debateProxy = (float)(($fc['diversity_score'] ?? 0.5) * 100);
+        $qualityScore = $this->qualityScoreService->compute(
+            $reliability['context_quality'] ?? [],
+            $debateProxy,
+            $evidenceReport,
+            $riskProfile,
+            $fc
+        );
+        $synthOut = $synthesis[0]['content'] ?? '';
+        $verdictRow = is_array($verdict) ? $verdict : $this->verdictRepo->findBySession($sessionId);
+        $decisionBrief = $this->summaryService->buildDecisionBrief(
+            array_merge($reliability, [
+                'synthesizer_output'     => $synthOut,
+                'guardrails'             => [],
+                'decision_quality_score' => $qualityScore,
+                'risk_profile'           => $riskProfile,
+                'evidence_report'        => $evidenceReport,
+                'false_consensus'        => $fc,
+                'verdict'                => $verdictRow ?: null,
+                'session_mode_hint'      => 'quick',
+            ])
+        );
+
         return [
             'round'     => $roundMessages,
             'synthesis' => $synthesis,
@@ -286,6 +318,8 @@ class QuickDecisionRunner {
             'evidence_report' => $evidenceReport,
             'risk_profile' => $riskProfile,
             'risk_threshold_info' => $reliability['risk_threshold_info'] ?? null,
+            'decision_quality_score' => $qualityScore,
+            'decision_brief' => $decisionBrief,
         ];
     }
 

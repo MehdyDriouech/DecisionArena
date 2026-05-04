@@ -1,5 +1,16 @@
 /* Launch Assistant feature — action handlers */
 import { registerAction } from '../../core/events.js';
+import { _applyTemplate } from '../newSession/handlers.js';
+
+const SIX_THINKING_HATS_TEMPLATE_ID = 'six-thinking-hats';
+
+function applySixThinkingHatsPreset(storeState) {
+  const tmpl = storeState.templates.find((x) => x.id === SIX_THINKING_HATS_TEMPLATE_ID);
+  if (!tmpl) return;
+  _applyTemplate(storeState, tmpl);
+  storeState.newSession.selectedStarter = { type: 'template', id: SIX_THINKING_HATS_TEMPLATE_ID };
+  storeState.newSession.facilitationFramework = 'six-thinking-hats';
+}
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -73,6 +84,7 @@ function registerLaunchAssistantHandlers() {
       'compare-options': 'compare',
       'prepare-decision': 'decision',
       'stress-test-idea': 'stress',
+      'facilitation-workshop': 'facilitation',
       custom: 'custom',
       validate: 'validate',
       challenge: 'challenge',
@@ -81,6 +93,7 @@ function registerLaunchAssistantHandlers() {
       compare: 'compare',
       decision: 'decision',
       stress: 'stress',
+      facilitation: 'facilitation',
     }[value] || 'decision');
 
     const intent = normalizeIntent(intentRaw);
@@ -92,6 +105,7 @@ function registerLaunchAssistantHandlers() {
       compare: 'decision-room',
       decision: 'quick-decision',
       stress: 'stress-test',
+      facilitation: 'decision-room',
       custom: 'decision-room',
     };
     const DA = window.DecisionArena;
@@ -101,6 +115,14 @@ function registerLaunchAssistantHandlers() {
       mode: modeByIntent[intent] || 'quick-decision',
       fastDecisionEnabled: intent !== 'custom',
     };
+    if (intent === 'facilitation') applySixThinkingHatsPreset(DA.store.state);
+    const laDesc = DA.store.state.launchAssistant?.description?.trim();
+    if (laDesc) {
+      DA.store.state.newSession.idea = laDesc;
+      if (!DA.store.state.newSession.title?.trim()) {
+        DA.store.state.newSession.title = laDesc.slice(0, 60) || DA.store.state.newSession.title;
+      }
+    }
     DA.router.navigate('new-session');
     DA.render?.();
   });
@@ -140,6 +162,13 @@ function _launchFromAssistant() {
     ctxDocEnabled: false, ctxDocTab: 'manual', ctxDocTitle: '', ctxDocContent: '',
     ctxDocDraftSaved: false, ctxDocDraftSummary: null,
   };
+
+  if (rec.recommended_template_id === SIX_THINKING_HATS_TEMPLATE_ID || rec.facilitation_framework === 'six-thinking-hats') {
+    applySixThinkingHatsPreset(window.DecisionArena.store.state);
+    state.newSession.title = titleEl?.value.trim() || la.description.slice(0, 60) || state.newSession.title;
+    state.newSession.idea = ideaEl?.value.trim() || la.description || state.newSession.idea;
+    state.newSession.language = window.i18n?.getLanguage() || 'fr';
+  }
 
   state.launchAssistant = {
     step: 1, intent: null, description: '', recommendation: null,

@@ -32,6 +32,7 @@ class RerunController {
         $keepContext      = (bool)($data['keep_context_document'] ?? true);
         $includeChallenge = (bool)($data['include_challenge_context'] ?? false);
         $challengeFallback = trim((string)($data['challenge_summary_fallback'] ?? ''));
+        $isPremortem = !empty($data['premortem']);
 
         // Start with original session values
         $selectedAgents   = (array)($session['selected_agents'] ?? []);
@@ -42,6 +43,11 @@ class RerunController {
 
         // Apply variations
         foreach ($variations as $variation) {
+            $vnorm = strtolower((string)$variation);
+            if (in_array($vnorm, ['pre-mortem', 'premortem', 'pre_mortem'], true)) {
+                $isPremortem = true;
+                continue;
+            }
             switch ($variation) {
                 case 'more-disagreement':
                     $forceDisagreement = true;
@@ -80,8 +86,21 @@ class RerunController {
             }
         }
 
+        if ($isPremortem) {
+            // Dérivée Decision Room avec pipeline verdict / brief compatible
+            $mode              = 'decision-room';
+            $forceDisagreement = true;
+            if (!in_array('synthesizer', $selectedAgents, true)) {
+                $selectedAgents[] = 'synthesizer';
+            }
+            if (!in_array('critic', $selectedAgents, true)) {
+                $selectedAgents[] = 'critic';
+            }
+            $initialPrompt .= "\n\n" . $this->buildPremortemPromptAugment($id, $session);
+        }
+
         // Override mode if explicitly requested and no 'different-mode' variation
-        if ($targetMode && !in_array('different-mode', $variations, true)) {
+        if ($targetMode && !in_array('different-mode', $variations, true) && !$isPremortem) {
             $mode = $targetMode;
         }
 
@@ -104,7 +123,7 @@ class RerunController {
         $newId   = $this->uuid();
         $newData = [
             'id'                   => $newId,
-            'title'                => ($session['title'] ?? 'Session') . ' (rerun)',
+            'title'                => ($session['title'] ?? 'Session') . ($isPremortem ? ' (Pre-Mortem)' : ' (rerun)'),
             'mode'                 => $mode,
             'initial_prompt'       => $initialPrompt,
             'selected_agents'      => json_encode(array_values(array_unique($selectedAgents))),
@@ -124,14 +143,43 @@ class RerunController {
         // Store parent reference if columns exist
         try {
             $newData['parent_session_id'] = $id;
-            $reasonParts = array_values(array_filter([
-                implode(', ', $variations) !== '' ? implode(', ', $variations) : 'manual',
-                $includeChallenge ? 'challenge_rerun' : null,
-            ]));
-            $newData['rerun_reason'] = implode(', ', $reasonParts);
+            $reasonBits = [];
+            if ($isPremortem) {
+                $reasonBits[] = 'premortem';
+            }
+            $varStr = implode(', ', array_values(array_filter(array_map('strval', $variations))));
+            if ($varStr !== '') {
+                $reasonBits[] = $varStr;
+            } elseif (!$isPremortem) {
+                $reasonBits[] = 'manual';
+            }
+            if ($includeChallenge) {
+                $reasonBits[] = 'challenge_rerun';
+            }
+            $newData['rerun_reason'] = implode(', ', $reasonBits);
         } catch (\Throwable $_) {}
 
         $created = $this->sessionRepo->create($newData);
+
+        try {
+            $preset = \Domain\Agents\DecisionDynamicsPreset::normalizeId($session['decision_dynamics_preset'] ?? null);
+            $this->sessionRepo->update($newId, ['decision_dynamics_preset' => $preset]);
+        } catch (\Throwable $_) {
+        }
+
+        if ($isPremortem) {
+            try {
+                $this->sessionRepo->update($newId, ['session_variant' => 'premortem']);
+            } catch (\Throwable $_) {
+            }
+        }
+
+        if (!empty($session['facilitation_framework'])) {
+            try {
+                $this->sessionRepo->update($newId, ['facilitation_framework' => $session['facilitation_framework']]);
+            } catch (\Throwable $_) {
+            }
+        }
 
         // Copy context document if requested
         if ($keepContext) {
@@ -158,7 +206,7 @@ class RerunController {
             } catch (\Throwable $_) {}
         }
 
-        return ['session' => $created, 'parent_session_id' => $id];
+        return ['session' => $this->sessionRepo->findById($newId) ?: $created, 'parent_session_id' => $id];
     }
 
     /**
@@ -195,6 +243,84 @@ class RerunController {
             return '[USER CHALLENGE]' . "\n" . 'The user has challenged:' . "\n" . '"' . $fallbackSummary . '"';
         }
         return '';
+    }
+
+    /**
+     * @param array<string,mixed> $parentSession
+     */
+    private function buildPremortemPromptAugment(string $parentId, array $parentSession): string {
+        $path       = dirname(__DIR__, 2) . '/storage/prompts/pre_mortem.md';
+        $policyText = is_readable($path) ? (string)file_get_contents($path) : '';
+
+        $briefRaw = $parentSession['decision_brief'] ?? null;
+        $brief    = null;
+        if (is_string($briefRaw) && $briefRaw !== '') {
+            $d = json_decode($briefRaw, true);
+            $brief = is_array($d) ? $d : null;
+        } elseif (is_array($briefRaw)) {
+            $brief = $briefRaw;
+        }
+
+        $parts   = [];
+        $parts[] = '---';
+        $parts[] = '[PRE-MORTEM SESSION — source_session_id=' . $parentId . ']';
+        $parts[] = 'This session is an auditable counterfactual derivative. Treat the FAILURE premise as mandated for brainstorming only.';
+        $parts[] = '';
+        if ($policyText !== '') {
+            $parts[] = trim($policyText);
+            $parts[] = '';
+        }
+        $parts[] = '## Source decision snapshot (from parent session Decision Brief — not a prediction)';
+        if (is_array($brief)) {
+            $why   = $brief['why']   ?? [];
+            $risks = $brief['risks'] ?? [];
+            $parts[] = '- **Decision (brief):** ' . ($brief['decision'] ?? '—');
+            $parts[] = '- **Confidence:** ' . ($brief['confidence'] ?? '—');
+            $parts[] = '- **Reliability:** ' . ($brief['reliability'] ?? '—');
+            $parts[] = '- **Quality score:** ' . (isset($brief['quality_score']) ? (string)$brief['quality_score'] : '—');
+            $parts[] = '- **Why:** ' . (is_array($why) ? implode(' | ', array_map('strval', $why)) : (string)$why);
+            $parts[] = '- **Risks:** ' . (is_array($risks) ? implode(' | ', array_map('strval', $risks)) : (string)$risks);
+            $parts[] = '- **Next step:** ' . ($brief['next_step'] ?? '—');
+            if (!empty($brief['primary_warning'])) {
+                $parts[] = '- **Primary warning:** ' . (string)$brief['primary_warning'];
+            }
+        } else {
+            $parts[] = '_No structured Decision Brief stored on parent — infer from excerpts below and context document._';
+        }
+        $parts[] = '';
+        $parts[] = '## Original user problem (preserve framing — do not replace with unrelated scenarios)';
+        $parts[] = trim((string)($parentSession['initial_prompt'] ?? ''));
+        $parts[] = '';
+        $parts[] = '## Key excerpts from parent debate';
+        $parts[] = $this->summarizeParentMessages($parentId);
+        $parts[] = '';
+        $parts[] = '---';
+
+        return implode("\n", $parts);
+    }
+
+    private function summarizeParentMessages(string $parentId): string {
+        $msgs = $this->messageRepo->findBySession($parentId);
+        if ($msgs === []) {
+            return '_No messages._';
+        }
+        $tail = array_slice($msgs, -10);
+        $out  = [];
+        foreach ($tail as $m) {
+            $content = trim((string)($m['content'] ?? ''));
+            if ($content === '') {
+                continue;
+            }
+            if (mb_strlen($content, 'UTF-8') > 700) {
+                $content = mb_substr($content, 0, 697, 'UTF-8') . '…';
+            }
+            $role  = (string)($m['role'] ?? '');
+            $agent = (string)($m['agent_id'] ?? '');
+            $label = ($role === 'user') ? 'User' : ($agent !== '' ? $agent : 'Agent');
+            $out[] = '- **' . $label . ':** ' . $content;
+        }
+
+        return $out === [] ? '_No excerptable content._' : implode("\n", $out);
     }
 
     private function uuid(): string {

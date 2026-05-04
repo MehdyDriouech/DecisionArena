@@ -2,19 +2,22 @@
 namespace Domain\Agents;
 
 use Infrastructure\Markdown\MarkdownFileLoader;
+use Infrastructure\Persistence\PersonaDecisionDynamicsRepository;
 
 class AgentAssembler {
     private MarkdownFileLoader $personaLoader;
     private MarkdownFileLoader $soulLoader;
+    private PersonaDecisionDynamicsRepository $personaDynamicsRepo;
     private string $storageDir;
 
-    public function __construct() {
+    public function __construct(?PersonaDecisionDynamicsRepository $personaDynamicsRepo = null) {
         $this->storageDir = __DIR__ . '/../../../storage';
         $this->personaLoader = new MarkdownFileLoader($this->storageDir);
         $this->soulLoader = new MarkdownFileLoader($this->storageDir);
+        $this->personaDynamicsRepo = $personaDynamicsRepo ?? new PersonaDecisionDynamicsRepository();
     }
 
-    public function assemble(string $agentId, ?string $providerId = null, ?string $model = null): ?Agent {
+    public function assemble(string $agentId, ?string $providerId = null, ?string $model = null, ?string $decisionDynamicsPreset = null): ?Agent {
         // Try standard personas first
         $personaData = $this->personaLoader->loadById('personas', $agentId);
 
@@ -24,6 +27,12 @@ class AgentAssembler {
         }
 
         if (!$personaData) return null;
+
+        $fmDynamics = null;
+        if (isset($personaData['decision_dynamics']) && is_array($personaData['decision_dynamics'])) {
+            $fmDynamics = $personaData['decision_dynamics'];
+        }
+        $decisionDynamics = $this->personaDynamicsRepo->resolveEffectiveForPersona($agentId, $fmDynamics, $decisionDynamicsPreset);
 
         $persona = new Persona(
             id: $personaData['id'] ?? $agentId,
@@ -73,7 +82,8 @@ class AgentAssembler {
             persona: $persona,
             soul: $soul,
             providerId: $providerId ?? $personaData['default_provider'] ?? null,
-            model: $model ?? $personaData['default_model'] ?? null
+            model: $model ?? $personaData['default_model'] ?? null,
+            decisionDynamics: $decisionDynamics
         );
     }
 

@@ -109,6 +109,88 @@ function registerSessionHistoryHandlers() {
     });
   });
 
+  registerAction('toggle-tradeoffs', ({ element }) => {
+    const scope = element?.dataset?.tradeoffScope;
+    if (!scope) return;
+    const panel = document.getElementById(`tradeoff-panel-${scope}`);
+    const tFn = window.i18n?.t?.bind(window.i18n) || ((k) => k);
+    if (!panel || !element) return;
+    panel.hidden = !panel.hidden;
+    const open = !panel.hidden;
+    element.setAttribute('aria-expanded', open ? 'true' : 'false');
+    element.textContent = open ? tFn('tradeoff.hide') : tFn('tradeoff.show');
+  });
+
+  registerAction('tradeoff-select-option', ({ element }) => {
+    const scope = element?.dataset?.tradeoffScope;
+    if (!scope || !element) return;
+    const sel = parseInt(String(element.value), 10);
+    if (Number.isNaN(sel)) return;
+    const root =
+      typeof document.querySelector !== 'function'
+        ? null
+        : document.querySelector(`[data-tradeoff-scope="${CSS.escape(scope)}"].tradeoff-card`);
+    if (!root) return;
+    root.querySelectorAll('[data-tradeoff-pane-index]').forEach((pane) => {
+      const idx = parseInt(String(pane.getAttribute('data-tradeoff-pane-index') ?? ''), 10);
+      if (Number.isNaN(idx)) return;
+      pane.hidden = idx !== sel;
+    });
+  });
+
+  registerAction('launch-premortem', async ({ element }) => {
+    const sessionId = element?.dataset?.sessionId;
+    if (!sessionId) return;
+    const DA = window.DecisionArena;
+    const { store, services, router } = DA;
+    const t = window.i18n?.t?.bind(window.i18n) || ((k) => k);
+
+    store.state.error = null;
+    store.state.premortemLaunchSessionId = sessionId;
+    DA.render?.();
+
+    try {
+      const result = await services.SessionService.rerun(sessionId, {
+        variations: ['pre-mortem'],
+        premortem: true,
+        keep_context_document: true,
+      });
+
+      if (result?.session) {
+        store.state.sessions = store.state.sessions || [];
+        store.state.sessions.unshift(result.session);
+
+        store.state.newSession = {
+          title:             result.session.title ?? '',
+          idea:               result.session.initial_prompt ?? '',
+          mode:               result.session.mode ?? 'decision-room',
+          selectedAgents:     Array.isArray(result.session.selected_agents) ? result.session.selected_agents : [],
+          rounds:             result.session.rounds || 2,
+          language:           result.session.language ?? 'fr',
+          blueTeam:           ['pm', 'architect', 'po', 'ux-expert'],
+          redTeam:            ['analyst', 'critic'],
+          includeSynthesis:    true,
+          cfRounds:           result.session.cf_rounds ?? 3,
+          cfStyle:            result.session.cf_interaction_style ?? 'sequential',
+          cfReplyPolicy:       result.session.cf_reply_policy ?? 'all-agents-reply',
+          forceDisagreement:   !!result.session.force_disagreement,
+          ctxDocEnabled:       false,
+          ctxDocTab:           'manual',
+          ctxDocTitle:         '',
+          ctxDocContent:       '',
+          ctxDocDraftSaved:    false,
+          ctxDocDraftSummary: null,
+        };
+        router.navigate('new-session');
+      }
+    } catch (error) {
+      store.state.error = error?.message || t('premortem.launchError');
+    } finally {
+      store.state.premortemLaunchSessionId = null;
+      DA.render?.();
+    }
+  });
+
   registerAction('rerun-with-contradiction', async ({ event, element }) => {
     const sessionId = event?.target?.closest('[data-session-id]')?.dataset?.sessionId || element?.dataset?.sessionId;
     if (!sessionId) return;
@@ -138,6 +220,7 @@ function registerSessionHistoryHandlers() {
             raw_decision: full.raw_decision || null,
             adjusted_decision: full.adjusted_decision || null,
             decision_brief: full.decision_brief || null,
+            premortem_summary: full.premortem_summary ?? null,
           };
         } catch (_) {}
         router.navigate('session-history');
@@ -566,11 +649,77 @@ function registerSessionHistoryHandlers() {
       state.postmortem[sessionId] = result.postmortem || null;
       state.postmortemFormOpen = state.postmortemFormOpen || {};
       state.postmortemFormOpen[sessionId] = false;
+      if (state.dynamicsRecoBySession && state.dynamicsRecoBySession[sessionId]) {
+        delete state.dynamicsRecoBySession[sessionId];
+      }
       if (statusEl) statusEl.textContent = '✅ ' + t('postmortem.saved');
       render();
     } catch (err) {
       if (statusEl) statusEl.textContent = '❌ ' + err.message;
     }
+  });
+
+  registerAction('load-dynamics-reco-session', async ({ element }) => {
+    const { state, render, apiFetch } = getCtx();
+    const sessionId = element?.dataset?.sessionId;
+    if (!sessionId) return;
+    state.dynamicsRecoBySession = state.dynamicsRecoBySession || {};
+    state.dynamicsRecoBySession[sessionId] = { loading: true, suggestions: [] };
+    render();
+    try {
+      const res = await apiFetch(`/api/analysis/agent-dynamics-suggestions?session_id=${encodeURIComponent(sessionId)}`);
+      state.dynamicsRecoBySession[sessionId] = res;
+    } catch (err) {
+      state.dynamicsRecoBySession[sessionId] = {
+        error: err.message || String(err),
+        suggestions: [],
+        disclaimer: '',
+      };
+    }
+    render();
+  });
+
+  registerAction('apply-dynamics-reco-suggestion', async ({ element }) => {
+    const { state, render, apiFetch, t } = getCtx();
+    const id = element?.dataset?.suggestionId;
+    const sessionId = element?.dataset?.sessionId || '';
+    const fromAdmin = element?.dataset?.source === 'admin';
+    if (!id) return;
+    if (!window.confirm(t('dynamicsReco.applyConfirm'))) return;
+    try {
+      await apiFetch('/api/analysis/agent-dynamics-suggestions/apply', {
+        method: 'POST',
+        body: JSON.stringify({ suggestion_id: id, confirm: true }),
+      });
+      const plist = await apiFetch('/api/personas');
+      if (Array.isArray(plist)) state.personas = plist;
+      if (sessionId) {
+        const res = await apiFetch(`/api/analysis/agent-dynamics-suggestions?session_id=${encodeURIComponent(sessionId)}`);
+        state.dynamicsRecoBySession = state.dynamicsRecoBySession || {};
+        state.dynamicsRecoBySession[sessionId] = res;
+      }
+      if (fromAdmin) {
+        const res = await apiFetch('/api/analysis/agent-dynamics-suggestions');
+        state.adminDynamicsReco = res;
+      }
+      window.alert(t('dynamicsReco.appliedOk'));
+    } catch (err) {
+      window.alert(`${t('dynamicsReco.appliedFail')} ${err.message || ''}`);
+    }
+    render();
+  });
+
+  registerAction('dismiss-dynamics-reco-suggestion', ({ element }) => {
+    const { render } = getCtx();
+    const id = element?.dataset?.suggestionId;
+    if (!id) return;
+    try {
+      const cur = JSON.parse(localStorage.getItem('da_dynamics_reco_dismissed') || '[]');
+      const arr = Array.isArray(cur) ? cur : [];
+      if (!arr.includes(id)) arr.push(id);
+      localStorage.setItem('da_dynamics_reco_dismissed', JSON.stringify(arr));
+    } catch (_) { /* ignore */ }
+    render();
   });
 
   /* ══════════════════════════════════════════════════════════════════════

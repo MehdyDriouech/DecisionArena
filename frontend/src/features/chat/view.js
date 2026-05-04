@@ -8,8 +8,9 @@
  */
 
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
-import { renderDecisionBrief } from '../../ui/components.js';
+import { renderDecisionBrief, renderPremortemInvertedBanner, renderPremortemStructuredCard } from '../../ui/components.js';
 import { formatHitlMessageBadges, formatRerunWithChallengeButton } from '../../utils/messageLookup.js';
+import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -424,6 +425,13 @@ function renderChat() {
     try { brief = JSON.parse(session.decision_brief); } catch (_) {}
   }
 
+  let premortemSummary = session?.premortem_summary ?? null;
+  if (!premortemSummary && session?.result && typeof session.result === 'object' && session.result.premortem_summary) {
+    premortemSummary = session.result.premortem_summary;
+  }
+  const isPremortemChat = session.session_variant === 'premortem'
+    || /\bpremortem\b/i.test(String(session.rerun_reason || ''));
+
   // Determine send button label / action
   const sendAction = rcEnabled ? 'send-reactive-message' : 'send-message';
   const sendLabel  = rcEnabled ? t('chat.reactive.send') : t('chat.send');
@@ -434,6 +442,7 @@ function renderChat() {
       <div class="chat-header">
         <div style="flex:1;min-width:0;">
           <div class="chat-header-title">${escHtml(session.title || 'Untitled')}</div>
+          ${renderSessionPresetUsedBanner(session, escHtml, t)}
           <div class="chat-agents-badges" style="margin-top:6px;">
             ${agentIds.map((id) => `
               <span class="agent-badge">${agentIcon(id)} ${escHtml(agentName(id))}</span>
@@ -463,7 +472,12 @@ function renderChat() {
       ${rcEnabled ? renderReactiveChatPanel() : ''}
 
       ${rcError ? `<div style="padding:8px 12px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;font-size:12px;color:#dc2626;margin-bottom:8px;">${escHtml(rcError)}</div>` : ''}
-      ${renderDecisionBrief(brief, { sessionId: session.id })}
+      ${isPremortemChat ? renderPremortemInvertedBanner(t, escHtml) : ''}
+      ${renderDecisionBrief(brief, {
+        sessionId: session.id,
+        uiComplexity: state.uiComplexity || 'advanced',
+      })}
+      ${renderPremortemStructuredCard(premortemSummary, t, escHtml)}
 
       <div class="messages-timeline" id="messages-timeline">
         ${messages.length === 0 && !rcResults ? `

@@ -9,23 +9,25 @@
  */
 
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
-import { renderDecisionBrief } from '../../ui/components.js';
+import { renderDecisionBrief, renderDecisionDynamicsSummary, renderPremortemStructuredCard, renderTradeoffSection } from '../../ui/components.js';
 import { renderDRAgentMessage, renderExportButtons, renderAgentChatPanel } from '../chat/view.js';
 import { renderDebateAuditPanel } from '../debateAudit/index.js';
 import { renderGraphViewPanel } from '../graphView/index.js';
 import { renderArgumentHeatmapPanel } from '../argumentHeatmap/index.js';
 import { renderDebateReplayPanel } from '../debateReplay/index.js';
+import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
   const state = arena.store.state;
-  const { escHtml } = arena.utils;
+  const { escHtml, agentName: _an } = arena.utils;
   const t = (key) => window.i18n?.t(key) ?? key;
-  return { state, escHtml, t };
+  const agentName = (id) => _an(state.personas, id);
+  return { state, escHtml, agentName, t };
 }
 
 function renderStressTestResults(results) {
-  const { state, t } = getCtx();
+  const { state, t, escHtml, agentName } = getCtx();
   const shared   = window.DecisionArena.views?.shared || {};
   const rounds   = results.rounds || {};
   const roundKeys = Object.keys(rounds).map(Number).sort((a, b) => a - b);
@@ -57,10 +59,18 @@ function renderStressTestResults(results) {
   const reliabilityHtml = shared.renderDecisionReliabilityCard ? shared.renderDecisionReliabilityCard(results) : '';
   const verdictHtml    = results.verdict && shared.renderVerdictCard ? shared.renderVerdictCard(results.verdict) : '';
 
-  const briefHtml = renderDecisionBrief(results.decision_brief || null, { sessionId });
+  const dynamicsHtml = renderDecisionDynamicsSummary(results.agent_decision_dynamics || [], {
+    escHtml, agentName, t, session: state.currentSession, votes: results.votes || [],
+  });
+
+  const briefHtml = renderDecisionBrief(results.decision_brief || null, {
+    sessionId,
+    agentDecisionDynamics: results.agent_decision_dynamics,
+    uiComplexity: state.uiComplexity || 'advanced',
+  }) + renderTradeoffSection(results.decision_brief || null, { uiComplexity: state.uiComplexity || 'advanced', tradeoffUid: sessionId });
   const debateHtml = `<details id="debate-section-${sessionId}" data-section="debate-details" ${state.showDebateDetails ? 'open' : ''} style="margin:0 0 16px;"><summary class="btn btn-secondary btn-sm">Voir le debat complet</summary><div style="margin-top:12px;">${roundsHtml}</div></details>`;
 
-  return briefHtml + debateHtml + insightsHtml + voteHtml + reliabilityHtml + verdictHtml
+  return briefHtml + renderPremortemStructuredCard(results.premortem_summary || null, t, escHtml) + dynamicsHtml + debateHtml + insightsHtml + voteHtml + reliabilityHtml + verdictHtml
     + renderGraphViewPanel(sessionId)
     + renderDebateAuditPanel(sessionId)
     + renderArgumentHeatmapPanel(sessionId)
@@ -79,6 +89,7 @@ function renderStressTest() {
         <div class="dr-header-info">
           <div class="dr-title">🔥 ${escHtml(session.title || t('mode.stressTest'))}</div>
           <div class="dr-objective">${escHtml(session.initial_prompt || '')}</div>
+          ${renderSessionPresetUsedBanner(session, escHtml, t)}
           ${renderContextDocBadge()}
         </div>
         ${!state.stRunning ? `

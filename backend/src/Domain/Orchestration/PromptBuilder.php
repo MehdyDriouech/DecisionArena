@@ -2,6 +2,7 @@
 namespace Domain\Orchestration;
 
 use Domain\Agents\Agent;
+use Domain\Agents\DecisionDynamics;
 use Infrastructure\Markdown\MarkdownFileLoader;
 use Infrastructure\Logging\Logger;
 use Infrastructure\Persistence\ContextDocumentChunkRepository;
@@ -163,9 +164,17 @@ TEXT;
         ?string $socialDynamicsBlock = null,
         bool $forceStrongContradictionNext = false,
         ?string $retrievalSessionId = null,
-        ?string $retrievalLastUserMessage = null
+        ?string $retrievalLastUserMessage = null,
+        string $sessionVariant = ''
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'decision-room', $language);
+
+        if ($sessionVariant === 'premortem') {
+            $premortemPolicy = $this->loadPrompt('pre_mortem');
+            if ($premortemPolicy !== null && $premortemPolicy !== '') {
+                $systemContent .= "\n\n---\n" . $premortemPolicy;
+            }
+        }
 
         $roundPolicy      = new RoundPolicy();
         $roundInstruction = $roundPolicy->getRoundInstruction($round, $totalRounds, $forceStrongContradictionNext);
@@ -917,7 +926,8 @@ TEXT;
     }
 
     private function buildFinalVerdictInstruction(): string {
-        return "\n\n---\n\n**REQUIRED FINAL SECTION — DO NOT SKIP:**\n\nAfter your analysis, you MUST include this exact section:\n\n# Final Verdict\n\n## Verdict Label\none of: go | no-go | risky | needs-more-info | reduce-scope\n\n## Verdict Summary\nshort explanation (2-3 sentences)\n\n## Scores\n- Feasibility: X/10\n- Product Value: X/10\n- UX: X/10\n- Risk: X/10 (10 = high risk)\n- Confidence: X/10\n\n## Recommended Action\nclear next step";
+        $base = "\n\n---\n\n**REQUIRED FINAL SECTION — DO NOT SKIP:**\n\nAfter your analysis, you MUST include this exact section:\n\n# Final Verdict\n\n## Verdict Label\none of: go | no-go | risky | needs-more-info | reduce-scope\n\n## Verdict Summary\nshort explanation (2-3 sentences)\n\n## Scores\n- Feasibility: X/10\n- Product Value: X/10\n- UX: X/10\n- Risk: X/10 (10 = high risk)\n- Confidence: X/10\n\n## Recommended Action\nclear next step";
+        return $base . "\n\n" . $this->buildTradeoffsJsonAppendix();
     }
 
     private function buildForcedDisagreementInstruction(string $mode = 'default'): string {
@@ -1055,6 +1065,11 @@ TEXT;
             $personaContent,
         ];
 
+        $dynBlock = $this->buildDecisionDynamicsBlock($agent);
+        if ($dynBlock !== '') {
+            $parts[] = $dynBlock;
+        }
+
         if ($soulContent) {
             $parts[] = "---\n## Your Soul / Personality";
             $parts[] = $soulContent;
@@ -1073,6 +1088,37 @@ TEXT;
         }
 
         return implode("\n\n", array_filter($parts));
+    }
+
+    /** Lightweight lines derived from explicit admin-controlled decision dynamics only. */
+    private function buildDecisionDynamicsBlock(Agent $agent): string {
+        $d = $agent->decisionDynamics ?? [];
+        if ($d === []) {
+            $d = DecisionDynamics::defaults();
+        }
+        $lines = [];
+        if (($d['consensus_resistance'] ?? '') === 'low') {
+            $lines[] = 'Tu te rallies plus facilement lorsque les autres agents convergent.';
+        }
+        if (($d['consensus_resistance'] ?? '') === 'strong') {
+            $lines[] = 'Tu maintiens ta position si tu n\'es pas convaincu.';
+        }
+        if (($d['evidence_sensitivity'] ?? '') === 'low') {
+            $lines[] = 'Tu changes rarement d\'avis sans preuves très solides.';
+        }
+        if (($d['evidence_sensitivity'] ?? '') === 'high') {
+            $lines[] = 'Tu ajustes ton jugement si des preuves solides apparaissent.';
+        }
+        if (($d['risk_tolerance'] ?? '') === 'cautious') {
+            $lines[] = 'Tu privilégies la prudence et les risques.';
+        }
+        if (($d['risk_tolerance'] ?? '') === 'bold') {
+            $lines[] = 'Tu acceptes davantage d\'incertitude pour faire avancer la décision.';
+        }
+        if ($lines === []) {
+            return '';
+        }
+        return "---\n## Dynamique de décision (paramètres explicites)\n" . implode("\n", array_map(fn($x) => '- ' . $x, $lines));
     }
 
     private function buildUserContent(
@@ -1216,7 +1262,7 @@ TEXT;
 
     public function buildSynthesizerOutputFormatInstruction(): string
     {
-        return <<<TEXT
+        $base = <<<TEXT
 
 Respond using EXACTLY this format (no extra sections, no free-form text outside these headings):
 
@@ -1240,6 +1286,92 @@ LOW | MEDIUM | HIGH
 
 ## Next Step
 (one concrete actionable next step)
+
+
+TEXT;
+
+        return $base . "\n\n" . $this->buildTradeoffsJsonAppendix();
+    }
+
+    /**
+     * Machine-readable trade-offs appendix for synthesizer modes (Decision Room schema).
+     * When Pre-Mortem JSON is also required, emit Premortem first, then this block — both last.
+     */
+    public function buildTradeoffsJsonAppendix(): string
+    {
+        return <<<'TEXT'
+---
+## Decision trade-offs — JSON appendix (mandatory)
+
+After completing all headings and sections defined above, append **exactly one** fenced ```json block at the **very end** of your answer containing a `tradeoffs` object.
+
+If you were also instructed to emit a Pre-Mortem fenced JSON appendix, emit **both** fenced JSON blocks **in order** at the **end**: Pre-Mortem JSON first, then this trade-offs JSON.
+
+Rules:
+- Valid JSON only inside the fences — double quotes, no trailing commas, no comments.
+- `criteria` MUST have between 3 and 8 items (inclusive).
+- Each criterion MUST have: non-empty snake_case `id`, integer `score` from 1 to 5, non-empty short `justification` (honest qualifier — no false precision).
+
+Default criterion ids (reuse these when relevant; you may omit `label` and it will be filled by the UI):
+- `user_value` — Valeur utilisateur / user value delivered
+- `cost` — Coût / effort (score higher = lighter effort / cheaper)
+- `risk` — Risque résiduel (score higher = lower residual risk favourable to proceed)
+- `ttm` — Time-to-market (score higher = faster or simpler delivery path)
+- `complexity` — Complexité d’exécution (score higher = simpler to steer)
+- `confidence` — Confiance / conviction de l’équipe
+
+Optional per-criterion `confidence` string: `low` | `medium` | `high` (how sure you are about that score).
+
+Optional `options`: array of `{ "label": "Option A", "criteria": [ ... same shape as top-level criteria ... ] }` when you compared multiple concrete alternatives (max 8 options total, each 3–8 criteria).
+
+Example (primary recommendation only):
+```json
+{
+  "tradeoffs": {
+    "enabled": true,
+    "criteria": [
+      {"id":"user_value","score":4,"justification":"...","confidence":"medium"},
+      {"id":"cost","score":3,"justification":"..."},
+      {"id":"risk","score":2,"justification":"..."},
+      {"id":"ttm","score":3,"justification":"..."},
+      {"id":"complexity","score":3,"justification":"..."},
+      {"id":"confidence","score":3,"justification":"..."}
+    ],
+    "summary": "One short honest paragraph on key trade-offs.",
+    "options": null
+  }
+}
+```
+
+TEXT;
+    }
+
+    /**
+     * For Pre-Mortem sessions: machine-readable appendix on synthesizer output.
+     */
+    public function buildPremortemSynthesizerJsonAddendum(): string
+    {
+        return <<<'TEXT'
+
+
+## Pre-Mortem structured summary (mandatory)
+After completing the headings above **when consistent with your analysis**, append **one fenced JSON block** near the **end** of your answer.
+If you were also instructed to append **Decision trade-offs JSON**, emit **two** fenced ```json blocks **in this order** at the **very end**: (1) Pre-Mortem JSON below, (2) trade-offs JSON from the other instruction.
+Rules:
+- Valid JSON only inside the fences (double quotes on keys/strings).
+- No comments inside JSON.
+```json
+{
+  "premortem_summary": {
+    "failure_scenario": "...",
+    "root_causes": ["..."],
+    "invalid_assumptions": ["..."],
+    "ignored_signals": ["..."],
+    "preventive_actions": ["..."],
+    "residual_risk_level": "low|medium|high|critical"
+  }
+}
+```
 
 TEXT;
     }

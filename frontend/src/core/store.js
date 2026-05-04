@@ -74,6 +74,10 @@ const createInitialState = () => ({
     } catch (_) { return new Set(); }
   })(),
   sessionHistory: null,
+  /** Session id -> GET /api/analysis/agent-dynamics-suggestions response (post-mortem reco UI) */
+  dynamicsRecoBySession: {},
+  /** GET /api/analysis/agent-dynamics-suggestions (full list) when admin personas panel loaded */
+  adminDynamicsReco: null,
   collapsedMessages: {},
   showDebateDetails: false,
   newSession: {
@@ -108,6 +112,8 @@ const createInitialState = () => ({
     isFork: false,
     source_session_id: null,
     forkDraftSessionId: null,
+    /** Session-only DecisionDynamicsPreset id (balanced|conservative|aggressive|critical) */
+    decisionDynamicsPreset: 'balanced',
   },
   currentContextDoc: null,
   ctxDocPanelOpen: false,
@@ -226,8 +232,11 @@ const createInitialState = () => ({
     saveMessage: '',
   },
   postmortemStats: null,
+  postmortemStatsAwaiting: false,
   postmortemStatsLoading: false,
   postmortemStatsError: null,
+  premortemLaunchSessionId: null,
+
   templateMakerData: {
     id: '',
     name: '',

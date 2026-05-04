@@ -1,5 +1,6 @@
 /* New Session feature — action handlers, change listeners */
 import { registerAction, registerChangeListener, registerInputListener, dispatchAction } from '../../core/events.js';
+import { API_BASE } from '../../services/apiClient.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -28,6 +29,7 @@ function resetNewSessionState() {
     devilAdvocateThreshold: 0.65,
     agentProviders: {},
     fastDecisionEnabled: true,
+    facilitationFramework: null,
     // LLM Assignment
     llmAssignmentMode: 'global',
     teamProviderAssignments: { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } },
@@ -36,6 +38,7 @@ function resetNewSessionState() {
     isFork: false,
     source_session_id: null,
     forkDraftSessionId: null,
+    decisionDynamicsPreset: 'balanced',
   };
 }
 
@@ -52,7 +55,7 @@ function _debouncedContextCheck(text, state) {
   }
   _contextCheckTimer = setTimeout(async () => {
     try {
-      const res = await fetch('/api/context/check', {
+      const res = await fetch(API_BASE + '/api/context/check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ objective: trimmed }),
@@ -285,6 +288,10 @@ function registerNewSessionHandlers() {
         devil_advocate_threshold: ns.devilAdvocateThreshold || 0.65,
         // LLM Assignment — build agent_providers based on current mode
         ..._buildLlmPayload(ns),
+        decision_dynamics_preset: ns.decisionDynamicsPreset || 'balanced',
+        ...(ns.facilitationFramework || (ns.selectedStarter?.type === 'template' && ns.selectedStarter?.id === 'six-thinking-hats')
+          ? { facilitation_framework: ns.facilitationFramework || 'six-thinking-hats' }
+          : {}),
         ...(isFastMode ? {
           rounds: 2, force_disagreement: 1,
           auto_retry_on_weak_debate: 1, auto_block_low_quality: 1,
@@ -484,6 +491,15 @@ function registerNewSessionHandlers() {
     }
     return false;
   });
+
+  registerChangeListener((e) => {
+    const cid = e.target.id || '';
+    if (!cid.startsWith('ns-dd-preset-select') || e.target.tagName !== 'SELECT') return false;
+    const { state, render } = getCtx();
+    state.newSession.decisionDynamicsPreset = e.target.value;
+    render();
+    return true;
+  });
 }
 
 function _applyTemplate(state, template) {
@@ -506,6 +522,7 @@ function _applyTemplate(state, template) {
   if (!ns.idea && template.prompt_starter) ns.idea = template.prompt_starter;
   ns.selectedScenarioId = null;
   if (ns.mode === 'decision-room') ns.fastDecisionEnabled = false;
+  ns.facilitationFramework = template.id === 'six-thinking-hats' ? 'six-thinking-hats' : null;
 }
 
 /** Apply a scenario pack's prefill to newSession state — does NOT create a session. */
@@ -527,6 +544,7 @@ function _applyScenarioPack(state, pack) {
   if (!ns.idea && pack.prompt_starter) ns.idea = pack.prompt_starter;
   ns.selectedScenarioId = pack.id;
   ns.selectedTemplateId = null;
+  ns.facilitationFramework = null;
   if (ns.mode === 'decision-room') ns.fastDecisionEnabled = false;
 }
 
@@ -584,6 +602,7 @@ function registerScenarioHandlers() {
     state.newSession.selectedScenarioId = null;
     state.newSession.selectedStarter = null;
     state.newSession.selectedTemplateId = null;
+    state.newSession.facilitationFramework = null;
     render();
   });
 

@@ -24,6 +24,11 @@ class Database {
         return self::$instance;
     }
 
+    /** @return \PDO PDO partagé (alias pratique pour le code qui attend une connexion directe). */
+    public static function getConnection(): \PDO {
+        return self::getInstance()->pdo();
+    }
+
     public function pdo(): \PDO {
         return $this->pdo;
     }

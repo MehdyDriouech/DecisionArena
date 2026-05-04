@@ -21,7 +21,7 @@ use Infrastructure\Persistence\EvidenceRepository;
 use Infrastructure\Persistence\RiskProfileRepository;
 use Infrastructure\Persistence\SessionAgentProvidersRepository;
 use Domain\Orchestration\DebateMemoryService;
-use Infrastructure\Persistence\JuryAdversarialReportRepository;
+use Infrastructure\Persistence\PersonaDecisionDynamicsRepository;
 use Domain\Orchestration\PromptBuilder;
 
 class ExportController {
@@ -139,6 +139,7 @@ class ExportController {
             }
             $debateState = ['arguments' => $arguments, 'positions' => $positions, 'edges' => $edges];
             $sessionResult = json_decode($session['result'] ?? '{}', true) ?? [];
+            $dynRepo = new PersonaDecisionDynamicsRepository();
             $payload = [
                 'format'               => 'json',
                 'session'              => $session,
@@ -150,6 +151,7 @@ class ExportController {
                 'edges'                => $edges,
                 'positions'            => $positions,
                 'votes'                => $votes,
+                'agent_decision_dynamics' => $dynRepo->transparencyForSession($session, $votes),
                 'decision'             => $decision,
                 'automatic_decision'   => $decision,
                 'raw_decision'         => $reliability['raw_decision'],
@@ -170,6 +172,8 @@ class ExportController {
                 'jury_adversarial'     => $juryAdversarial,
                 'decision_brief'            => $sessionResult['decision_brief'] ?? null,
                 'decision_quality_score'    => $sessionResult['decision_quality_score'] ?? null,
+                'premortem_summary'        => $sessionResult['premortem_summary'] ?? null,
+                'session_variant'          => $session['session_variant'] ?? null,
                 'guardrails'                => $sessionResult['guardrails'] ?? null,
                 'auto_retry'                => $sessionResult['auto_retry'] ?? null,
                 'template_used'             => $session['template_id'] ?? null,
@@ -309,6 +313,7 @@ class ExportController {
         $routing     = null;
         try { $routing = $this->providerRoutingRepo->get(); } catch (\Throwable $e) { $routing = null; }
         $debateState = ['arguments' => $arguments, 'positions' => $positions, 'edges' => $edges];
+        $dynRepoSnap = new PersonaDecisionDynamicsRepository();
         $md          = $this->buildMarkdown($session, $messages, $contextDoc, null, $arguments, $positions, $edges, $votes, $decision, $routing, $reliability, $snapshotEvidence, $snapshotEvidenceClaims, $snapshotRisk);
         $json        = json_encode([
             'session'             => $session,
@@ -319,6 +324,7 @@ class ExportController {
             'edges'               => $edges,
             'positions'           => $positions,
             'votes'               => $votes,
+            'agent_decision_dynamics' => $dynRepoSnap->transparencyForSession($session, $votes),
             'decision'            => $decision,
             'automatic_decision'  => $decision,
             'raw_decision'        => $reliability['raw_decision'],
@@ -380,6 +386,7 @@ class ExportController {
 
         $sessionResult = json_decode($session['result'] ?? '{}', true) ?? [];
         $brief = $sessionResult['decision_brief'] ?? null;
+        $pmSum = $sessionResult['premortem_summary'] ?? null;
         $md    = '';
 
         if ($brief) {
@@ -398,6 +405,56 @@ class ExportController {
             if ($risks)    $md .= "**Main Risks:** {$risks}\n\n";
             if ($nextStep) $md .= "**Next Step:** {$nextStep}\n\n";
             if ($warning)  $md .= "⚠ Warning: {$warning}\n\n";
+            $tr = $brief['tradeoffs'] ?? null;
+            if (is_array($tr) && !empty($tr['criteria']) && is_array($tr['criteria'])) {
+                $md .= "## Trade-off matrix\n\n";
+                if (!empty($tr['summary'])) {
+                    $md .= '_' . trim((string)$tr['summary']) . "_\n\n";
+                }
+                $md .= "| Criterion | Score | Justification |\n|-----------|-------|---------------|\n";
+                foreach ($tr['criteria'] as $crow) {
+                    if (!is_array($crow)) {
+                        continue;
+                    }
+                    $lbl = trim((string)($crow['label'] ?? ($crow['id'] ?? '')));
+                    $sc = (string)($crow['score'] ?? '');
+                    $jz = trim(preg_replace("/\s+/", ' ', str_replace(["\r", "\n"], ' ', (string)($crow['justification'] ?? ''))));
+                    $jz = str_replace('|', '\\|', $jz);
+                    $lbl = str_replace('|', '\\|', $lbl);
+                    if ($lbl !== '') {
+                        $md .= '| ' . $lbl . ' | ' . $sc . '/5 | ' . $jz . " |\n";
+                    }
+                }
+                $extraOpts = $tr['options'] ?? null;
+                if (is_array($extraOpts)) {
+                    foreach ($extraOpts as $opt) {
+                        if (!is_array($opt)) {
+                            continue;
+                        }
+                        $oLabel = trim((string)($opt['label'] ?? ''));
+                        $oCrit = $opt['criteria'] ?? [];
+                        if ($oLabel === '' || !is_array($oCrit) || $oCrit === []) {
+                            continue;
+                        }
+                        $md .= "\n### " . str_replace('|', '\\|', $oLabel) . "\n\n";
+                        $md .= "| Criterion | Score | Justification |\n|-----------|-------|---------------|\n";
+                        foreach ($oCrit as $crow) {
+                            if (!is_array($crow)) {
+                                continue;
+                            }
+                            $lbl2 = trim((string)($crow['label'] ?? ($crow['id'] ?? '')));
+                            $sc2 = (string)($crow['score'] ?? '');
+                            $jz2 = trim(preg_replace("/\s+/", ' ', str_replace(["\r", "\n"], ' ', (string)($crow['justification'] ?? ''))));
+                            $jz2 = str_replace('|', '\\|', $jz2);
+                            $lbl2 = str_replace('|', '\\|', $lbl2);
+                            if ($lbl2 !== '') {
+                                $md .= '| ' . $lbl2 . ' | ' . $sc2 . '/5 | ' . $jz2 . " |\n";
+                            }
+                        }
+                    }
+                }
+                $md .= "\n---\n\n";
+            }
             $md .= "---\n\n";
         }
 
@@ -409,7 +466,47 @@ class ExportController {
         $md .= "- **Mode:** "  . ($session['mode']  ?? 'chat')    . "\n";
         $md .= "- **Agents:** " . $agents . "\n";
         $md .= "- **Date:** "  . ($session['created_at'] ?? '') . "\n";
-        $md .= "- **Language:** " . ($session['language'] ?? 'en') . "\n\n";
+        $md .= "- **Language:** " . ($session['language'] ?? 'en') . "\n";
+        if (!empty($session['parent_session_id'])) {
+            $md .= '- **Parent session:** `' . ($session['parent_session_id']) . "`\n";
+        }
+        if (($session['session_variant'] ?? '') === 'premortem') {
+            $md .= "- **Session variant:** premortem (Pre-Mortem derivative)\n";
+        }
+        if (($session['facilitation_framework'] ?? '') === 'six-thinking-hats') {
+            $md .= "- **Facilitation framework:** Six Thinking Hats\n";
+        }
+        $md .= "\n";
+
+        if (($session['session_variant'] ?? '') === 'premortem' || is_array($pmSum)) {
+            $md .= "## Pre-Mortem structured summary\n\n";
+            if (is_array($pmSum)) {
+                $fc = trim((string)($pmSum['failure_scenario'] ?? ''));
+                if ($fc !== '') {
+                    $md .= "### Failure scenario (exercise)\n\n{$fc}\n\n";
+                }
+                $appendList = function (string $title, $arr) use (&$md): void {
+                    if (!is_array($arr) || $arr === []) {
+                        return;
+                    }
+                    $md .= "### {$title}\n\n";
+                    foreach ($arr as $item) {
+                        $md .= '- ' . (string)$item . "\n";
+                    }
+                    $md .= "\n";
+                };
+                $appendList('Probable root causes', $pmSum['root_causes'] ?? []);
+                $appendList('Invalidated assumptions', $pmSum['invalid_assumptions'] ?? []);
+                $appendList('Weak signals ignored', $pmSum['ignored_signals'] ?? []);
+                $appendList('Preventive actions', $pmSum['preventive_actions'] ?? []);
+                $lvl = trim((string)($pmSum['residual_risk_level'] ?? ''));
+                if ($lvl !== '') {
+                    $md .= "### Residual risk level\n\n{$lvl}\n\n";
+                }
+            } else {
+                $md .= "_No structured `premortem_summary` persisted — refer to synthesizer markdown in the timeline._\n\n";
+            }
+        }
 
         // ── 2. Initial Problem ────────────────────────────────────────────
         $md .= "## 2. Initial Problem\n\n";

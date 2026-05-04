@@ -51,8 +51,11 @@ class Migration {
         $this->createRiskProfileTable();
         $this->createLearningInsightsCacheTable();
         $this->createJuryAdversarialReportsTable();
+        $this->createPersonaDecisionDynamicsTable();
         $this->seedDefaultTemplates();
         $this->seedStressTestTemplate();
+        $this->seedSixThinkingHatsTemplate();
+        $this->seedPremortemTemplate();
         $this->seedDefaultScenarioPacks();
         $this->backfillContextDocumentChunks();
         $this->purgeOldLogs();
@@ -374,6 +377,8 @@ class Migration {
         $this->addColumnIfMissing('sessions', 'force_disagreement', 'INTEGER DEFAULT 0');
         $this->addColumnIfMissing('sessions', 'parent_session_id', 'TEXT NULL');
         $this->addColumnIfMissing('sessions', 'rerun_reason', 'TEXT NULL');
+        $this->addColumnIfMissing('sessions', 'session_variant', 'TEXT NULL');
+        $this->addColumnIfMissing('sessions', 'facilitation_framework', 'TEXT NULL');
         $this->addColumnIfMissing('messages', 'phase', 'TEXT NULL');
         $this->addColumnIfMissing('messages', 'target_agent_id', 'TEXT NULL');
         $this->addColumnIfMissing('messages', 'mode_context', 'TEXT NULL');
@@ -713,6 +718,80 @@ class Migration {
         ]);
     }
 
+    private function seedSixThinkingHatsTemplate(): void {
+        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM session_templates WHERE id = ?');
+        $stmt->execute(['six-thinking-hats']);
+        if ($stmt->fetchColumn() > 0) {
+            return;
+        }
+        $now = date('c');
+        $this->pdo->prepare("
+            INSERT INTO session_templates
+                (id, name, description, mode, selected_agents, rounds, force_disagreement,
+                 interaction_style, reply_policy, final_synthesis, prompt_starter,
+                 expected_output, notes, source, enabled, created_at, updated_at)
+            VALUES
+                (:id, :name, :description, :mode, :selected_agents, :rounds, :force_disagreement,
+                 :interaction_style, :reply_policy, :final_synthesis, :prompt_starter,
+                 :expected_output, :notes, :source, :enabled, :created_at, :updated_at)
+        ")->execute([
+            ':id'                => 'six-thinking-hats',
+            ':name'              => 'Six Thinking Hats — Analyse de décision',
+            ':description'       => 'Analysez une décision avec 6 angles complémentaires : faits, émotions, risques, bénéfices, créativité et facilitation.',
+            ':mode'              => 'decision-room',
+            ':selected_agents'   => json_encode(['hat-white', 'hat-red', 'hat-black', 'hat-yellow', 'hat-green', 'hat-blue']),
+            ':rounds'            => 3,
+            ':force_disagreement'=> 0,
+            ':interaction_style' => null,
+            ':reply_policy'      => null,
+            ':final_synthesis'   => 1,
+            ':prompt_starter'    => "Atelier Six Thinking Hats.\nRépartissez vos contributions sous le registre défini pour chaque chapeau uniquement.\nLe Blue Hat (hat-blue) conclut par Synthèse / Désaccords à clarifier / Prochaine étape sans éclipser les autres angles.",
+            ':expected_output'   => null,
+            ':notes'             => 'Six Thinking Hats facilitation framework.',
+            ':source'            => 'system',
+            ':enabled'           => 1,
+            ':created_at'        => $now,
+            ':updated_at'        => $now,
+        ]);
+    }
+
+    private function seedPremortemTemplate(): void {
+        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM session_templates WHERE id = ?');
+        $stmt->execute(['pre-mortem']);
+        if ($stmt->fetchColumn() > 0) {
+            return;
+        }
+        $now = date('c');
+        $this->pdo->prepare("
+            INSERT INTO session_templates
+                (id, name, description, mode, selected_agents, rounds, force_disagreement,
+                 interaction_style, reply_policy, final_synthesis, prompt_starter,
+                 expected_output, notes, source, enabled, created_at, updated_at)
+            VALUES
+                (:id, :name, :description, :mode, :selected_agents, :rounds, :force_disagreement,
+                 :interaction_style, :reply_policy, :final_synthesis, :prompt_starter,
+                 :expected_output, :notes, :source, :enabled, :created_at, :updated_at)
+        ")->execute([
+            ':id'                => 'pre-mortem',
+            ':name'              => "Pre-Mortem — Analyse d'échec",
+            ':description'       => "Identifiez les causes d'échec d'une décision en simulant un scénario où elle a échoué.",
+            ':mode'              => 'decision-room',
+            ':selected_agents'   => json_encode(['pm', 'architect', 'critic', 'synthesizer']),
+            ':rounds'            => 2,
+            ':force_disagreement'=> 1,
+            ':interaction_style' => null,
+            ':reply_policy'      => null,
+            ':final_synthesis'   => 1,
+            ':prompt_starter'    => "Décrivez la décision ou le projet à analyser. Les agents simuleront un scénario d'échec dans 6 mois.",
+            ':expected_output'   => null,
+            ':notes'             => null,
+            ':source'            => 'system',
+            ':enabled'           => 1,
+            ':created_at'        => $now,
+            ':updated_at'        => $now,
+        ]);
+    }
+
     private function createScenarioPacksTable(): void {
         $this->pdo->exec("
             CREATE TABLE IF NOT EXISTS scenario_persona_packs (
@@ -996,6 +1075,8 @@ class Migration {
         $this->addColumnIfMissing('messages', 'reactive_thread_id', 'TEXT NULL');
         // Human-in-the-loop v2 — trace challenges without new tables
         $this->addColumnIfMissing('messages', 'meta_json', 'TEXT NULL');
+        // Session-only overlay for agent decision dynamics (does not replace admin persona settings)
+        $this->addColumnIfMissing('sessions', 'decision_dynamics_preset', "TEXT DEFAULT 'balanced'");
     }
 
     private function createEvidenceTables(): void
@@ -1082,6 +1163,22 @@ class Migration {
             }
         } catch (\Throwable $e) {
             // Column already exists in another form — ignore
+        }
+    }
+
+    /** Per-persona decision dynamics (reputation + posture enums), JSON in decision_dynamics. */
+    private function createPersonaDecisionDynamicsTable(): void
+    {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS persona_decision_dynamics (
+              persona_id TEXT PRIMARY KEY NOT NULL,
+              decision_dynamics TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_persona_decision_dynamics_updated ON persona_decision_dynamics(updated_at)');
+        } catch (\Throwable $e) {
         }
     }
 

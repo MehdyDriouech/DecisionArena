@@ -4,7 +4,9 @@
  */
 
 import { renderConfrontationAgentCard, renderDebateInsightsPanels, renderWeightedVotePanel, renderDecisionReliabilityCard, renderVerdictCard, renderSessionMemoryPanel, renderSessionContextDocPanel } from '../confrontation/index.js';
-import { renderDecisionBrief } from '../../ui/components.js';
+import { renderDecisionBrief, renderDecisionDynamicsSummary, renderPremortemInvertedBanner, renderPremortemStructuredCard, renderTradeoffSection } from '../../ui/components.js';
+import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
+import { renderSixThinkingMethodBanner } from '../../utils/sixThinkingHats.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -14,6 +16,87 @@ function getCtx() {
   const agentIcon = (id) => _ai(state.personas, id);
   const agentName = (id) => _an(state.personas, id);
   return { state, escHtml, renderMarkdown, formatDate, agentIcon, agentName, t };
+}
+
+function getDynamicsRecoDismissedSet() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('da_dynamics_reco_dismissed') || '[]');
+    return new Set(Array.isArray(raw) ? raw : []);
+  } catch (_) {
+    return new Set();
+  }
+}
+
+/** @param {object} reco */
+function formatDynamicsRecoMessage(reco, agentLabel, t) {
+  const key = reco.reason_key || '';
+  let msg   = key && t(key) !== key ? t(key) : '';
+  if (!msg) msg = reco.reason || '';
+  const ra = reco.reason_args || {};
+  const deltaDisp = reco.suggestion === 'decrease_reputation'
+    ? String(Math.abs(Number(ra.delta ?? reco.reputation_delta ?? 0)))
+    : String(Number(ra.delta ?? reco.reputation_delta ?? 0));
+  return msg
+    .replace(/\{agent\}/g, agentLabel)
+    .replace(/\{count\}/g, String(ra.count ?? ''))
+    .replace(/\{delta\}/g, deltaDisp)
+    .replace(/\{mode\}/g, String(ra.mode ?? '–'));
+}
+
+function renderDynamicsInsightsPanel(session, pkg) {
+  const { escHtml, t, agentIcon, agentName } = getCtx();
+  const sid         = escHtml(session.id);
+  const dismissed   = getDynamicsRecoDismissedSet();
+  const list        = pkg?.suggestions;
+  const visible     = Array.isArray(list) ? list.filter((r) => r.id && !dismissed.has(r.id)) : [];
+
+  let body = '';
+  if (!pkg) {
+    body = `
+      <div style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">${escHtml(t('dynamicsReco.subtitle'))}</div>
+      <button type="button" class="btn btn-secondary btn-sm" data-action="load-dynamics-reco-session" data-session-id="${sid}">${escHtml(t('dynamicsReco.loadButton'))}</button>`;
+  } else if (pkg.loading) {
+    body = `
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span class="spinner"></span>
+        <span style="font-size:13px;color:var(--text-muted);">${escHtml(t('learning.loading'))}</span>
+      </div>`;
+  } else if (pkg.error) {
+    body = `
+      <div class="error-banner" style="margin-bottom:10px;padding:10px 12px;font-size:12px;">${escHtml(pkg.error)}</div>
+      <button type="button" class="btn btn-secondary btn-sm" data-action="load-dynamics-reco-session" data-session-id="${sid}">${escHtml(t('dynamicsReco.loadButton'))}</button>`;
+  } else if (visible.length === 0) {
+    body = `<div style="font-size:13px;color:var(--text-muted);">${escHtml(t('dynamicsReco.empty'))}</div>`;
+  } else {
+    body = visible.map((reco) => {
+      const aid  = reco.agent_id || '';
+      const an   = agentName(aid);
+      const text = formatDynamicsRecoMessage(reco, `${agentIcon(aid)} ${escHtml(an)}`, t);
+      const confPct = Math.round(Math.min(99, Math.max(35, Number(reco.confidence || 0) * 100)));
+      const sig = reco.suggestion === 'decrease_reputation' ? '−' : '+';
+      const rid = escHtml(reco.id);
+      const absDelta = Math.abs(Number(reco.reputation_delta ?? 0));
+      return `
+        <div style="padding:14px;background:var(--bg-secondary);border-radius:10px;margin-bottom:12px;border:1px solid var(--border);">
+          <div style="font-size:14px;line-height:1.5;color:var(--text-primary);">${text}</div>
+          <div style="margin-top:8px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <span class="badge badge-muted">${escHtml(t('dynamicsReco.confidence'))} ${confPct}%</span>
+            <span class="badge badge-warning" style="font-size:11px;">${sig}${escHtml(absDelta.toFixed(2))}</span>
+            <div style="margin-left:auto;display:flex;gap:8px;">
+              <button type="button" class="btn btn-primary btn-sm" data-action="apply-dynamics-reco-suggestion" data-suggestion-id="${rid}" data-session-id="${sid}">${escHtml(t('dynamicsReco.apply'))}</button>
+              <button type="button" class="btn btn-secondary btn-sm" data-action="dismiss-dynamics-reco-suggestion" data-suggestion-id="${rid}">${escHtml(t('dynamicsReco.ignore'))}</button>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  return `
+    <div class="card dynamics-reco-session-card" style="padding:18px;margin-top:16px;background:rgba(99,102,241,0.04);border:1px solid rgba(99,102,241,0.2);">
+      <div style="font-weight:700;font-size:15px;margin-bottom:6px;">💡 ${escHtml(t('dynamicsReco.title'))}</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;line-height:1.45;">${escHtml(pkg?.disclaimer || t('dynamicsReco.subtitle'))}</div>
+      ${body}
+    </div>`;
 }
 
 /* ── Template card (shared with newSession) ── */
@@ -1005,6 +1088,9 @@ function renderSessionHistory() {
   // Devil's advocate interventions count
   const daMessages = messages.filter((m) => m.message_type === 'devil_advocate' || m.agent_id === 'devil_advocate');
 
+  const isPremortemSession = (session.session_variant === 'premortem')
+    || /\bpremortem\b/i.test(String(session.rerun_reason || ''));
+
   const variantBanner = session.parent_session_id
     ? `<div class="info-banner" style="margin-bottom:16px;padding:12px 16px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.35);border-radius:8px;font-size:13px;color:var(--text-secondary);">
          ${escHtml(t('hitl.variantSessionBanner'))}
@@ -1034,6 +1120,10 @@ function renderSessionHistory() {
 
       ${challengeRerunBanner}
 
+      ${renderSixThinkingMethodBanner(session, t, escHtml)}
+
+      ${isPremortemSession ? renderPremortemInvertedBanner(t, escHtml) : ''}
+
       ${mode !== 'chat' ? renderDecisionSummaryCard(data) : ''}
 
       ${mode !== 'chat' ? renderConfidenceTimelinePanel(session.id, confidenceTimeline || null) : ''}
@@ -1042,7 +1132,8 @@ function renderSessionHistory() {
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <span style="font-size:28px;">${modeIcons[mode] || '💬'}</span>
           <div style="flex:1;min-width:0;">
-            <div style="font-size:20px;font-weight:700;color:var(--text-primary);">${escHtml(session.title)} ${pmBadge}</div>
+            <div style="font-size:20px;font-weight:700;color:var(--text-primary);">${escHtml(session.title)} ${pmBadge}${isPremortemSession ? ` <span class="badge badge-info" style="font-size:11px;">${escHtml(t('premortem.badge'))}</span>` : ''}</div>
+            ${renderSessionPresetUsedBanner(session, escHtml, t)}
             <div style="font-size:13px;color:var(--text-muted);margin-top:4px;">
               ${formatDate(session.created_at)} · ${session.mode}
               ${session.status ? ` · <span class="badge ${session.status === 'completed' ? 'badge-success' : 'badge-muted'}">${session.status}</span>` : ''}
@@ -1063,7 +1154,17 @@ function renderSessionHistory() {
 
       ${mode === 'jury' && data.jury_adversarial ? renderSessionJuryAdversarialCard(data.jury_adversarial) : ''}
 
-      ${mode !== 'chat' ? renderDecisionBrief(data.decision_brief || null, { sessionId: session.id }) : ''}
+      ${mode !== 'chat' ? renderDecisionBrief(data.decision_brief || null, {
+        sessionId: session.id,
+        agentDecisionDynamics: data.agent_decision_dynamics,
+        uiComplexity: state.uiComplexity || 'advanced',
+      }) : ''}
+
+      ${mode !== 'chat' ? renderTradeoffSection(data.decision_brief || null, { uiComplexity: state.uiComplexity || 'advanced', tradeoffUid: session.id }) : ''}
+
+      ${mode !== 'chat' ? renderPremortemStructuredCard(data.premortem_summary || null, t, escHtml) : ''}
+
+      ${mode !== 'chat' ? renderDecisionDynamicsSummary(data.agent_decision_dynamics || [], { escHtml, agentName, t, session, votes: data.votes || [] }) : ''}
 
       ${mode !== 'chat' ? renderDebateInsightsPanels({
         arguments: data.arguments || [],
@@ -1123,6 +1224,8 @@ function renderSessionHistory() {
 
       ${renderPostmortemBanner(session, postmortem || null)}
       ${showPostmortemForm ? renderPostmortemForm(session.id, postmortem || null) : ''}
+
+      ${renderDynamicsInsightsPanel(session, state.dynamicsRecoBySession?.[session.id])}
 
       <div class="card" style="padding:16px;margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;">
         <button class="btn btn-secondary btn-sm" data-action="open-rerun-modal" data-session-id="${escHtml(session.id)}">

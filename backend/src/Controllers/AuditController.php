@@ -7,6 +7,7 @@ use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\MessageRepository;
 use Infrastructure\Persistence\DebateRepository;
 use Infrastructure\Persistence\VoteRepository;
+use Infrastructure\Persistence\PersonaDecisionDynamicsRepository;
 use Domain\Orchestration\DebateAuditService;
 use Domain\Orchestration\DebateHighlightService;
 
@@ -47,9 +48,13 @@ class AuditController {
         $highlights = $this->highlightService->compute($edges, $arguments, $result, $agentMsgCount, $votes, $decision);
         $result['highlights'] = $highlights;
 
+        $personaDynRepo = new PersonaDecisionDynamicsRepository();
+        $agentDecisionDynamics = $personaDynRepo->transparencyForSession($session, $votes);
+
         return [
-            'session_id' => $id,
-            'audit'      => $result,
+            'session_id'               => $id,
+            'audit'                    => $result,
+            'agent_decision_dynamics' => $agentDecisionDynamics,
         ];
     }
 }

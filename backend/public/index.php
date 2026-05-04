@@ -48,6 +48,7 @@ $router->get('/api/personas/custom', [Controllers\PersonaController::class, 'cus
 $router->post('/api/personas/build-draft', [Controllers\PersonaController::class, 'buildDraft']);
 $router->post('/api/personas/save-custom', [Controllers\PersonaController::class, 'saveCustom']);
 $router->post('/api/personas/modes', [Controllers\PersonaController::class, 'saveModes']);
+$router->post('/api/personas/decision-dynamics', [Controllers\PersonaController::class, 'saveDecisionDynamics']);
 $router->post('/api/personas/make', [Controllers\PersonaMakerController::class, 'make']);
 $router->get('/api/personas', [Controllers\PersonaController::class, 'index']);
 $router->get('/api/personas/{id}', [Controllers\PersonaController::class, 'show']);
@@ -170,6 +171,10 @@ $router->post('/api/sessions/{id}/postmortem',          [Controllers\PostmortemC
 
 // Post-mortem stats (global — no session id)
 $router->get('/api/postmortems/stats', [Controllers\PostmortemController::class, 'stats']);
+
+// Agent dynamics — suggestions from post-mortem history (never auto-applied)
+$router->get('/api/analysis/agent-dynamics-suggestions', [Controllers\AgentDynamicsRecommendationController::class, 'suggestions']);
+$router->post('/api/analysis/agent-dynamics-suggestions/apply', [Controllers\AgentDynamicsRecommendationController::class, 'apply']);
 
 // Evidence Layer
 $router->get('/api/sessions/{id}/evidence-report',             [Controllers\EvidenceController::class, 'report']);

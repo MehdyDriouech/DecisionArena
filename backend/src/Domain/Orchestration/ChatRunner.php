@@ -26,16 +26,18 @@ class ChatRunner {
         array $selectedAgents,
         string $sessionContext = '',
         string $language = 'en',
-        ?array $contextDoc = null
+        ?array $contextDoc = null,
+        ?string $decisionDynamicsPreset = null
     ): array {
         $mentioned        = $this->mentionDetector->detect($userMessage, $selectedAgents);
         $respondingAgents = !empty($mentioned) ? $mentioned : $selectedAgents;
 
         $history     = $this->messageRepo->findBySession($sessionId);
         $newMessages = [];
+        $dynamicsPreset = \Domain\Agents\DecisionDynamicsPreset::normalizeId($decisionDynamicsPreset);
 
         foreach ($respondingAgents as $agentId) {
-            $agent = $this->assembler->assemble($agentId);
+            $agent = $this->assembler->assemble($agentId, null, null, $dynamicsPreset);
             if (!$agent) continue;
 
             try {

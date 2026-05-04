@@ -3,24 +3,26 @@
  */
 
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
-import { renderDecisionBrief } from '../../ui/components.js';
+import { renderDecisionBrief, renderDecisionDynamicsSummary, renderPremortemStructuredCard, renderTradeoffSection } from '../../ui/components.js';
 import { renderExportButtons, renderAgentChatPanel } from '../chat/view.js';
 import { renderConfrontationAgentCard, renderWeightedVotePanel, renderDecisionReliabilityCard, renderVerdictCard } from '../confrontation/index.js';
 import { renderDebateAuditPanel } from '../debateAudit/index.js';
 import { renderGraphViewPanel } from '../graphView/index.js';
 import { renderArgumentHeatmapPanel } from '../argumentHeatmap/index.js';
 import { renderDebateReplayPanel } from '../debateReplay/index.js';
+import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
   const state = arena.store.state;
-  const { escHtml } = arena.utils;
+  const { escHtml, agentName: _an } = arena.utils;
   const t = (key) => window.i18n?.t(key) ?? key;
-  return { state, escHtml, t };
+  const agentName = (id) => _an(state.personas, id);
+  return { state, escHtml, agentName, t };
 }
 
 function renderQuickDecision() {
-  const { state, escHtml, t } = getCtx();
+  const { state, escHtml, agentName, t } = getCtx();
   const session = state.currentSession;
   if (!session) return `<div class="view-container"><p>${t('chat.noSession')}</p></div>`;
   const results = state.qdResults;
@@ -31,6 +33,7 @@ function renderQuickDecision() {
         <div class="dr-header-info">
           <div class="dr-title">⚡ ${escHtml(session.title || t('mode.quickDecision'))}</div>
           <div class="dr-objective">${escHtml(session.initial_prompt || session.idea || '')}</div>
+          ${renderSessionPresetUsedBanner(session, escHtml, t)}
           ${renderContextDocBadge()}
         </div>
         ${!state.qdRunning ? `<button class="btn btn-primary" data-action="run-quick-decision">${t('qd.run')}</button>` : ''}
@@ -51,7 +54,16 @@ function renderQuickDecision() {
         ` : ''}
 
         ${results ? `
-          ${renderDecisionBrief(results.decision_brief || null, { sessionId: session.id })}
+          ${renderDecisionBrief(results.decision_brief || null, {
+            sessionId: session.id,
+            agentDecisionDynamics: results.agent_decision_dynamics,
+            uiComplexity: state.uiComplexity || 'advanced',
+          })}
+          ${renderTradeoffSection(results.decision_brief || null, { uiComplexity: state.uiComplexity || 'advanced', tradeoffUid: session.id })}
+          ${renderPremortemStructuredCard(results.premortem_summary || null, t, escHtml)}
+          ${renderDecisionDynamicsSummary(results.agent_decision_dynamics || [], {
+            escHtml, agentName, t, session, votes: results.votes || [],
+          })}
           ${results.warning ? `<div class="error-banner" style="margin-bottom:16px;">⚠️ ${escHtml(results.warning)}</div>` : ''}
 
           <details id="debate-section-${escHtml(session.id)}" data-section="debate-details" ${state.showDebateDetails ? 'open' : ''} style="margin:0 0 16px;">

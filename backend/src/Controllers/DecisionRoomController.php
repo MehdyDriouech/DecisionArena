@@ -60,12 +60,20 @@ class DecisionRoomController {
 
         $sessionOptions = [
             'auto_retry_on_weak_debate' => (bool)($data['auto_retry_on_weak_debate'] ?? $session['auto_retry_on_weak_debate'] ?? false),
+            'decision_dynamics_preset'   => $session['decision_dynamics_preset'] ?? 'balanced',
+            'session_variant'             => $session['session_variant'] ?? null,
         ];
 
         $result = $this->runner->run(
             $sessionId, $objective, $selectedAgents, $rounds, $language,
             $forceDisagreement, $contextDoc,
             $daEnabled, $daThreshold, $agentProviders, $decisionThreshold, $sessionOptions
+        );
+
+        $dynamicsRepo       = new \Infrastructure\Persistence\PersonaDecisionDynamicsRepository();
+        $agentDecisionDynamics = $dynamicsRepo->transparencyForAgents(
+            is_array($selectedAgents) ? $selectedAgents : [],
+            $session['decision_dynamics_preset'] ?? null
         );
 
         $this->sessionRepo->update($sessionId, [
@@ -81,6 +89,7 @@ class DecisionRoomController {
                 'adjusted_decision'      => $result['adjusted_decision']      ?? null,
                 'false_consensus'        => $result['false_consensus']        ?? null,
                 'raw_decision'           => $result['raw_decision']           ?? null,
+                'premortem_summary'      => $result['premortem_summary']    ?? null,
             ], JSON_UNESCAPED_UNICODE),
             'decision_brief' => json_encode($result['decision_brief'] ?? null, JSON_UNESCAPED_UNICODE),
         ]);
@@ -103,6 +112,9 @@ class DecisionRoomController {
             'false_consensus_risk' => $result['false_consensus_risk'] ?? 'low',
             'false_consensus' => $result['false_consensus'] ?? null,
             'reliability_warnings' => $result['reliability_warnings'] ?? [],
+            'agent_decision_dynamics' => $agentDecisionDynamics,
+            'decision_brief'       => $result['decision_brief'] ?? null,
+            'premortem_summary'  => $result['premortem_summary'] ?? null,
         ];
     }
 }

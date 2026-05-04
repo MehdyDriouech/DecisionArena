@@ -6,6 +6,7 @@ use Domain\DecisionReliability\DecisionReliabilityService;
 use Domain\DecisionReliability\ReliabilityConfig;
 use Domain\Providers\ProviderRouter;
 use Domain\Vote\VoteAggregator;
+use Domain\Verdict\VerdictParser;
 use Domain\Vote\VoteParser;
 use Domain\Evidence\EvidenceReportService;
 use Domain\Risk\RiskProfileAnalyzer;
@@ -84,10 +85,12 @@ class JuryRunner {
         float  $threshold,
         string $language,
         ?array $contextDoc,
-        array  $adversarialCfg = []
+        array  $adversarialCfg = [],
+        ?string $decisionDynamicsPreset = null
     ): array {
         $adversarialCfg = $this->normalizeAdversarialConfig($adversarialCfg);
         $threshold = ReliabilityConfig::normalizeThreshold($threshold);
+        $dynamicsPreset = \Domain\Agents\DecisionDynamicsPreset::normalizeId($decisionDynamicsPreset);
         $rounds = min(max($rounds, 2), 5);
 
         if (!in_array('synthesizer', $selectedAgents, true)) {
@@ -126,7 +129,7 @@ class JuryRunner {
             $roundMessages = [];
 
             foreach ($debateAgents as $agentId) {
-                $agent = $this->assembler->assemble($agentId);
+                $agent = $this->assembler->assemble($agentId, null, null, $dynamicsPreset);
                 if (!$agent) continue;
 
                 $assignedTarget = ($phase !== 'jury-opening')
@@ -315,7 +318,7 @@ class JuryRunner {
             $minorityRound        = $nextRound;
             $allDebateForMinority = $allDebateMessages;
             foreach (array_slice($minorityAgentIds, 0, 2) as $minorityAgentId) {
-                $agent = $this->assembler->assemble($minorityAgentId);
+                $agent = $this->assembler->assemble($minorityAgentId, null, null, $dynamicsPreset);
                 if (!$agent) continue;
                 try {
                     $mrMessages = $this->buildMinorityReportMessages(
@@ -360,12 +363,12 @@ class JuryRunner {
         $qualityData = $this->computeDebateQualityScore($state, count($debateAgents), $minorityReportPresent);
 
         // ── Compute automatic decision before synthesizer ─────────────────────
-        $automaticDecision = $this->voteAggregator->recompute($sessionId, $threshold);
+        $automaticDecision = $this->voteAggregator->recompute($sessionId, $threshold, $dynamicsPreset);
 
         // ── Final verdict (synthesizer) ───────────────────────────────────────
         $verdictRound    = $nextRound; // final sequential round number
         $verdictMessages = [];
-        $synthAgent = $this->assembler->assemble('synthesizer');
+        $synthAgent = $this->assembler->assemble('synthesizer', null, null, $dynamicsPreset);
         if ($synthAgent) {
             try {
                 $allPrevMessages = $allDebateMessages;
@@ -573,7 +576,7 @@ class JuryRunner {
             $retryInstruction = $this->promptBuilder->buildAutoRetryAdversarialPrompt($initialScore);
 
             foreach ($debateAgents as $agentId) {
-                $agent = $this->assembler->assemble($agentId);
+                $agent = $this->assembler->assemble($agentId, null, null, $dynamicsPreset);
                 if (!$agent) continue;
 
                 $existingMessages = $this->messageRepo->findBySession($sessionId);
@@ -646,6 +649,8 @@ class JuryRunner {
         );
 
         $synthesizerOutput = $verdictMessages[0]['content'] ?? '';
+        $parsedVerdictBrief = VerdictParser::parse($synthesizerOutput);
+
         $decisionBrief = $this->summaryService->buildDecisionBrief(
             array_merge($reliability, [
                 'synthesizer_output'     => $synthesizerOutput,
@@ -653,6 +658,7 @@ class JuryRunner {
                 'decision_quality_score' => $qualityScore,
                 'risk_profile'           => $riskProfile,
                 'evidence_report'        => $evidenceReport,
+                'verdict'                => $parsedVerdictBrief ?: null,
             ])
         );
 
@@ -908,7 +914,7 @@ class JuryRunner {
         $langNote = $language !== 'en' ? " Respond in language code: $language." : '';
 
         foreach (array_slice($debateAgents, 0, 3) as $agentId) {
-            $agent = $this->assembler->assemble($agentId);
+            $agent = $this->assembler->assemble($agentId, null, null, $dynamicsPreset);
             if (!$agent) continue;
 
             $assignedTarget = $this->computeAssignedTarget($debateAgents, $agentId, $miniChallengeRound);
@@ -1065,7 +1071,7 @@ class JuryRunner {
         }
 
         foreach ($candidates as $agentId) {
-            $agent = $this->assembler->assemble($agentId);
+            $agent = $this->assembler->assemble($agentId, null, null, $dynamicsPreset);
             if (!$agent) continue;
             $meta = $agent->persona->meta;
 
@@ -1086,7 +1092,7 @@ class JuryRunner {
                          'challenger', 'risk', 'risque', 'qa', 'quality', 'red', 'opposition'];
 
         foreach ($candidates as $agentId) {
-            $agent = $this->assembler->assemble($agentId);
+            $agent = $this->assembler->assemble($agentId, null, null, $dynamicsPreset);
             $haystack = strtolower(
                 $agentId . ' '
                 . ($agent?->persona->name ?? '') . ' '

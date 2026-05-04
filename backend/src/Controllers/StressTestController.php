@@ -66,7 +66,14 @@ class StressTestController {
             $daEnabled,
             $daThreshold,
             $agentProviders,
-            $decisionThreshold
+            $decisionThreshold,
+            $session['decision_dynamics_preset'] ?? null
+        );
+
+        $dynamicsRepo = new \Infrastructure\Persistence\PersonaDecisionDynamicsRepository();
+        $agentDecisionDynamics = $dynamicsRepo->transparencyForAgents(
+            $selectedAgents,
+            $session['decision_dynamics_preset'] ?? null
         );
 
         $this->sessionRepo->update($sessionId, [
@@ -76,6 +83,7 @@ class StressTestController {
             'context_quality_level' => (string)($result['context_quality']['level'] ?? 'weak'),
             'context_quality_report' => json_encode($result['context_quality'] ?? [], JSON_UNESCAPED_UNICODE),
             'reliability_cap' => (float)($result['reliability_cap'] ?? 1.0),
+            'decision_brief' => json_encode($result['decision_brief'] ?? null, JSON_UNESCAPED_UNICODE),
         ]);
 
         return [
@@ -96,6 +104,9 @@ class StressTestController {
             'false_consensus_risk' => $result['false_consensus_risk'] ?? 'low',
             'false_consensus' => $result['false_consensus'] ?? null,
             'reliability_warnings' => $result['reliability_warnings'] ?? [],
+            'decision_quality_score' => $result['decision_quality_score'] ?? null,
+            'decision_brief' => $result['decision_brief'] ?? null,
+            'agent_decision_dynamics' => $agentDecisionDynamics,
         ];
     }
 }

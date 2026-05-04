@@ -64,10 +64,12 @@ class ReactiveChatRunner
         string $primaryAgentId,
         array  $reactorAgentIds,
         array  $config = [],
-        ?array $contextDoc = null
+        ?array $contextDoc = null,
+        ?string $decisionDynamicsPreset = null
     ): array {
         $this->reactiveContextDoc = $contextDoc;
         $this->reactiveSessionId = $sessionId;
+        $dynamicsPreset = \Domain\Agents\DecisionDynamicsPreset::normalizeId($decisionDynamicsPreset);
         $turnsMin   = max(self::MIN_TURNS, min(self::MAX_TURNS, (int)($config['turns_min']   ?? 2)));
         $turnsMax   = max(self::MIN_TURNS, min(self::MAX_TURNS, (int)($config['turns_max']   ?? 4)));
         $turnsMax   = max($turnsMax, $turnsMin);
@@ -103,7 +105,7 @@ class ReactiveChatRunner
             $executedTurns = $turn;
 
             // ── Step 1: Primary agent answers / responds ───────────────────
-            $primaryAgent = $this->assembler->assemble($primaryAgentId);
+            $primaryAgent = $this->assembler->assemble($primaryAgentId, null, null, $dynamicsPreset);
             if (!$primaryAgent) break;
 
                 try {
@@ -134,7 +136,7 @@ class ReactiveChatRunner
             // ── Step 2: Reactor agents react ───────────────────────────────
             $previousReactionsThisTurn = [];
             foreach ($reactorAgentIds as $reactorId) {
-                $reactorAgent = $this->assembler->assemble($reactorId);
+                $reactorAgent = $this->assembler->assemble($reactorId, null, null, $dynamicsPreset);
                 if (!$reactorAgent) continue;
 
                 try {
@@ -183,10 +185,10 @@ class ReactiveChatRunner
         $finalSynthesis = null;
         if ($synth) {
             $synthAgentId = 'synthesizer';
-            $synthAgent   = $this->assembler->assemble($synthAgentId);
+            $synthAgent   = $this->assembler->assemble($synthAgentId, null, null, $dynamicsPreset);
             if (!$synthAgent) {
                 $synthAgentId = $primaryAgentId;
-                $synthAgent   = $this->assembler->assemble($primaryAgentId);
+                $synthAgent   = $this->assembler->assemble($primaryAgentId, null, null, $dynamicsPreset);
             }
             if ($synthAgent) {
                 try {

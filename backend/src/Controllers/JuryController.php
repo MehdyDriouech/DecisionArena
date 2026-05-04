@@ -79,7 +79,8 @@ class JuryController {
             $threshold,
             $language,
             $contextDoc,
-            $adversarialCfg
+            $adversarialCfg,
+            $session['decision_dynamics_preset'] ?? null
         );
 
         $this->sessionRepo->update($sessionId, [
@@ -99,6 +100,13 @@ class JuryController {
             'decision_brief' => json_encode($result['decision_brief'] ?? null, JSON_UNESCAPED_UNICODE),
         ]);
 
-        return array_merge(['session_id' => $sessionId], $result);
+        $dynamicsRepo = new \Infrastructure\Persistence\PersonaDecisionDynamicsRepository();
+        $out = array_merge(['session_id' => $sessionId], $result);
+        $out['agent_decision_dynamics'] = $dynamicsRepo->transparencyForAgents(
+            $selectedAgents,
+            $session['decision_dynamics_preset'] ?? null
+        );
+
+        return $out;
     }
 }

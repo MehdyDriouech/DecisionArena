@@ -67,6 +67,18 @@ class LaunchAssistantController {
             'explanation_fr'    => "Decision Room structurée pour préparer une décision avec verdict final.",
             'explanation_en'    => "Structured Decision Room to prepare a decision with final verdict.",
         ],
+        'facilitation-workshop' => [
+            'mode'                     => 'decision-room',
+            'selected_agents'          => ['hat-white', 'hat-red', 'hat-black', 'hat-yellow', 'hat-green', 'hat-blue'],
+            'rounds'                   => 3,
+            'force_disagreement'       => false,
+            'interaction_style'      => null,
+            'reply_policy'             => null,
+            'recommended_template_id'   => 'six-thinking-hats',
+            'facilitation_framework'   => 'six-thinking-hats',
+            'explanation_fr'           => "Six Thinking Hats : équilibrez faits, intuition, risques, bénéfices, créativité et synthèse facilitation.",
+            'explanation_en'           => "Six Thinking Hats: balance facts, intuition, risks, benefits, creativity and facilitated synthesis.",
+        ],
         'stress-test-idea' => [
             'mode'              => 'stress-test',
             'selected_agents'   => ['critic', 'architect', 'pm', 'ux-expert', 'synthesizer'],
@@ -109,6 +121,8 @@ class LaunchAssistantController {
             'interaction_style'  => $rec['interaction_style'],
             'reply_policy'       => $rec['reply_policy'],
             'explanation'        => $explanation,
+            'recommended_template_id' => $rec['recommended_template_id'] ?? null,
+            'facilitation_framework'   => $rec['facilitation_framework'] ?? null,
         ];
     }
 }

@@ -130,4 +130,33 @@ class PostmortemRepository {
             'by_agent'  => $byAgent,
         ];
     }
+
+    /**
+     * Post-mortems enrichis avec métadonnées de session pour l'analyse (recommandations, etc.).
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function findAllWithSessions(): array {
+        try {
+            $stmt = $this->pdo->query('
+                SELECT
+                    p.id              AS postmortem_id,
+                    p.session_id      AS session_id,
+                    p.outcome         AS outcome,
+                    p.confidence_in_retrospect,
+                    p.notes,
+                    p.created_at      AS postmortem_created_at,
+                    s.mode,
+                    s.title           AS session_title,
+                    s.selected_agents,
+                    s.initial_prompt
+                FROM session_postmortems p
+                INNER JOIN sessions s ON s.id = p.session_id
+                ORDER BY p.created_at DESC
+            ');
+            return $stmt->fetchAll(\PDO::FETCH_ASSOC) ?: [];
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
 }

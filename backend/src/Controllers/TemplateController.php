@@ -135,6 +135,22 @@ class TemplateController {
             'updated_at'           => $now,
         ]);
 
+        if (($template['id'] ?? '') === 'six-thinking-hats') {
+            try {
+                $this->sessionRepo->update($id, ['facilitation_framework' => 'six-thinking-hats']);
+            } catch (\Throwable $e) {
+            }
+            $session = $this->sessionRepo->findById($id) ?? $session;
+        }
+
+        if (($template['id'] ?? '') === 'pre-mortem') {
+            try {
+                $this->sessionRepo->update($id, ['session_variant' => 'premortem']);
+            } catch (\Throwable $e) {
+            }
+            $session = $this->sessionRepo->findById($id) ?? $session;
+        }
+
         return ['session' => $session, 'template' => $template];
     }
 

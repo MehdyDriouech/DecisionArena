@@ -13,6 +13,7 @@ Decision Arena est un outil **local** de *Decision Intelligence* basé sur des *
 ## Sommaire
 
 - [Pourquoi Decision Arena ?](#pourquoi-decision-arena-)
+- [Nouveautés](#nouveautés)
 - [Prérequis](#prérequis)
 - [Installation](#installation)
 - [Démarrage](#démarrage)
@@ -21,10 +22,24 @@ Decision Arena est un outil **local** de *Decision Intelligence* basé sur des *
 - [Decision Reliability Engine](#decision-reliability-engine)
 - [Deliberation Intelligence](#deliberation-intelligence)
 - [Fonctionnalités transverses](#fonctionnalités-transverses)
+  - [Rerun intelligent](#rerun-intelligent)
+  - [Human-in-the-loop — conteste](#human-in-the-loop--conteste-utilisateur)
+  - [Comparaison de sessions](#comparaison-de-sessions)
+  - [Action Plan](#action-plan)
+  - [Exports](#exports)
+  - [Personas, Souls & Decision Dynamics](#personas-souls--decision-dynamics)
+  - [Agent Dynamics Recommendations](#agent-dynamics-recommendations)
+  - [Templates de session](#templates-de-session)
+  - [Scenario packs](#scenario-packs-parcours-guidés)
+  - [Langues](#langues-ui)
+  - [Complexité UI](#complexité-ui-deux-systèmes-orthogonaux)
+  - [Logs applicatifs](#logs-applicatifs)
+  - [Learning & politiques de prompts](#learning--politiques-de-prompts)
 - [Concepts & terminologie](#concepts--terminologie)
 - [Architecture](#architecture)
 - [Sécurité & limites](#sécurité--limites)
 - [Guide de contribution](#guide-de-contribution)
+- [Tutoriel : utiliser Decision Arena](#tutoriel--utiliser-decision-arena)
 - [Licence](#licence)
 
 ---
@@ -48,6 +63,23 @@ Decision Arena répond à ça :
 | Rejouabilité | ✅ Rerun avec variations, comparaison de sessions, **re-run avec contexte de conteste** |
 | Human-in-the-loop | ✅ Conteste tracée sur les messages (`meta_json`), intégration evidence **sans modifier** le `support_class`, pénalité qualité bornée, variante avec challenge injecté |
 | Qualité décisionnelle | ✅ Guardrails, score 0–100, brief décisionnel, timeline, biais, Devil's Advocate, post-mortem |
+
+---
+
+## Nouveautés
+
+Cette version consolide Decision Arena autour d'un flux plus guidé, plus auditable et plus utile après la décision :
+
+- **Launch Assistant** : assistant de lancement qui recommande le mode, les agents, le nombre de tours et les réglages de départ selon votre intention.
+- **Fast Decision** : preset prêt à l'emploi pour obtenir rapidement une décision structurée avec 4 agents, 2 tours, guardrails et auto-retry si le débat est trop faible.
+- **Decision Reliability Engine** : score qualité 0–100, guardrails, faux consensus, qualité du contexte et brief décisionnel persisté dans la session.
+- **Deliberation Intelligence** : audit du débat, graphe d'interactions, heatmap d'arguments, replay, timeline de confiance, rapport de biais, evidence report et profil de risque.
+- **Reactive Chat** : échange multi-tour entre un agent principal et des agents challengers, avec presets `minimal`, `standard`, `intense`, synthèse finale et arrêt anticipé.
+- **Human-in-the-loop / conteste** : possibilité de contester une réponse agent, tracer le désaccord, puis relancer une variante avec le contexte du challenge.
+- **Context Assistant & Context Document** : analyse du contexte avant lancement, questions de clarification et document de contexte injecté dans les prompts.
+- **Scenario packs, templates et builders** : parcours guidés, templates de session, création de personas custom et génération assistée côté admin.
+- **Learning, post-mortem et prompt policies** : suivi des performances agents/modes, calibration, export learning et édition encadrée de certaines politiques de prompts.
+- **UI modulaire FR/EN** : interface par features ES modules, niveaux `basic / advanced / expert`, sidebar de navigation et traductions embarquées.
 
 ---
 
@@ -202,6 +234,16 @@ Mode "robustesse" : les agents attaquent systématiquement la décision pour en 
 Vote final multi-agents avec décision collective basée sur un seuil de consensus configurable.
 
 > Idéal pour : validation finale, go / no-go.
+
+### Launch Assistant
+
+Wizard de recommandation guidant l'utilisateur vers le mode et la configuration optimale selon son intention (explorer / décider / tester).
+
+**Endpoint :** `POST /api/launch-assistant/recommend`
+
+**Flux :** description de l'intention → recommandation (mode, agents, tours, presets) → édition optionnelle → lancement direct.
+
+> Idéal pour : première utilisation, utilisateurs qui ne connaissent pas encore les modes.
 
 ### Options avancées (modes structurés)
 
@@ -380,6 +422,25 @@ Génération automatique d'un plan d'action depuis la synthèse, enrichissable m
 - **Mode redacted** : `?redacted=1` (masque secrets) · `?redacted=strong` (remplace messages par `[REDACTED]`)
 - **Snapshots** : capture persistée d'une session
 
+### Personas, Souls & Decision Dynamics
+
+**Personas** (25 au total) :
+- 10 personas standard : `pm`, `architect`, `critic`, `dev`, `qa`, `ux-expert`, `analyst`, `po`, `sm`, `synthesizer`
+- 10 Six Thinking Hats : `hat-white` (faits), `hat-red` (émotions), `hat-black` (critique), `hat-yellow` (optimisme), `hat-green` (créativité), `hat-blue` (contrôle) + variantes
+- Personas custom via **Administration → Personas** (CRUD + auto-generation LLM)
+
+**Souls** : modificateurs de style comportemental superposés à la persona (ex. `critic.soul.md` rend le Critique plus incisif sans changer son rôle). Stockés dans `backend/storage/souls/`.
+
+**Decision Dynamics** : configuration fine du comportement décisionnel par persona — résistance au consensus, sensibilité à l'évidence, tolérance au risque, preset (`balanced`, `contrarian`, `evidence-driven`…). Table `persona_decision_dynamics`.
+
+### Agent Dynamics Recommendations
+
+Analyse les patterns de comportement des agents sur les sessions passées et génère des suggestions d'optimisation appliquables depuis **Administration → Dynamiques agentes**.
+
+**Endpoints :**
+- `GET /api/analysis/agent-dynamics-suggestions` — recommandations calculées
+- `POST /api/analysis/agent-dynamics-suggestions/apply` — application d'une suggestion
+
 ### Templates de session
 
 Sessions pré-configurées (mode, agents, prompt starter). 5 templates système disponibles (seeding via `backend/tools/seed_templates.php`). Créez les vôtres via **Administration → Templates**.
@@ -395,9 +456,18 @@ Presets orientés **profil / cas d’usage** (mode recommandé, personas, tours,
 Interface en **Français** et **Anglais**. Switch via **FR / EN** dans la sidebar.  
 La langue des **réponses des agents** est définie par session.
 
-### Complexité UI
+### Complexité UI (deux systèmes orthogonaux)
 
-Trois niveaux sélectionnables dans la sidebar : **Basique** · **Avancé** · **Expert**. Persisté en localStorage. Les éléments marqués `data-complexity="advanced"` ou `"expert"` sont masqués dans les niveaux inférieurs.
+**uiMode** (toggle rapide, sidebar) — sans persistance :
+- `simple` : affichage épuré, options avancées masquées
+- `expert` : accès complet à tous les réglages
+
+**uiComplexity** (profondeur globale, persisté en `localStorage`) :
+- `basic` : ~60% des options masquées, lecture centrée sur la décision
+- `advanced` : par défaut — équilibre productivité / contrôle
+- `expert` : accès total (thresholds, persona editor, badges provider, statistiques)
+
+Les deux systèmes sont **indépendants**. `uiComplexity` contrôle la visibilité via `data-ui-min="advanced|expert"` sur les éléments DOM. Sélectionnable via le badge + dropdown dans la sidebar.
 
 ### Logs applicatifs
 
@@ -458,19 +528,21 @@ decision-room-ai/
 │   ├── src/
 │   │   ├── Controllers/            # HTTP controllers
 │   │   │   ├── ChatController.php              # send (+ challenge HITL) + reactive
-│   │   │   ├── ContextCheckController.php   # POST /api/context/check
-│   │   │   ├── DecisionRoomController.php   # persiste result + decision_brief
-│   │   │   ├── DecisionSummaryController.php # GET /api/sessions/{id}/decision-summary
-│   │   │   ├── JuryController.php           # persiste result + decision_brief
-│   │   │   ├── SessionController.php        # read-through result persisté
-│   │   │   ├── ExportController.php         # lit result pour brief/guardrails
+│   │   │   ├── ContextCheckController.php      # POST /api/context/check
+│   │   │   ├── DecisionRoomController.php      # persiste result + decision_brief
+│   │   │   ├── DecisionSummaryController.php   # GET /api/sessions/{id}/decision-summary
+│   │   │   ├── JuryController.php              # persiste result + decision_brief
+│   │   │   ├── SessionController.php           # read-through result persisté
+│   │   │   ├── ExportController.php            # lit result pour brief/guardrails
+│   │   │   ├── AgentDynamicsRecommendationController.php  # GET …/suggestions + POST …/apply
+│   │   │   ├── LaunchAssistantController.php   # POST /api/launch-assistant/recommend
 │   │   │   ├── ScenarioPackController.php
 │   │   │   ├── EvidenceController.php
 │   │   │   ├── RiskProfileController.php
 │   │   │   ├── SocialDynamicsController.php
 │   │   │   ├── LearningController.php
 │   │   │   ├── PromptPolicyController.php
-│   │   │   └── … (~39 contrôleurs)
+│   │   │   └── … (40 contrôleurs au total)
 │   │   ├── Domain/
 │   │   │   ├── DecisionReliability/
 │   │   │   │   ├── DecisionGuardrailService.php    # 4 règles guardrails
@@ -568,6 +640,22 @@ decision-room-ai/
 | `devil_advocate_enabled` | INTEGER | 0/1 |
 | `status` | TEXT | draft / completed |
 
+### Autres tables notables
+
+| Table | Description |
+|---|---|
+| `context_document_chunks` | Chunks indexables du document de contexte (offset, content) |
+| `context_document_chunks_fts` | Table virtuelle SQLite FTS5 — recherche plein texte sur les chunks |
+| `agent_relationships` + `relationship_events` | Dynamique sociale entre agents (affinité, confiance, conflits) |
+| `persona_decision_dynamics` | Configuration comportementale par persona (consensus_resistance, risk_tolerance…) |
+| `jury_adversarial_reports` | Rapport qualité Jury (debate_quality_score, challenge_count, minority_report_present) |
+| `learning_insights_cache` | Cache des métriques Learning par scope/agent/mode |
+| `session_agent_providers` | Overrides provider/modèle par agent et par session |
+| `session_risk_profiles` | Profil de risque persisté (risk_level, reversibility, recommended_threshold) |
+| `evidence_reports` + `evidence_claims` | Claims structurés extraits des débats + rapport agrégé |
+| `session_postmortems` | Bilan utilisateur post-décision (outcome, confidence, notes) |
+| `app_settings` | Paramètres applicatifs clé/valeur (ex. `last_log_purge`) |
+
 ### Principes
 
 **Backend**
@@ -637,6 +725,129 @@ php backend/tools/seed_templates.php
 php backend/tools/reliability_scenarios_manual.php
 php backend/tools/social_dynamics_scenarios_manual.php
 ```
+
+---
+
+## Tutoriel : utiliser Decision Arena
+
+Ce tutoriel part d'une installation locale fonctionnelle et montre comment passer d'une question floue à une décision exploitable.
+
+### 1. Ouvrir l'application
+
+Ouvrez l'interface frontend :
+
+```text
+http://localhost/decision-room-ai/frontend/index.html
+```
+
+Si vous utilisez le serveur PHP intégré, gardez le backend lancé avec :
+
+```bash
+php -S localhost:8000 -t backend/public
+```
+
+### 2. Connecter un provider LLM
+
+Allez dans **Administration → Providers**.
+
+1. Ajoutez un provider : Ollama, LM Studio ou API compatible OpenAI.
+2. Cliquez **Fetch models** pour découvrir les modèles disponibles.
+3. Testez le provider.
+4. Choisissez la stratégie de routage : provider unique, fallback, load-balancing ou provider par agent.
+
+Pour démarrer simplement en local, utilisez Ollama avec `http://localhost:11434` et un modèle déjà installé.
+
+### 3. Préparer la décision
+
+Dans **Nouvelle session**, décrivez la décision à prendre avec le plus de contexte possible :
+
+- l'objectif ;
+- les contraintes ;
+- les options déjà envisagées ;
+- les risques connus ;
+- les critères de réussite ;
+- les informations qui ne doivent pas être supposées.
+
+Le **Context Assistant** peut signaler un contexte faible et proposer des questions de clarification. Si vous avez un brief, une note produit ou un document de cadrage, ajoutez-le comme **Context Document** pour qu'il soit injecté dans les prompts.
+
+### 4. Choisir le bon parcours
+
+| Besoin | Parcours recommandé |
+|---|---|
+| Vous découvrez l'outil | **Launch Assistant** |
+| Décision rapide mais structurée | **Fast Decision** |
+| Analyse approfondie avec score qualité | **Decision Room** |
+| Débat libre avec mentions `@agent` | **Chat multi-agent** |
+| Challenger fortement une idée | **Confrontation** ou **Stress Test** |
+| Obtenir un vote collectif final | **Jury / Comité** |
+| Comparer plusieurs hypothèses | **Rerun** puis **Comparaison de sessions** |
+
+Les **templates** et **scenario packs** préremplissent les agents, le mode, les tours et certains seuils. Ils sont pratiques pour répéter un même type d'analyse.
+
+### 5. Configurer les agents
+
+Sélectionnez les personas qui doivent participer au raisonnement : PM, Architecte, Critique, QA, UX, Analyste, Synthesizer, Six Thinking Hats, etc.
+
+En mode avancé ou expert, vous pouvez aussi régler :
+
+- le nombre de tours ;
+- le seuil de consensus ;
+- le désaccord forcé ;
+- le Devil's Advocate ;
+- le provider ou modèle par agent ;
+- les Decision Dynamics : tolérance au risque, résistance au consensus, sensibilité à l'évidence.
+
+### 6. Lancer et lire la session
+
+Lancez le mode choisi, puis suivez les messages agent par agent. Selon le parcours, Decision Arena produit :
+
+- des arguments et contre-arguments ;
+- une synthèse ;
+- des votes pondérés ;
+- un verdict ;
+- un brief décisionnel ;
+- un score qualité 0–100 ;
+- des warnings de fiabilité ;
+- un plan d'action générable.
+
+Le résultat important n'est pas seulement la réponse finale : regardez aussi les désaccords, les risques non résolus, les signaux de faux consensus et les hypothèses faibles.
+
+### 7. Auditer la décision
+
+Depuis l'historique de session, utilisez les panneaux d'analyse :
+
+| Panneau | Utilité |
+|---|---|
+| **Decision Summary** | Lire la décision, la confiance, les risques majeurs et la prochaine étape |
+| **Evidence** | Voir les claims extraits et leur niveau de support |
+| **Risk Profile** | Comprendre le niveau de risque et la réversibilité |
+| **Bias Report** | Repérer groupthink, ancrage, confirmation ou autorité |
+| **Confidence Timeline** | Observer l'évolution du consensus par tour |
+| **Graph / Heatmap / Replay** | Inspecter les interactions, arguments forts et déroulé du débat |
+| **Post-mortem** | Renseigner plus tard si la décision réelle était correcte, partielle ou incorrecte |
+
+### 8. Contester, relancer, comparer
+
+Si une réponse agent est discutable, cliquez **Contester**. La conteste est tracée dans les métadonnées du message et peut être utilisée pour relancer une variante via **Re-lancer la décision avec ce conteste**.
+
+Pour explorer plusieurs chemins :
+
+1. Lancez un **Rerun** avec d'autres agents, une autre langue, plus de contradiction ou un autre mode.
+2. Comparez 2 à 4 sessions dans **Comparaison de sessions**.
+3. Exportez le résultat en Markdown ou JSON.
+4. Utilisez `?redacted=1` ou `?redacted=strong` avant de partager un export externe.
+
+### 9. Administrer et améliorer l'outil
+
+Les écrans d'administration servent à maintenir le système :
+
+- **Providers** : gérer les LLM, modèles, routage et fallback.
+- **Personas** : consulter, créer ou générer des agents custom.
+- **Templates** : préparer des sessions réutilisables.
+- **Scenario packs** : créer des parcours guidés par cas d'usage.
+- **Learning** : analyser les performances par agent et par mode.
+- **Prompt policies** : ajuster les politiques de prompts exposées par l'application.
+- **Logs** : diagnostiquer les appels LLM, erreurs backend et événements frontend.
 
 ---
 

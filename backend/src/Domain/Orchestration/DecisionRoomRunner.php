@@ -97,6 +97,7 @@ class DecisionRoomRunner {
     ): array {
         $rounds              = min(max($rounds, 1), RoundPolicy::MAX_ROUNDS);
         $decisionThreshold   = ReliabilityConfig::normalizeThreshold($decisionThreshold);
+        $dynamicsPreset      = \Domain\Agents\DecisionDynamicsPreset::normalizeId($sessionOptions['decision_dynamics_preset'] ?? null);
         $allMessages         = [];
         $previousRoundMessages = [];
         $state               = $this->debateMemory->loadState($sessionId);
@@ -134,7 +135,7 @@ class DecisionRoomRunner {
             }
 
             foreach ($agentsForRound as $agentId) {
-                $agent = $this->assembler->assemble($agentId);
+                $agent = $this->assembler->assemble($agentId, null, null, $dynamicsPreset);
                 if (!$agent) continue;
 
                 $assignedTarget = ($round > 1 && $agentId !== 'synthesizer')
@@ -163,7 +164,8 @@ class DecisionRoomRunner {
                         $socialDynamicsBlock,
                         $forceStrongNext && $agentId !== 'synthesizer',
                         $sessionId,
-                        null
+                        null,
+                        $sessionOptions['session_variant'] ?? ''
                     );
 
                     // Inject synthesizer constraints on the final round
@@ -178,7 +180,7 @@ class DecisionRoomRunner {
                                 );
                             } catch (\Throwable) {
                             }
-                            $preDecision = $this->voteAggregator->recompute($sessionId, $decisionThreshold);
+                            $preDecision = $this->voteAggregator->recompute($sessionId, $decisionThreshold, $dynamicsPreset);
                             $preEnvelope = $this->reliabilityService->buildEnvelope(
                                 $objective, $contextDoc, $preDecision,
                                 $this->voteRepo->findVotesBySession($sessionId),
@@ -208,6 +210,9 @@ class DecisionRoomRunner {
                                 ])
                             );
                             $formatInstruction = $this->promptBuilder->buildSynthesizerOutputFormatInstruction();
+                            if (($sessionOptions['session_variant'] ?? '') === 'premortem') {
+                                $formatInstruction .= $this->promptBuilder->buildPremortemSynthesizerJsonAddendum();
+                            }
                             foreach ($messages as &$msg) {
                                 if ($msg['role'] === 'user') {
                                     $msg['content'] .= $constraintBlock . $formatInstruction;
@@ -412,7 +417,7 @@ class DecisionRoomRunner {
             $allMessages[$round]   = $roundMessages;
         }
 
-        $automaticDecision = $this->voteAggregator->recompute($sessionId, $decisionThreshold);
+        $automaticDecision = $this->voteAggregator->recompute($sessionId, $decisionThreshold, $dynamicsPreset);
         $allSessionMessages = $this->messageRepo->findBySession($sessionId);
         $evidenceReport = null;
         try {
@@ -481,7 +486,7 @@ class DecisionRoomRunner {
 
             foreach ($selectedAgents as $agentId) {
                 if ($agentId === 'synthesizer') continue;
-                $agent = $this->assembler->assemble($agentId);
+                $agent = $this->assembler->assemble($agentId, null, null, $dynamicsPreset);
                 if (!$agent) continue;
 
                 $existingMessages = $this->messageRepo->findBySession($sessionId);
@@ -562,6 +567,7 @@ class DecisionRoomRunner {
                 break;
             }
         }
+        $verdictRow = $this->verdictRepo->findBySession($sessionId);
         $decisionBrief = $this->summaryService->buildDecisionBrief(
             array_merge($reliability, [
                 'synthesizer_output'     => $synthesizerOutput,
@@ -569,8 +575,14 @@ class DecisionRoomRunner {
                 'decision_quality_score' => $qualityScore,
                 'risk_profile'           => $riskProfile,
                 'evidence_report'        => $evidenceReport,
+                'verdict'                => $verdictRow ?: null,
             ])
         );
+
+        $premortemSummary = null;
+        if (($sessionOptions['session_variant'] ?? '') === 'premortem') {
+            $premortemSummary = PremortemSummaryExtractor::fromSynthesizerOutput($synthesizerOutput);
+        }
 
         return [
             'rounds' => $allMessages,
@@ -597,6 +609,7 @@ class DecisionRoomRunner {
             'auto_retry' => $autoRetryResult,
             'decision_quality_score' => $qualityScore,
             'decision_brief' => $decisionBrief,
+            'premortem_summary' => $premortemSummary,
         ];
     }
 

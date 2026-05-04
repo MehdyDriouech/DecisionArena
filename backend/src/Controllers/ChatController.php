@@ -91,7 +91,8 @@ class ChatController {
             $selectedAgents,
             $sessionContext,
             $language,
-            $contextDoc
+            $contextDoc,
+            $session['decision_dynamics_preset'] ?? null
         );
 
         if ($contextMode === 'challenge') {
@@ -188,7 +189,8 @@ class ChatController {
             $primaryAgentId,
             $reactorIds,
             $config,
-            $contextDoc
+            $contextDoc,
+            $session['decision_dynamics_preset'] ?? null
         );
 
         return [

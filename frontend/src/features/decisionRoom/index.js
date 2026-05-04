@@ -3,13 +3,15 @@
  */
 
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
-import { renderDecisionBrief } from '../../ui/components.js';
+import { renderDecisionBrief, renderDecisionDynamicsSummary, renderPremortemInvertedBanner, renderPremortemStructuredCard, renderTradeoffSection } from '../../ui/components.js';
 import { renderExportButtons, renderAgentChatPanel } from '../chat/view.js';
 import { renderDebateInsightsPanels, renderWeightedVotePanel, renderDecisionReliabilityCard } from '../confrontation/index.js';
 import { renderDebateAuditPanel } from '../debateAudit/index.js';
 import { renderGraphViewPanel } from '../graphView/index.js';
 import { renderArgumentHeatmapPanel } from '../argumentHeatmap/index.js';
 import { renderDebateReplayPanel } from '../debateReplay/index.js';
+import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
+import { isSixThinkingHatsSession, renderSixThinkingHatsGroupedDebate, renderSixThinkingMethodBanner } from '../../utils/sixThinkingHats.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -79,11 +81,17 @@ function renderDRAgentCard(msg, isFinal, messageKey = '') {
 }
 
 function renderDRResults(results) {
-  const { state, t } = getCtx();
+  const { state, t, escHtml, agentName, renderMarkdown, agentIcon, agentTitleText } = getCtx();
   const rounds      = results.rounds || {};
   const totalRounds = results.total_rounds || Object.keys(rounds).length;
   const roundNums   = Object.keys(rounds).map(Number).sort((a, b) => a - b);
   const sessionId = state.currentSession?.id ?? '';
+  const isPm = state.currentSession?.session_variant === 'premortem';
+  const sess = state.currentSession;
+  const sixHats = sess && isSixThinkingHatsSession(sess);
+  const dynamicsHtml = renderDecisionDynamicsSummary(results.agent_decision_dynamics || [], {
+    escHtml, agentName, t, session: state.currentSession, votes: results.votes || [],
+  });
   const roundTitles = ['Independent Analysis', 'Critical Review', 'Synthesis & Recommendations', 'Decision & Action Plan', 'Final Consensus'];
 
   const roundsHtml = roundNums.map((rNum) => {
@@ -104,7 +112,29 @@ function renderDRResults(results) {
     `;
   }).join('');
 
-  return renderDecisionBrief(results.decision_brief || null, { sessionId })
+  const complexity = state.uiComplexity || 'advanced';
+  const groupedHatsHtml = sixHats && complexity !== 'basic'
+    ? renderSixThinkingHatsGroupedDebate(rounds, {
+      escHtml,
+      renderMarkdown,
+      agentIcon,
+      agentName,
+      agentTitleText,
+      t,
+    })
+    : '';
+
+  return (sixHats ? renderSixThinkingMethodBanner(sess, t, escHtml) : '')
+    + (isPm ? renderPremortemInvertedBanner(t, escHtml) : '')
+    + renderDecisionBrief(results.decision_brief || null, {
+      sessionId,
+      agentDecisionDynamics: results.agent_decision_dynamics,
+      uiComplexity: complexity,
+    })
+    + renderTradeoffSection(results.decision_brief || null, { uiComplexity: complexity, tradeoffUid: sessionId })
+    + renderPremortemStructuredCard(results.premortem_summary || null, t, escHtml)
+    + dynamicsHtml
+    + groupedHatsHtml
     + `<details id="debate-section-${sessionId}" data-section="debate-details" ${state.showDebateDetails ? 'open' : ''} style="margin:0 0 16px;"><summary class="btn btn-secondary btn-sm">Voir le debat complet</summary><div style="margin-top:12px;">${roundsHtml}</div></details>`
     + renderDebateInsightsPanels(results)
     + renderWeightedVotePanel(results, sessionId)
@@ -120,13 +150,17 @@ function renderDecisionRoom() {
   const session = state.currentSession;
   if (!session) return `<div class="view-container"><p>${t('chat.noSession')}</p></div>`;
   const results = state.drResults;
+  const pmHeaderBadge = session.session_variant === 'premortem'
+    ? ` <span class="badge badge-info" style="font-size:11px;vertical-align:middle;">${escHtml(t('premortem.badge'))}</span>`
+    : '';
 
   return `
     <div class="full-height-view">
       <div class="dr-header">
         <div class="dr-header-info">
-          <div class="dr-title">🏛️ ${escHtml(session.title || t('dr.title'))}</div>
+          <div class="dr-title">🏛️ ${escHtml(session.title || t('dr.title'))}${pmHeaderBadge}</div>
           <div class="dr-objective">${escHtml(session.initial_prompt || session.idea || session.objective || '')}</div>
+          ${renderSessionPresetUsedBanner(session, escHtml, t)}
           ${renderContextDocBadge()}
         </div>
         ${!state.drRunning ? `<button class="btn btn-primary" data-action="run-decision-room">${t('dr.run')}</button>` : ''}

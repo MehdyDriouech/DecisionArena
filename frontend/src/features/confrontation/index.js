@@ -4,13 +4,15 @@
  * sessionHistory, and stressTest.
  */
 
-import { renderTooltip, renderPanelRecommendBadge, renderCardDescription, renderDecisionBrief } from '../../ui/components.js';
+import { renderTooltip, renderPanelRecommendBadge, renderCardDescription, renderDecisionBrief, renderTradeoffSection, renderDecisionDynamicsSummary, renderPremortemStructuredCard } from '../../ui/components.js';
+import { getVoteAppliedReputation, formatVoteReputationCaption } from '../../utils/decisionDynamics.js';
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
 import { renderExportButtons, renderAgentChatPanel } from '../chat/view.js';
 import { renderDebateAuditPanel } from '../debateAudit/index.js';
 import { renderGraphViewPanel } from '../graphView/index.js';
 import { renderArgumentHeatmapPanel } from '../argumentHeatmap/index.js';
 import { renderDebateReplayPanel } from '../debateReplay/index.js';
+import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -215,7 +217,12 @@ function renderWeightedVotePanel(source, sessionId) {
   const relSummary = source?.decision_reliability_summary || null;
   const clarification = source?.context_clarification || null;
   if (!votes.length && !decision) return '';
-  const voteRows = votes.map((v) => `<tr><td>${escHtml(agentName(v.agent_id))}</td><td>${escHtml(v.vote || '')}</td><td>${Number(v.confidence || 0)}</td><td>${Number(v.impact || 0)}</td><td>${Number(v.domain_weight || 0)}</td><td><strong>${Number(v.weight_score || 0).toFixed(2)}</strong></td><td>${escHtml(v.rationale || '')}</td></tr>`).join('');
+  const voteRows = votes.map((v) => {
+    const rep = getVoteAppliedReputation(v, source);
+    const cap = rep != null ? formatVoteReputationCaption(rep, t) : '';
+    const capHtml = cap ? `<div class="dynamics-muted vote-weight-line" style="font-size:11px;margin-top:4px;">${escHtml(cap)}</div>` : '';
+    return `<tr><td>${escHtml(agentName(v.agent_id))}${capHtml}</td><td>${escHtml(v.vote || '')}</td><td>${Number(v.confidence || 0)}</td><td>${Number(v.impact || 0)}</td><td>${Number(v.domain_weight || 0)}</td><td><strong>${Number(v.weight_score || 0).toFixed(2)}</strong></td><td>${escHtml(v.rationale || '')}</td></tr>`;
+  }).join('');
   let distributionHtml = '';
   const summary = decision?.vote_summary && typeof decision.vote_summary === 'object' ? decision.vote_summary : null;
   if (summary?.decision_scores) distributionHtml = Object.entries(summary.decision_scores).map(([label, score]) => `<li>${escHtml(label)}: ${Math.round(Number(score) * 100)}%</li>`).join('');
@@ -398,9 +405,19 @@ function renderSessionContextDocPanel(session) {
 /* ── Main confrontation view ── */
 
 function renderConfrontationResults(results) {
-  const { state, t } = getCtx();
+  const { state, t, escHtml, agentName } = getCtx();
   const sid = state.currentSession?.id ?? '';
-  const briefHtml = renderDecisionBrief(results.decision_brief || null, { sessionId: sid });
+  const dynamicsHtml = renderDecisionDynamicsSummary(results.agent_decision_dynamics || [], {
+    escHtml, agentName, t, session: state.currentSession, votes: results.votes || [],
+  });
+  const briefHtml = renderDecisionBrief(results.decision_brief || null, {
+    sessionId: sid,
+    agentDecisionDynamics: results.agent_decision_dynamics,
+    uiComplexity: state.uiComplexity || 'advanced',
+  }) + renderTradeoffSection(results.decision_brief || null, {
+    uiComplexity: state.uiComplexity || 'advanced',
+    tradeoffUid: sid,
+  });
   if (results.rounds && Object.keys(results.rounds).length > 0) {
     const roundNums = Object.keys(results.rounds).map(Number).sort((a, b) => a - b);
     const total     = results.total_rounds || roundNums.length;
@@ -415,7 +432,9 @@ function renderConfrontationResults(results) {
     }).join('');
     if (synthesis.length > 0) html += `<div class="phase-section"><div class="phase-header synthesis"><span>✨</span><span>${t('confrontation.phaseFinal')}</span></div><div class="phase-agents-grid">${synthesis.map((msg, idx) => renderConfrontationAgentCard(msg, true, `${sid}-s-${idx}`)).join('')}</div></div>`;
     html = `<details id="debate-section-${sid}" data-section="debate-details" ${state.showDebateDetails ? 'open' : ''} style="margin:0 0 16px;"><summary class="btn btn-secondary btn-sm">Voir le debat complet</summary><div style="margin-top:12px;">${html}</div></details>`;
-    html = briefHtml + html;
+    html = briefHtml
+      + renderPremortemStructuredCard(results.premortem_summary || null, t, escHtml)
+      + dynamicsHtml + html;
     html += renderDebateInsightsPanels(results);
     html += renderWeightedVotePanel(results, sid);
     html += renderDecisionReliabilityCard(results);
@@ -441,6 +460,8 @@ function renderConfrontationResults(results) {
   }).join('');
   const legacyDebate = `<details id="debate-section-${sid2}" data-section="debate-details" ${state.showDebateDetails ? 'open' : ''} style="margin:0 0 16px;"><summary class="btn btn-secondary btn-sm">Voir le debat complet</summary><div style="margin-top:12px;">${legacyHtml}</div></details>`;
   return briefHtml
+    + renderPremortemStructuredCard(results.premortem_summary || null, t, escHtml)
+    + dynamicsHtml
     + legacyDebate
     + renderWeightedVotePanel(results, sid2)
     + renderDecisionReliabilityCard(results)
@@ -464,6 +485,7 @@ function renderConfrontationView() {
         <div class="dr-header-info">
           <div class="dr-title">⚔️ ${escHtml(session.title || t('confrontation.title'))}</div>
           <div class="dr-objective">${escHtml(session.initial_prompt || session.idea || session.objective || '')}</div>
+          ${renderSessionPresetUsedBanner(session, escHtml, t)}
           ${renderContextDocBadge()}
         </div>
         ${!state.confrontationRunning ? `<button class="btn btn-primary" data-action="run-confrontation">${t('confrontation.run')}</button>` : ''}

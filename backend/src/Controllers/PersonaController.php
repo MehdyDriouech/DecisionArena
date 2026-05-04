@@ -5,18 +5,22 @@ use Http\Request;
 use Http\Response;
 use Infrastructure\Markdown\MarkdownFileLoader;
 use Infrastructure\Persistence\PersonaModeRepository;
+use Infrastructure\Persistence\PersonaDecisionDynamicsRepository;
+use Infrastructure\Persistence\PersonaRepository;
 use Domain\Personas\PersonaDraftService;
 use Domain\Personas\PersonaFileWriter;
 
 class PersonaController {
     private MarkdownFileLoader $loader;
     private PersonaModeRepository $modeRepo;
+    private PersonaDecisionDynamicsRepository $personaDynamicsRepo;
     private string $storageDir;
 
     public function __construct() {
         $this->storageDir = __DIR__ . '/../../storage';
         $this->loader     = new MarkdownFileLoader($this->storageDir);
         $this->modeRepo   = new PersonaModeRepository();
+        $this->personaDynamicsRepo = new PersonaDecisionDynamicsRepository();
     }
 
     public function index(Request $req): array {
@@ -41,6 +45,10 @@ class PersonaController {
                 $persona['available_modes'] = $this->modeRepo->getDefault($id);
             }
         }
+        unset($persona);
+
+        $personaRepo = new PersonaRepository($this->personaDynamicsRepo);
+        $all = $personaRepo->enrichDecisionDynamics($all);
 
         return $all;
     }
@@ -62,6 +70,27 @@ class PersonaController {
         return ['success' => true, 'persona_id' => $personaId, 'modes' => $modes];
     }
 
+    public function saveDecisionDynamics(Request $req): array {
+        $data      = $req->body();
+        $personaId = isset($data['persona_id']) ? (string)$data['persona_id'] : '';
+        $dynamics  = $data['decision_dynamics'] ?? [];
+
+        if ($personaId === '') {
+            return Response::error('persona_id required', 400);
+        }
+        if (!is_array($dynamics)) {
+            return Response::error('decision_dynamics must be an object', 400);
+        }
+
+        $normalized = $this->personaDynamicsRepo->save($personaId, $dynamics);
+
+        return [
+            'success'            => true,
+            'persona_id'         => preg_replace('/[^a-z0-9\-]/', '', $personaId),
+            'decision_dynamics'  => $normalized,
+        ];
+    }
+
     public function show(Request $req): array {
         $id = $req->param('id');
         // Try standard first
@@ -73,7 +102,9 @@ class PersonaController {
         if (!$persona) {
             return Response::error('Persona not found', 404);
         }
-        return $persona;
+        $personaRepo = new PersonaRepository($this->personaDynamicsRepo);
+        $enriched    = $personaRepo->enrichDecisionDynamics([$persona]);
+        return $enriched[0] ?? $persona;
     }
 
     public function custom(Request $req): array {

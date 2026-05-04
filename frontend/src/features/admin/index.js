@@ -5,7 +5,7 @@
  *         logs, retrospective.
  */
 
-import { renderTooltip } from '../../ui/components.js';
+import { renderTooltip, renderDecisionDynamicsEditor } from '../../ui/components.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -236,6 +236,103 @@ function renderAdministration() {
   `;
 }
 
+/* ── Agent dynamics recommendations (post-mortem, suggestions only) ── */
+
+function dynamicsRecoDismissedSet() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('da_dynamics_reco_dismissed') || '[]');
+    return new Set(Array.isArray(raw) ? raw : []);
+  } catch (_) {
+    return new Set();
+  }
+}
+
+/** @param {object} reco */
+function formatDynamicsRecoMessageAdmin(reco, agentLabel, t) {
+  const key = reco.reason_key || '';
+  let msg = key && t(key) !== key ? t(key) : '';
+  if (!msg) msg = reco.reason || '';
+  const ra = reco.reason_args || {};
+  const deltaDisp = reco.suggestion === 'decrease_reputation'
+    ? String(Math.abs(Number(ra.delta ?? reco.reputation_delta ?? 0)))
+    : String(Number(ra.delta ?? reco.reputation_delta ?? 0));
+  return msg
+    .replace(/\{agent\}/g, agentLabel)
+    .replace(/\{count\}/g, String(ra.count ?? ''))
+    .replace(/\{delta\}/g, deltaDisp)
+    .replace(/\{mode\}/g, String(ra.mode ?? '–'));
+}
+
+function renderDynamicsRecoAdminPanel() {
+  const { state, escHtml, t, agentIcon, agentName } = getCtx();
+  const pkg = state.adminDynamicsReco;
+  const dismissed = dynamicsRecoDismissedSet();
+  const list = pkg?.suggestions;
+  const visible = Array.isArray(list) ? list.filter((r) => r.id && !dismissed.has(r.id)) : [];
+
+  let body = '';
+  if (!pkg) {
+    body = `
+      <p class="card-description" style="font-size:12px;margin:0 0 12px;line-height:1.45;">${escHtml(t('dynamicsReco.adminHelp'))}</p>
+      <button type="button" class="btn btn-secondary btn-sm" data-action="load-dynamics-reco-admin">${escHtml(t('dynamicsReco.loadButton'))}</button>`;
+  } else if (pkg.loading) {
+    body = `
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span class="spinner"></span>
+        <span style="font-size:13px;color:var(--text-muted);">${escHtml(t('learning.loading'))}</span>
+      </div>`;
+  } else if (pkg.error) {
+    body = `
+      <div class="error-banner" style="margin-bottom:10px;padding:10px 12px;font-size:12px;">${escHtml(pkg.error)}</div>
+      <button type="button" class="btn btn-secondary btn-sm" data-action="load-dynamics-reco-admin">${escHtml(t('dynamicsReco.loadButton'))}</button>`;
+  } else if (visible.length === 0) {
+    body = `
+      <div style="font-size:13px;color:var(--text-muted);">${escHtml(t('dynamicsReco.none'))}</div>
+      <button type="button" class="btn btn-secondary btn-sm" style="margin-top:10px;" data-action="load-dynamics-reco-admin">${escHtml(t('dynamicsReco.loadButton'))}</button>`;
+  } else {
+    body = visible.map((reco) => {
+      const aid = reco.agent_id || '';
+      const an = agentName(aid);
+      const text = formatDynamicsRecoMessageAdmin(reco, `${agentIcon(aid)} ${escHtml(an)}`, t);
+      const confPct = Math.round(Math.min(99, Math.max(35, Number(reco.confidence || 0) * 100)));
+      const sig = reco.suggestion === 'decrease_reputation' ? '−' : '+';
+      const rid = escHtml(reco.id);
+      const absDelta = Math.abs(Number(reco.reputation_delta ?? 0));
+      return `
+        <div style="padding:14px;background:var(--bg-secondary);border-radius:10px;margin-bottom:12px;border:1px solid var(--border);">
+          <div style="font-size:14px;line-height:1.5;color:var(--text-primary);">${text}</div>
+          <div style="margin-top:8px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <span class="badge badge-muted">${escHtml(t('dynamicsReco.confidence'))} ${confPct}%</span>
+            <span class="badge badge-warning" style="font-size:11px;">${sig}${escHtml(absDelta.toFixed(2))}</span>
+            <div style="margin-left:auto;display:flex;gap:8px;">
+              <button type="button" class="btn btn-primary btn-sm" data-action="apply-dynamics-reco-suggestion" data-suggestion-id="${rid}" data-source="admin">${escHtml(t('dynamicsReco.apply'))}</button>
+              <button type="button" class="btn btn-secondary btn-sm" data-action="dismiss-dynamics-reco-suggestion" data-suggestion-id="${rid}">${escHtml(t('dynamicsReco.ignore'))}</button>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  return `
+    <div class="card dynamics-reco-admin-card" style="padding:18px;margin-bottom:20px;background:rgba(99,102,241,0.04);border:1px solid rgba(99,102,241,0.2);">
+      <div style="font-weight:700;font-size:15px;margin-bottom:6px;">💡 ${escHtml(t('dynamicsReco.adminSection'))}</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;line-height:1.45;">${escHtml(pkg?.disclaimer || t('dynamicsReco.adminHelp'))}</div>
+      ${body}
+    </div>`;
+}
+
+function renderDecisionDynamicsPresetAdminReference() {
+  const { escHtml, t } = getCtx();
+  const items = ['balanced', 'conservative', 'aggressive', 'critical'].map((id) => `
+    <li style="margin-bottom:6px;"><strong>${escHtml(t(`dynamicsPreset.${id}`))}</strong> — ${escHtml(t(`dynamicsPreset.desc.${id}`))}</li>
+  `).join('');
+  return `
+    <div class="card dynamics-preset-admin-ref" style="padding:16px;margin-bottom:20px;font-size:12px;line-height:1.45;">
+      <div style="font-weight:700;margin-bottom:10px;">${escHtml(t('dynamicsPreset.adminReferenceTitle'))}</div>
+      <ul style="margin:0;padding-left:18px;color:var(--text-secondary);">${items}</ul>
+    </div>`;
+}
+
 /* ── Personas ── */
 
 function renderPersonas() {
@@ -250,13 +347,16 @@ function renderPersonas() {
       <div class="card-description" style="margin-top:6px;">${t('admin.personas.page.desc')}</div>
       <button class="btn btn-secondary btn-sm" style="margin-top:8px;" data-nav="administration">${t('nav.backAdmin')}</button>
     </div>
+    ${renderDynamicsRecoAdminPanel()}
+    ${renderDecisionDynamicsPresetAdminReference()}
     ${personas.length === 0 ? `<div class="loading-state"><span class="spinner"></span> ${t('personas.loading')}</div>` : `
       <div class="personas-grid">
         ${personas.map((p) => {
           const enabledModes = Array.isArray(p.available_modes) ? p.available_modes : allModes;
+          const pid = escHtml(p.id);
           return `
             <div class="persona-card persona-card-admin">
-              <div class="persona-card-top" data-action="show-persona" data-persona-id="${escHtml(p.id)}" style="cursor:pointer;">
+              <div class="persona-card-top" data-action="show-persona" data-persona-id="${pid}" style="cursor:pointer;">
                 <span class="persona-icon">${escHtml(p.icon || '🤖')}</span>
                 <div class="persona-name">${escHtml(p.name)}</div>
                 <div class="persona-title-text">${escHtml(p.title || '')}</div>
@@ -267,13 +367,16 @@ function renderPersonas() {
                 <div class="persona-modes-checks">
                   ${allModes.map((mode) => `
                     <label class="mode-check-label">
-                      <input type="checkbox" class="mode-checkbox" data-persona-id="${escHtml(p.id)}" data-mode="${escHtml(mode)}" ${enabledModes.includes(mode) ? 'checked' : ''} style="accent-color:var(--accent);">
+                      <input type="checkbox" class="mode-checkbox" data-persona-id="${pid}" data-mode="${escHtml(mode)}" ${enabledModes.includes(mode) ? 'checked' : ''} style="accent-color:var(--accent);">
                       <span>${modeLabels[mode]}</span>
                     </label>
                   `).join('')}
                 </div>
-                <button class="btn btn-secondary btn-sm" style="margin-top:8px;" data-action="save-persona-modes" data-persona-id="${escHtml(p.id)}">${t('personas.saveModes')}</button>
-                <span class="mode-save-status" id="mode-status-${escHtml(p.id)}"></span>
+                <button class="btn btn-secondary btn-sm" style="margin-top:8px;" data-action="save-persona-modes" data-persona-id="${pid}">${t('personas.saveModes')}</button>
+                <span class="mode-save-status" id="mode-status-${pid}"></span>
+              </div>
+              <div class="persona-dynamics-section" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+                ${renderDecisionDynamicsEditor(p, { uiComplexity: state.uiComplexity || 'advanced', escHtml, t })}
               </div>
             </div>
           `;
@@ -1346,16 +1449,20 @@ function renderScenarioPacks() {
 function renderRetrospective() {
   const { state, t, escHtml } = getCtx();
   const stats = state.postmortemStats;
-  const loading = state.postmortemStatsLoading;
+  const loading = !!state.postmortemStatsLoading;
+  const awaiting = !!state.postmortemStatsAwaiting;
   const loadErr = state.postmortemStatsError;
+  const fullscreenSpinner = loading && !stats;
+  const btnBusy = awaiting || loading;
 
-  const loadBtn = `<button type="button" class="btn btn-secondary btn-sm" data-action="load-postmortem-stats" ${loading ? 'disabled' : ''}>📊 ${loading ? '…' : t('postmortem.stats.load')}</button>`;
+  const loadBtn = `<button type="button" class="btn btn-secondary btn-sm" data-action="load-postmortem-stats" ${btnBusy ? 'disabled' : ''}>📊 ${btnBusy ? '…' : t('postmortem.stats.load')}</button>`;
 
   const errBlock = loadErr
     ? `<div class="error-banner" style="margin-bottom:12px;">⚠️ ${escHtml(t('postmortem.stats.loadError'))} <span style="opacity:0.85;font-size:12px;">${escHtml(loadErr)}</span></div>`
     : '';
 
-  if (!stats && !loadErr && !loading) {
+  // Aucune requête en cours : état initial (bouton uniquement)
+  if (!stats && !loadErr && !awaiting && !loading) {
     return `
       <div class="page-header">
         <div class="page-title">🔮 ${t('postmortem.stats.title')}</div>
@@ -1363,7 +1470,21 @@ function renderRetrospective() {
       <div class="card" style="padding:20px;text-align:center;">${loadBtn}</div>`;
   }
 
-  if (loading && !stats) {
+  // Phase calme (~220 ms max) : pas de spinner animé (évite le clignotement sur réponse ultra-rapide)
+  if (!stats && !loadErr && awaiting && !loading) {
+    return `
+      <div class="page-header">
+        <div class="page-title">🔮 ${t('postmortem.stats.title')}</div>
+      </div>
+      <div class="card" style="padding:20px;text-align:center;">
+        ${errBlock}
+        <div style="color:var(--text-muted);font-size:14px;line-height:1.45;max-width:400px;margin:0 auto;">${escHtml(t('postmortem.stats.loadingSoft'))}</div>
+        <div style="margin-top:14px;">${loadBtn}</div>
+      </div>`;
+  }
+
+  // Requête lente sans données encore : spinner + durée minimale gérée par le handler
+  if (fullscreenSpinner) {
     return `
       <div class="page-header">
         <div class="page-title">🔮 ${t('postmortem.stats.title')}</div>
@@ -1376,13 +1497,19 @@ function renderRetrospective() {
   }
 
   const total = Number(stats?.total ?? 0);
-  if (stats && total === 0 && !loading) {
+
+  const refreshingHint =
+    awaiting && !loading ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">${escHtml(t('postmortem.stats.refreshing'))}</div>` : '';
+
+  // Bilan présent mais 0 entrée API (après succès uniquement ou actualisation sans spinner plein écran)
+  if (stats && total === 0 && !loadErr && !fullscreenSpinner) {
     return `
       <div class="page-header">
         <div class="page-title">🔮 ${t('postmortem.stats.title')}</div>
       </div>
       <div class="card" style="padding:20px;">
         ${errBlock}
+        ${refreshingHint}
         <div style="color:var(--text-muted);font-size:13px;">${t('postmortem.stats.empty')}</div>
         <div style="color:var(--text-muted);font-size:12px;margin:10px 0;">${t('postmortem.stats.emptyHint')}</div>
         ${loadBtn}
@@ -1465,6 +1592,7 @@ function renderRetrospective() {
       <div class="page-title">🔮 ${t('postmortem.stats.title')}</div>
     </div>
     <div style="max-width:800px;">
+      ${refreshingHint}
       ${globalHtml}
       ${byModeHtml}
       ${byAgentHtml}

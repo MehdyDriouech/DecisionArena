@@ -2,6 +2,8 @@
  * New Session feature – view registration.
  */
 
+import { decisionDynamicsPresetOptionsHtml } from '../../utils/sessionDynamicsPresetUi.js';
+
 const FAST_DECISION_PRESET = {
   mode: 'decision-room', rounds: 2,
   agents: ['pm', 'architect', 'ux-expert', 'critic'],
@@ -121,8 +123,19 @@ function renderStarterCard(card, ns, { escHtml, t, agentIcon }) {
   const modeLabel = card.mode ? (modeLabels[card.mode] || card.mode) : '';
   const roundsPart = card.rounds != null ? `${t('template.rounds')}: ${card.rounds}` : '';
 
-  const titleHtml = escHtml(card.title);
-  const descHtml = card.description ? escHtml(card.description) : '';
+  const isSixHats = card.kind === 'template' && card.id === 'six-thinking-hats';
+  const displayTitle = isSixHats ? t('sixHats.shortTitle') : card.title;
+  const titleHtml = escHtml(displayTitle);
+  const descSource = isSixHats ? t('sixHats.starterSubtitle') : card.description;
+  const descHtml = descSource ? escHtml(descSource) : '';
+  const frameworkBadgeRow = isSixHats
+    ? `<div style="margin-top:8px;"><span class="badge badge-info" style="font-size:10px;text-transform:none;">${escHtml(t('sixHats.frameworkBadge'))}</span></div>`
+    : '';
+
+  const isPremortem = card.kind === 'template' && card.id === 'pre-mortem';
+  const premortemBadgeRow = isPremortem
+    ? `<div style="margin-top:8px;"><span class="badge badge-warning" style="font-size:10px;">${escHtml(t('premortem.badge'))}</span></div>`
+    : '';
 
   const profileLine = card.kind === 'scenario' && card.targetProfile
     ? `<div class="template-card-desc starter-card-profile">${escHtml(card.targetProfile)}</div>`
@@ -159,6 +172,8 @@ function renderStarterCard(card, ns, { escHtml, t, agentIcon }) {
         <span class="template-card-icon starter-icon">${icon}</span>
         <div style="flex:1;min-width:0;">
           <div class="template-card-name starter-title">${titleHtml}</div>
+          ${frameworkBadgeRow}
+          ${premortemBadgeRow}
           ${descHtml ? `<div class="template-card-desc starter-description">${descHtml}</div>` : ''}
           ${profileLine}
           ${flagLine}
@@ -415,6 +430,8 @@ function renderNewSession() {
           </div>
         </div>
 
+        ${decisionDynamicsPresetOptionsHtml(ns, escHtml, t, 'ns-dd-preset-select-basic')}
+
         <button class="btn btn-primary" data-action="launch-session" ${state.isLoading ? 'disabled' : ''}>
           ${state.isLoading ? '<span class="spinner"></span>' : ''}
           ${continueLabel}
@@ -450,6 +467,7 @@ function renderNewSession() {
           <button class="language-option ${ns.language === 'fr' ? 'active' : ''}" data-action="select-language" data-lang="fr">🇫🇷 Français</button>
         </div>
       </div>
+      ${decisionDynamicsPresetOptionsHtml(ns, escHtml, t, 'ns-dd-preset-select')}
       <div class="form-group">
         <label>${t('newSession.mode')} ${tip(t('tooltip.sessionMode'))}</label>
         <div class="mode-selector">

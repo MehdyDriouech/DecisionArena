@@ -3,6 +3,7 @@ namespace Controllers;
 
 use Domain\DecisionReliability\DecisionReliabilityService;
 use Domain\DecisionReliability\ReliabilityConfig;
+use Domain\Agents\DecisionDynamicsPreset;
 use Domain\Orchestration\DebateMemoryService;
 use Http\Request;
 use Http\Response;
@@ -16,6 +17,7 @@ use Infrastructure\Persistence\SessionAgentProvidersRepository;
 use Infrastructure\Persistence\SnapshotRepository;
 use Infrastructure\Persistence\DebateRepository;
 use Infrastructure\Persistence\JuryAdversarialReportRepository;
+use Infrastructure\Persistence\PersonaDecisionDynamicsRepository;
 use Domain\Orchestration\PromptBuilder;
 use Infrastructure\Persistence\VoteRepository;
 
@@ -89,8 +91,12 @@ class SessionController {
         // Prefer persisted reliability data (set during the live run) over re-computed values.
         // Old sessions without a result column fall back to the re-computed envelope.
         $persisted = null;
+        $premortemSummary = null;
         if (!empty($session['result'])) {
             $persisted = json_decode($session['result'], true);
+            if (is_array($persisted)) {
+                $premortemSummary = $persisted['premortem_summary'] ?? null;
+            }
         }
         $rawDecision      = $persisted['raw_decision']        ?? $reliability['raw_decision'];
         $adjustedDecision = $persisted['adjusted_decision']   ?? $reliability['adjusted_decision'];
@@ -109,6 +115,9 @@ class SessionController {
         if (($session['mode'] ?? '') === 'jury') {
             $juryAdversarial = $this->adversarialRepo->findBySession($id);
         }
+
+        $personaDynRepo            = new PersonaDecisionDynamicsRepository();
+        $agentDecisionDynamicsRows = $personaDynRepo->transparencyForSession($session, $votes);
 
         return [
             'session' => $session,
@@ -134,6 +143,8 @@ class SessionController {
             'decision_quality_score' => $qualityScore,
             'decision_brief' => $decisionBrief,
             'jury_adversarial' => $juryAdversarial,
+            'agent_decision_dynamics' => $agentDecisionDynamicsRows,
+            'premortem_summary'      => $premortemSummary,
         ];
     }
 
@@ -205,7 +216,22 @@ class SessionController {
             $this->agentProvidersRepo->saveForSession($id, $agentProviders);
         }
 
-        return $created;
+        $preset = DecisionDynamicsPreset::normalizeId($data['decision_dynamics_preset'] ?? DecisionDynamicsPreset::BALANCED);
+        try {
+            $this->sessionRepo->update($id, ['decision_dynamics_preset' => $preset]);
+        } catch (\Throwable $e) {
+            // Column may be missing on very old databases
+        }
+
+        $ff = $data['facilitation_framework'] ?? null;
+        if (is_string($ff) && $ff !== '' && preg_match('/^[a-z0-9_-]+$/', $ff)) {
+            try {
+                $this->sessionRepo->update($id, ['facilitation_framework' => $ff]);
+            } catch (\Throwable $e) {
+            }
+        }
+
+        return $this->sessionRepo->findById($id);
     }
 
     /**
