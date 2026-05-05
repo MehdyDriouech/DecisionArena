@@ -106,8 +106,7 @@ function renderDRAgentMessage(msg, isSynth = false, messageKey = '') {
 function renderExportButtons(sessionId) {
   const { state, escHtml, t } = getCtx();
   const snapStatus = state.snapshotStatus;
-  const uiC = state.uiComplexity || 'advanced';
-  const isExpert = uiC === 'expert';
+  const isExpert = state.uiMode === 'expert';
   return `
     <button class="btn btn-secondary btn-sm" data-action="save-snapshot" data-session-id="${escHtml(sessionId)}" title="${t('export.saveSnapshot')}">
       ${t('export.saveSnapshot')}
@@ -296,9 +295,7 @@ function renderReactiveChatPanel() {
   const intOpt  = (v, key) => `<option value="${v}" ${(rc.debateIntensity || 'medium') === v ? 'selected' : ''}>${t(key)}</option>`;
   const styOpt  = (v, key) => `<option value="${v}" ${(rc.reactionStyle || 'critical') === v ? 'selected' : ''}>${t(key)}</option>`;
 
-  const uiC = state.uiComplexity || 'advanced';
-  const isBasic  = uiC === 'basic';
-  const isExpert = uiC === 'expert';
+  const isExpert = state.uiMode === 'expert';
 
   const presetsHtml = `
     <div style="margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -308,7 +305,7 @@ function renderReactiveChatPanel() {
       <button class="btn btn-secondary btn-sm" style="font-size:11px;" data-action="apply-reactive-preset" data-preset="intense">${t('reactive.preset.intense')}</button>
     </div>`;
 
-  const advancedParamsHtml = isBasic ? '' : `
+  const advancedParamsHtml = !isExpert ? '' : `
         <div class="reactive-chat-option">
           <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">${t('chat.reactive.turnsMin')} (${rc.turnsMin || 2})</label>
           <input type="range" class="input" min="1" max="10" value="${rc.turnsMin || 2}" style="padding:4px 0;" data-action="set-reactive-turns-min">
@@ -475,7 +472,7 @@ function renderChat() {
       ${isPremortemChat ? renderPremortemInvertedBanner(t, escHtml) : ''}
       ${renderDecisionBrief(brief, {
         sessionId: session.id,
-        uiComplexity: state.uiComplexity || 'advanced',
+        uiMode: state.uiMode,
       })}
       ${renderPremortemStructuredCard(premortemSummary, t, escHtml)}
 

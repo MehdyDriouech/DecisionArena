@@ -1,4 +1,5 @@
 import { apiFetch } from './apiClient.js';
+import { withProviderRuntime } from '../core/providerRuntime.js';
 
 const PersonaService = {
   list() {
@@ -13,13 +14,13 @@ const PersonaService = {
   make(payload) {
     return apiFetch('/api/personas/make', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify(withProviderRuntime(payload)),
     });
   },
   buildDraft(payload) {
     return apiFetch('/api/personas/build-draft', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify(withProviderRuntime(payload)),
     });
   },
   updateModes(payload) {

@@ -1,4 +1,5 @@
 import { registerAction } from '../../core/events.js';
+import { withProviderRuntime } from '../../core/providerRuntime.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -83,23 +84,25 @@ function registerJuryHandlers() {
       const minorityReporter = adversarialCfg.minority_reporter_agent_id || null;
       const result = await apiFetch('/api/jury/run', {
         method: 'POST',
-        body: JSON.stringify({
-          session_id:         session.id,
-          objective:          session.initial_prompt || session.idea || session.title || '',
-          selected_agents:    session.selected_agents || [],
-          rounds:             session.rounds || 3,
-          force_disagreement: session.force_disagreement ?? true,
-          decision_threshold: session.decision_threshold ?? 0.55,
-          // Adversarial config — defaults match backend normalizeAdversarialConfig()
-          jury_adversarial_enabled:              adversarialCfg.jury_adversarial_enabled !== false,
-          min_challenges_per_round:              adversarialCfg.min_challenges_per_round ?? 2,
-          force_agent_references:                adversarialCfg.force_agent_references !== false,
-          require_minority_report:               adversarialCfg.require_minority_report !== false,
-          block_weak_debate_decision:            adversarialCfg.block_weak_debate_decision !== false,
-          debate_quality_min_score:              adversarialCfg.debate_quality_min_score ?? 50,
-          false_consensus_blocks_confident_decision: adversarialCfg.false_consensus_blocks_confident_decision !== false,
-          ...(minorityReporter ? { minority_reporter_agent_id: minorityReporter } : {}),
-        }),
+        body: JSON.stringify(
+          withProviderRuntime({
+            session_id: session.id,
+            objective: session.initial_prompt || session.idea || session.title || '',
+            selected_agents: session.selected_agents || [],
+            rounds: session.rounds || 3,
+            force_disagreement: session.force_disagreement ?? true,
+            decision_threshold: session.decision_threshold ?? 0.55,
+            jury_adversarial_enabled: adversarialCfg.jury_adversarial_enabled !== false,
+            min_challenges_per_round: adversarialCfg.min_challenges_per_round ?? 2,
+            force_agent_references: adversarialCfg.force_agent_references !== false,
+            require_minority_report: adversarialCfg.require_minority_report !== false,
+            block_weak_debate_decision: adversarialCfg.block_weak_debate_decision !== false,
+            debate_quality_min_score: adversarialCfg.debate_quality_min_score ?? 50,
+            false_consensus_blocks_confident_decision:
+              adversarialCfg.false_consensus_blocks_confident_decision !== false,
+            ...(minorityReporter ? { minority_reporter_agent_id: minorityReporter } : {}),
+          })
+        ),
       });
       state.juryResults = result;
     } catch (err) {
@@ -132,22 +135,23 @@ function registerJuryHandlers() {
       const currentRounds = Math.min(5, (session.rounds || 3) + 1);
       const result = await apiFetch('/api/jury/run', {
         method: 'POST',
-        body: JSON.stringify({
-          session_id:         session.id,
-          objective:          session.initial_prompt || session.idea || session.title || '',
-          selected_agents:    session.selected_agents || [],
-          rounds:             currentRounds,
-          force_disagreement: true,
-          decision_threshold: session.decision_threshold ?? 0.55,
-          // Maximally adversarial settings
-          jury_adversarial_enabled:              true,
-          min_challenges_per_round:              3,
-          force_agent_references:                true,
-          require_minority_report:               true,
-          block_weak_debate_decision:            true,
-          debate_quality_min_score:              50,
-          false_consensus_blocks_confident_decision: true,
-        }),
+        body: JSON.stringify(
+          withProviderRuntime({
+            session_id: session.id,
+            objective: session.initial_prompt || session.idea || session.title || '',
+            selected_agents: session.selected_agents || [],
+            rounds: currentRounds,
+            force_disagreement: true,
+            decision_threshold: session.decision_threshold ?? 0.55,
+            jury_adversarial_enabled: true,
+            min_challenges_per_round: 3,
+            force_agent_references: true,
+            require_minority_report: true,
+            block_weak_debate_decision: true,
+            debate_quality_min_score: 50,
+            false_consensus_blocks_confident_decision: true,
+          })
+        ),
       });
       state.juryResults = result;
     } catch (err) {

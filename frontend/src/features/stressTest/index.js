@@ -66,8 +66,8 @@ function renderStressTestResults(results) {
   const briefHtml = renderDecisionBrief(results.decision_brief || null, {
     sessionId,
     agentDecisionDynamics: results.agent_decision_dynamics,
-    uiComplexity: state.uiComplexity || 'advanced',
-  }) + renderTradeoffSection(results.decision_brief || null, { uiComplexity: state.uiComplexity || 'advanced', tradeoffUid: sessionId });
+    uiMode: state.uiMode,
+  }) + renderTradeoffSection(results.decision_brief || null, { uiMode: state.uiMode, tradeoffUid: sessionId });
   const debateHtml = `<details id="debate-section-${sessionId}" data-section="debate-details" ${state.showDebateDetails ? 'open' : ''} style="margin:0 0 16px;"><summary class="btn btn-secondary btn-sm">Voir le debat complet</summary><div style="margin-top:12px;">${roundsHtml}</div></details>`;
 
   return briefHtml + renderPremortemStructuredCard(results.premortem_summary || null, t, escHtml) + dynamicsHtml + debateHtml + insightsHtml + voteHtml + reliabilityHtml + verdictHtml

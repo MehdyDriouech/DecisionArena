@@ -55,9 +55,9 @@ class ProviderRouter {
             $requestedModel      = !empty($sessionAgentOverride['model']) ? trim($sessionAgentOverride['model']) : null;
 
             try {
-                $providerData = $this->providerRepo->findById($requestedProviderId);
-                if (!$providerData || (int)($providerData['enabled'] ?? 0) !== 1) {
-                    throw new \RuntimeException('Override provider not enabled or not found: ' . $requestedProviderId);
+                $providerData = $this->resolveProviderRow($requestedProviderId);
+                if (!$providerData) {
+                    throw new \RuntimeException('Override provider not eligible or not found: ' . $requestedProviderId);
                 }
                 $model = $this->resolveModel($requestedModel ?? $explicitModel, $agent, $providerData);
                 $provider = ProviderFactory::create($providerData);
@@ -123,8 +123,8 @@ class ProviderRouter {
 
         // 2. Explicit provider selection (no routing settings)
         if ($explicitProviderId && !$fallbackReason) {
-            $providerData = $this->providerRepo->findById($explicitProviderId);
-            if (!$providerData || (int)($providerData['enabled'] ?? 0) !== 1) {
+            $providerData = $this->resolveProviderRow($explicitProviderId);
+            if (!$providerData) {
                 throw new \RuntimeException('Selected provider is not enabled or does not exist.');
             }
             $model = $this->resolveModel($explicitModel, $agent, $providerData);
@@ -191,7 +191,7 @@ class ProviderRouter {
         $routingMode = (string)($settings['routing_mode'] ?? 'single-primary');
         $candidates = $this->buildCandidateProviders($routingMode, $settings, $agent);
         if (empty($candidates)) {
-            throw new \RuntimeException('No provider configured. Please add a provider in Settings.');
+            throw new \RuntimeException('No eligible LLM provider. Configure a local server (base URL) or send provider_runtime with a cloud key for this request.');
         }
 
         $lastErr = null;
@@ -295,9 +295,56 @@ class ProviderRouter {
         return $model;
     }
 
+    private function resolveProviderRow(string $id): ?array {
+        $id = trim($id);
+        if ($id === '') {
+            return null;
+        }
+        $p = $this->providerRepo->findById($id);
+        if ($p && $this->providerRepo->rowIsRoutingEligible($p)) {
+            return $p;
+        }
+        foreach (CommercialRuntimeContext::getRows() as $row) {
+            if ((string)($row['id'] ?? '') === $id) {
+                return $row;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Fournisseurs DB éligibles + stubs commerciaux (requête courante, provider_runtime).
+     */
+    private function getMergedRoutingCandidates(): array {
+        $db = $this->providerRepo->findRoutingEligibleOrdered();
+        $commercial = CommercialRuntimeContext::getRows();
+        $byId = [];
+        foreach ($db as $p) {
+            $byId[(string)$p['id']] = $p;
+        }
+        foreach ($commercial as $p) {
+            $cid = (string)($p['id'] ?? '');
+            if ($cid !== '' && !isset($byId[$cid])) {
+                $byId[$cid] = $p;
+            }
+        }
+        $merged = array_values($byId);
+        usort($merged, function ($a, $b) {
+            $pa = (int)($a['priority'] ?? 100);
+            $pb = (int)($b['priority'] ?? 100);
+            if ($pa !== $pb) {
+                return $pa <=> $pb;
+            }
+            return strcmp((string)($a['id'] ?? ''), (string)($b['id'] ?? ''));
+        });
+        return $merged;
+    }
+
     private function buildCandidateProviders(string $routingMode, array $settings, ?Agent $agent): array {
-        $enabled = $this->providerRepo->findEnabledOrdered();
-        if (empty($enabled)) return [];
+        $enabled = $this->getMergedRoutingCandidates();
+        if (empty($enabled)) {
+            return [];
+        }
 
         $byId = [];
         foreach ($enabled as $p) {
@@ -334,8 +381,11 @@ class ProviderRouter {
 
         if ($routingMode === 'agent-default') {
             $agentProviderId = $agent?->providerId ? trim((string)$agent->providerId) : '';
-            if ($agentProviderId !== '' && isset($byId[$agentProviderId])) {
-                return [$byId[$agentProviderId]];
+            if ($agentProviderId !== '') {
+                $resolved = $this->resolveProviderRow($agentProviderId);
+                if ($resolved) {
+                    return [$resolved];
+                }
             }
             // Missing agent default -> fallback to primary behavior
             $routingMode = 'single-primary';

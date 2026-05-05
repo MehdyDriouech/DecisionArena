@@ -43,6 +43,9 @@ class VerdictParser {
         if (preg_match('/##\s*Recommended Action\s*\n+(.*?)(?=\n##|\z)/is', $content, $mr)) {
             $action = trim($mr[1]);
         }
+        // Ne pas persister les blocs ```json collés par le LLM (affichage + exports).
+        $action = preg_replace('/```(?:json)?\s*[\s\S]*?```/', '', $action);
+        $action = trim(preg_replace("/\n{3,}/", "\n\n", $action));
 
         return array_merge([
             'verdict_label'      => $label,

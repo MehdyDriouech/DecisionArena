@@ -1,6 +1,33 @@
 :root {
   --font-family-base: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   --color-dissent: #dc2626;
+
+  /* spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* font-size scale */
+  --text-xs:   11px;
+  --text-sm:   12px;
+  --text-base: 13px;
+  --text-md:   14px;
+  --text-lg:   16px;
+  --text-xl:   20px;
+
+  /* radius */
+  --radius-sm:   4px;
+  --radius-full: 9999px;
+
+  /* z-index scale */
+  --z-dropdown: 100;
+  --z-overlay:  150;
+  --z-tooltip:  200;
+  --z-modal:    300;
 }
 
 /* ── Devil's Advocate message card ── */
@@ -140,13 +167,13 @@
   padding-top: 4px;
 }
 
-/* ── uiComplexity body attribute overrides ── */
+/* ── Legacy uiComplexity body attribute overrides ── */
 /* Elements hidden in basic mode */
-[data-ui-complexity="basic"] [data-ui-min="advanced"],
-[data-ui-complexity="basic"] [data-ui-min="expert"] {
+body[data-ui-complexity="basic"] [data-ui-min="advanced"],
+body[data-ui-complexity="basic"] [data-ui-min="expert"] {
   display: none !important;
 }
 /* Elements hidden in advanced mode */
-[data-ui-complexity="advanced"] [data-ui-min="expert"] {
+body[data-ui-complexity="advanced"] [data-ui-min="expert"] {
   display: none !important;
 }

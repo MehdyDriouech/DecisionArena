@@ -200,3 +200,36 @@
   font-weight: 700;
   line-height: 1.1;
 }
+
+/* ── Admin Providers: Provider Routing (align width with Serveurs techniques) ── */
+.admin-provider-routing {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}
+
+.admin-provider-routing-card {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+  padding: 18px;
+}
+
+.admin-provider-routing-card select.input,
+.admin-provider-routing-card select {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.admin-provider-routing-card .form-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.admin-provider-routing-card .form-row .form-group {
+  flex: 1;
+  min-width: 0;
+}

@@ -18,6 +18,7 @@ use Infrastructure\Persistence\ConfidenceTimelineRepository;
 use Infrastructure\Persistence\PersonaScoreRepository;
 use Infrastructure\Persistence\BiasReportRepository;
 use Infrastructure\Persistence\EvidenceRepository;
+use Infrastructure\Persistence\JuryAdversarialReportRepository;
 use Infrastructure\Persistence\RiskProfileRepository;
 use Infrastructure\Persistence\SessionAgentProvidersRepository;
 use Domain\Orchestration\DebateMemoryService;

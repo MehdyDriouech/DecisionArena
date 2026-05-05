@@ -23,6 +23,53 @@ class ProviderRepository {
         return $stmt->fetchAll(\PDO::FETCH_ASSOC);
     }
 
+    /**
+     * Règles alignées avec le client : activé, base URL si requis, clé si openai-compatible, priorité bornée.
+     */
+    public function rowIsRoutingEligible(array $p): bool {
+        if ((int)($p['enabled'] ?? 0) !== 1) {
+            return false;
+        }
+        $type = strtolower((string)($p['type'] ?? ''));
+        $base = trim((string)($p['base_url'] ?? ''));
+        $key = trim((string)($p['api_key'] ?? ''));
+        if ($type === 'ollama') {
+            return $base !== '';
+        }
+        if ($type === 'lmstudio') {
+            return $base !== '';
+        }
+        if ($type === 'openai-compatible') {
+            return $base !== '' && $key !== '';
+        }
+        return false;
+    }
+
+    /** @return list<array<string,mixed>> */
+    public function findRoutingEligibleOrdered(): array {
+        $all = $this->findAll();
+        $out = [];
+        foreach ($all as $p) {
+            if (!$this->rowIsRoutingEligible($p)) {
+                continue;
+            }
+            $prio = (int)($p['priority'] ?? 100);
+            if ($prio < 0 || $prio > 1000000) {
+                continue;
+            }
+            $out[] = $p;
+        }
+        usort($out, function ($a, $b) {
+            $pa = (int)($a['priority'] ?? 100);
+            $pb = (int)($b['priority'] ?? 100);
+            if ($pa !== $pb) {
+                return $pa <=> $pb;
+            }
+            return strcmp((string)($a['id'] ?? ''), (string)($b['id'] ?? ''));
+        });
+        return $out;
+    }
+
     public function findById(string $id): ?array {
         $stmt = $this->pdo->prepare('SELECT * FROM providers WHERE id = ?');
         $stmt->execute([$id]);

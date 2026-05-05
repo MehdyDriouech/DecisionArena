@@ -1,6 +1,27 @@
 /* New Session feature — action handlers, change listeners */
 import { registerAction, registerChangeListener, registerInputListener, dispatchAction } from '../../core/events.js';
 import { API_BASE } from '../../services/apiClient.js';
+import { getAvailableProviders } from '../../core/providerRouting.js';
+
+const SIMPLE_INTENT_PRESETS = {
+  explore: {
+    label: 'Explorer',
+    mode: 'chat',
+    rounds: 1,
+  },
+  decide: {
+    label: 'Décider',
+    mode: 'quick-decision',
+    rounds: 2,
+  },
+  test: {
+    label: 'Tester',
+    mode: 'stress-test',
+    rounds: 3,
+  },
+};
+
+const SIMPLE_DEFAULT_AGENTS = ['pm', 'architect', 'ux-expert', 'critic'];
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -16,7 +37,7 @@ function getCtx() {
 
 function resetNewSessionState() {
   return {
-    title: '', idea: '', mode: 'chat', selectedAgents: [], rounds: 3,
+    title: '', idea: '', mode: 'chat', simpleIntent: 'decide', selectedAgents: [], rounds: 3,
     language: 'fr',
     blueTeam: ['pm', 'architect', 'po', 'ux-expert'],
     redTeam: ['analyst', 'critic'],
@@ -43,6 +64,46 @@ function resetNewSessionState() {
 }
 
 let _contextCheckTimer = null;
+
+function _availableSimpleAgents(state) {
+  const existing = new Set((state.personas || []).map((p) => p.id));
+  const preferred = SIMPLE_DEFAULT_AGENTS.filter((id) => existing.size === 0 || existing.has(id));
+  if (preferred.length > 0) return preferred;
+  return (state.personas || []).slice(0, 4).map((p) => p.id).filter(Boolean);
+}
+
+function _applySimpleIntentPreset(state, intent) {
+  const preset = SIMPLE_INTENT_PRESETS[intent];
+  if (!preset) return false;
+  state.newSession = {
+    ...state.newSession,
+    simpleIntent: intent,
+    mode: preset.mode,
+    rounds: preset.rounds,
+    fastDecisionEnabled: false,
+    selectedStarter: null,
+    selectedScenarioId: null,
+    selectedTemplateId: null,
+    selectedAgents: _availableSimpleAgents(state),
+    forceDisagreement: intent !== 'explore',
+  };
+  return true;
+}
+
+function _applySimpleLaunchDefaults(state, ns) {
+  const intent = SIMPLE_INTENT_PRESETS[ns.simpleIntent] ? ns.simpleIntent : 'decide';
+  const preset = SIMPLE_INTENT_PRESETS[intent];
+  ns.simpleIntent = intent;
+  ns.mode = preset.mode;
+  ns.rounds = preset.rounds;
+  ns.fastDecisionEnabled = false;
+  ns.llmAssignmentMode = 'global';
+  ns.agentProviders = {};
+  ns.teamProviderAssignments = { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } };
+  ns.selectedAgents = ns.selectedAgents?.length ? ns.selectedAgents : _availableSimpleAgents(state);
+  if (ns.mode === 'stress-test') ns.forceDisagreement = true;
+  if (ns.mode === 'quick-decision') ns.forceDisagreement = true;
+}
 
 function _debouncedContextCheck(text, state) {
   clearTimeout(_contextCheckTimer);
@@ -91,38 +152,20 @@ function registerNewSessionHandlers() {
     render();
   });
 
-  registerAction('select-session-intent', ({ event, element }) => {
+  registerAction('set-simple-intent', ({ event, element }) => {
     const intent = event?.target?.closest('[data-intent]')?.dataset?.intent || element?.dataset?.intent;
     if (!intent) return;
-    const modeByIntent = {
-      explore: 'chat',
-      decide: 'quick-decision',
-      test: 'stress-test',
-    };
     const DA = window.DecisionArena;
-    DA.store.state.newSession = {
-      ...DA.store.state.newSession,
-      intent,
-      mode: modeByIntent[intent] || 'quick-decision',
-      selectedStarter: null,
-      selectedScenarioId: null,
-    };
+    _applySimpleIntentPreset(DA.store.state, intent);
     DA.render?.();
   });
 
-  // Backward-compatible alias for already-rendered templates.
-  registerAction('ns-set-basic-intent', ({ event, element }) => {
+  // Backward-compatible aliases for already-rendered templates.
+  registerAction('select-session-intent', ({ event, element }) => {
     const intent = event?.target?.closest('[data-intent]')?.dataset?.intent || element?.dataset?.intent;
     if (!intent) return;
-    const DA = window.DecisionArena;
-    DA.store.state.newSession = {
-      ...DA.store.state.newSession,
-      intent,
-      mode: intent === 'explore' ? 'chat' : intent === 'test' ? 'stress-test' : 'quick-decision',
-      selectedStarter: null,
-      selectedScenarioId: null,
-    };
-    DA.render?.();
+    _applySimpleIntentPreset(window.DecisionArena.store.state, intent);
+    window.DecisionArena.render?.();
   });
 
   registerAction('goto-new-session', ({ element }) => {
@@ -210,37 +253,28 @@ function registerNewSessionHandlers() {
       return;
     }
 
-    // Mode affichage Simple (sidebar) : préremplir les champs avancés masqués pour éviter les erreurs de validation.
+    // Mode Simple: prefill hidden advanced fields so launch never depends on expert controls.
     const isSimpleDisplay = state.uiMode !== 'expert';
     const starterLocksConfig = Boolean(
       ns.selectedScenarioId
       || (ns.selectedStarter && (ns.selectedStarter.type === 'template' || ns.selectedStarter.type === 'scenario')),
     );
     if (isSimpleDisplay && !starterLocksConfig) {
-      if (ns.mode === 'quick-decision' || ns.mode === 'decision-room') {
-        ns.mode = 'quick-decision';
-        ns.selectedAgents = ['pm', 'architect', 'ux-expert', 'critic'];
-        ns.rounds = 1;
-        ns.forceDisagreement = true;
-        ns.fastDecisionEnabled = false;
-      } else if (ns.mode === 'stress-test' || ns.mode === 'confrontation') {
-        ns.mode = 'stress-test';
-        ns.selectedAgents = ['pm', 'architect', 'critic', 'analyst'];
-        ns.rounds = Math.max(2, ns.rounds || 2);
-        ns.forceDisagreement = true;
-        ns.fastDecisionEnabled = false;
-      } else {
-        ns.mode = 'chat';
-        ns.selectedAgents = ns.selectedAgents?.length ? ns.selectedAgents : ['pm', 'architect'];
-        ns.rounds = 2;
-        ns.fastDecisionEnabled = false;
-      }
+      _applySimpleLaunchDefaults(state, ns);
+    } else if (isSimpleDisplay && ns.selectedAgents.length === 0 && ns.mode !== 'confrontation') {
+      ns.selectedAgents = _availableSimpleAgents(state);
     }
 
     const isFastMode = ns.mode === 'decision-room' && ns.fastDecisionEnabled !== false;
     if (!ns.title.trim()) {
       state.error = 'Veuillez saisir un titre de session.';
       render(); return;
+    }
+    if (getAvailableProviders(state).length === 0) {
+      state.error =
+        'Aucun fournisseur LLM disponible. Configurez un serveur local (URL renseignée) ou un fournisseur cloud avec clé API dans Administration → Providers.';
+      render();
+      return;
     }
     if (ns.mode === 'confrontation') {
       if (ns.blueTeam.length === 0 || ns.redTeam.length === 0) {
@@ -269,7 +303,7 @@ function registerNewSessionHandlers() {
         mode:            ns.mode,
         selected_agents: allAgents,
         rounds: ns.mode === 'decision-room' ? ns.rounds
-              : ns.mode === 'quick-decision' ? 1
+              : ns.mode === 'quick-decision' ? (isSimpleDisplay ? ns.rounds : 1)
               : ns.mode === 'stress-test'    ? ns.rounds
               : ns.mode === 'jury'           ? ns.rounds
               : undefined,

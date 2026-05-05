@@ -12,6 +12,12 @@ const FAST_DECISION_PRESET = {
   debate_intensity: 'high', include_final_synthesis: true,
 };
 
+const SIMPLE_INTENT_PRESETS = {
+  explore: { mode: 'chat', rounds: 1 },
+  decide: { mode: 'quick-decision', rounds: 2 },
+  test: { mode: 'stress-test', rounds: 3 },
+};
+
 function renderFastDecisionBadge() {
   const t = (key) => window.i18n?.t(key) ?? key;
   return `
@@ -96,7 +102,7 @@ function buildStarterCards(state) {
   return out;
 }
 
-function renderStarterCard(card, ns, { escHtml, t, agentIcon }) {
+function renderStarterCard(card, ns, { escHtml, t, agentIcon, isSimple }) {
   const modeIcons = {
     chat: '💬', 'decision-room': '🏛️', confrontation: '⚔️', 'quick-decision': '⚡', 'stress-test': '🔥', jury: '⚖️',
   };
@@ -141,19 +147,19 @@ function renderStarterCard(card, ns, { escHtml, t, agentIcon }) {
     ? `<div class="template-card-desc starter-card-profile">${escHtml(card.targetProfile)}</div>`
     : '';
 
-  const flagLine = card.forceDisagreement
+  const flagLine = !isSimple && card.forceDisagreement
     ? `<div class="template-card-flag">⚠ ${t('template.forceDisagreement')}</div>`
     : '';
 
-  const warnLine = card.largeWarning
+  const warnLine = !isSimple && card.largeWarning
     ? `<div class="template-card-flag starter-card-warn">⚠️ ${t('scenario.warningLarge')}</div>`
     : '';
 
-  const agentsRow = card.agents?.length
+  const agentsRow = !isSimple && card.agents?.length
     ? `<div class="template-card-agents starter-agents">${card.agents.slice(0, 8).map((id) => `<span class="agent-badge" style="font-size:11px;">${agentIcon(id)}</span>`).join('')}</div>`
     : '';
 
-  const metaInner = `
+  const metaInner = isSimple ? '' : `
       <span class="badge badge-default">${escHtml(modeLabel)}</span>
       ${roundsPart ? `<span class="starter-meta-rounds">${escHtml(roundsPart)}</span>` : ''}
     `;
@@ -180,7 +186,7 @@ function renderStarterCard(card, ns, { escHtml, t, agentIcon }) {
           ${warnLine}
         </div>
       </div>
-      <div class="template-card-meta starter-meta">${metaInner}</div>
+      ${metaInner ? `<div class="template-card-meta starter-meta">${metaInner}</div>` : ''}
       ${agentsRow}
       <div class="template-card-hint starter-use-hint" aria-hidden="true">${t('starter.use')}</div>
     </div>`;
@@ -189,10 +195,14 @@ function renderStarterCard(card, ns, { escHtml, t, agentIcon }) {
 function renderStarterModelsSection() {
   const { state, escHtml, t } = getCtx();
   const ns = state.newSession;
-  const collapsed = !!ns.starterModelsCollapsed;
+  const isSimple = state.uiMode !== 'expert';
+  const collapsed = !isSimple && !!ns.starterModelsCollapsed;
   const agentIcon = (id) => window.DecisionArena.utils.agentIcon(state.personas, id);
   const cards = buildStarterCards(state);
-  const html = cards.map((c) => renderStarterCard(c, ns, { escHtml, t, agentIcon })).join('');
+  const visibleCards = isSimple
+    ? cards.filter((c) => ['chat', 'quick-decision', 'stress-test', 'decision-room'].includes(c.mode || ''))
+    : cards;
+  const html = visibleCards.map((c) => renderStarterCard(c, ns, { escHtml, t, agentIcon, isSimple })).join('');
   const appliedHint = (ns.selectedStarter || ns.selectedScenarioId) ? `
       <div class="starter-applied-hint" style="margin-top:10px;font-size:12px;color:var(--success,#10b981);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
         ✅ ${t('scenario.applied')}
@@ -210,9 +220,11 @@ function renderStarterModelsSection() {
           </div>
           ${collapsed ? '' : `<div class="card-description starter-section-subtitle">${t('starter.section.subtitle')}</div>`}
         </div>
-        <button type="button" class="btn btn-secondary btn-sm starter-toggle-models-btn" data-action="toggle-starter-models" aria-expanded="${!collapsed}">
-          ${collapsed ? t('starter.toggle.show') : t('starter.toggle.hide')}
-        </button>
+        ${isSimple ? '' : `
+          <button type="button" class="btn btn-secondary btn-sm starter-toggle-models-btn" data-action="toggle-starter-models" aria-expanded="${!collapsed}">
+            ${collapsed ? t('starter.toggle.show') : t('starter.toggle.hide')}
+          </button>
+        `}
       </div>
       ${collapsed ? '' : `<div class="starter-models-body"><div class="starter-grid">${html}</div></div>`}
       ${appliedHint}
@@ -291,7 +303,7 @@ function renderContextDocumentSection() {
 function renderNewSession() {
   const { state, escHtml, t, tip } = getCtx();
   const ns = state.newSession;
-  /** Simple vs Expert (sidebar AFFICHAGE) — pas uiComplexity */
+  /** Simple vs Expert (sidebar AFFICHAGE) */
   const isSimpleDisplay = state.uiMode !== 'expert';
   const personas = state.personas.filter((p) => {
     const modes = Array.isArray(p.available_modes) ? p.available_modes : ['chat', 'decision-room', 'confrontation'];
@@ -325,7 +337,7 @@ function renderNewSession() {
           <div class="form-group">
             <label for="cf-rounds">${t('confrontation.rounds')} (${ns.cfRounds}) ${tip(t('tooltip.rounds'))}</label>
             <input class="input" id="cf-rounds" type="range" min="1" max="15" value="${ns.cfRounds}" data-cf-field="cfRounds" style="padding:6px 0;">
-            <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-top:2px;"><span>1</span><span>5</span><span>10</span><span>15</span></div>
+            <div class="range-scale"><span>1</span><span>5</span><span>10</span><span>15</span></div>
           </div>
         </div>
         <div class="form-group">
@@ -376,67 +388,68 @@ function renderNewSession() {
 
   const isFastDecision = ns.mode === 'decision-room' && ns.fastDecisionEnabled !== false;
   if (isSimpleDisplay) {
-    const basicIntent = (ns.mode === 'quick-decision' || ns.mode === 'decision-room')
-      ? 'decide'
-      : (ns.mode === 'stress-test' || ns.mode === 'confrontation')
-        ? 'test'
-        : 'explore';
+    const simpleIntent = ns.simpleIntent || (
+      (ns.mode === 'quick-decision' || ns.mode === 'decision-room')
+        ? 'decide'
+        : (ns.mode === 'stress-test' || ns.mode === 'confrontation')
+          ? 'test'
+          : 'explore'
+    );
+    const intentButton = (intent) => `
+      <button type="button" class="simple-intent-card ${simpleIntent === intent ? 'active' : ''}" data-action="set-simple-intent" data-intent="${intent}" aria-pressed="${simpleIntent === intent}">
+        <span class="simple-intent-title">${escHtml(t(`newSession.intent.${intent}`))}</span>
+        <span class="simple-intent-desc">${escHtml(t(`newSession.intent.${intent}.desc`))}</span>
+      </button>
+    `;
 
     return `
-      <div class="page-header">
-        <div class="page-title">${t('newSession.title')}</div>
-        <div class="page-subtitle">${t('newSession.subtitle')}</div>
-      </div>
+      <section class="simple-new-session">
+        <header class="simple-new-session-header">
+          <h1>${escHtml(t('newSession.simple.title'))}</h1>
+          <p>${escHtml(t('newSession.simple.subtitle'))}</p>
+        </header>
 
-      ${forkBannerHtml}
+        ${forkBannerHtml}
 
-      ${renderStarterModelsSection()}
+        ${renderStarterModelsSection()}
 
-      <div class="card" id="new-session-form-card" style="max-width:1100px;width:100%;">
-        <div class="form-group">
-          <label for="ns-title-basic">Question</label>
-          <input class="input" id="ns-title-basic" type="text" placeholder="${t('newSession.titlePlaceholder')}" value="${escHtml(ns.title)}" data-field="title">
-        </div>
+        <div class="card simple-new-session-card" id="new-session-form-card">
+          <div class="simple-form-grid">
+            <div class="form-group">
+              <label for="ns-title-simple">${escHtml(t('newSession.question.label'))}</label>
+              <input class="input" id="ns-title-simple" type="text" placeholder="${escHtml(t('newSession.question.placeholder'))}" value="${escHtml(ns.title)}" data-field="title">
+            </div>
 
-        <div class="form-group">
-          <label for="ns-idea-basic">Description</label>
-          <textarea class="textarea" id="ns-idea-basic" placeholder="${t('newSession.ideaPlaceholder')}" style="min-height:120px;" data-field="idea">${escHtml(ns.idea)}</textarea>
-          <div id="context-hint-banner-container">${renderContextHintBanner(ns.contextHintQuestions || null)}</div>
-        </div>
+            <div class="form-group">
+              <label for="ns-idea-simple">${escHtml(t('newSession.context.label'))}</label>
+              <textarea class="textarea" id="ns-idea-simple" placeholder="${escHtml(t('newSession.context.placeholder'))}" data-field="idea">${escHtml(ns.idea)}</textarea>
+              <div id="context-hint-banner-container">${renderContextHintBanner(ns.contextHintQuestions || null)}</div>
+            </div>
 
-        <div class="form-group">
-          <label>Intention</label>
-          <div class="mode-selector" style="grid-template-columns:1fr 1fr 1fr;">
-            <label class="mode-option ${basicIntent === 'explore' ? 'selected' : ''}" data-action="select-session-intent" data-intent="explore">
-              <input type="radio" name="ns-basic-intent" ${basicIntent === 'explore' ? 'checked' : ''} style="pointer-events:none;">
-              <div><div class="mode-option-label">Explorer</div></div>
-            </label>
-            <label class="mode-option ${basicIntent === 'decide' ? 'selected' : ''}" data-action="select-session-intent" data-intent="decide">
-              <input type="radio" name="ns-basic-intent" ${basicIntent === 'decide' ? 'checked' : ''} style="pointer-events:none;">
-              <div><div class="mode-option-label">Décider</div></div>
-            </label>
-            <label class="mode-option ${basicIntent === 'test' ? 'selected' : ''}" data-action="select-session-intent" data-intent="test">
-              <input type="radio" name="ns-basic-intent" ${basicIntent === 'test' ? 'checked' : ''} style="pointer-events:none;">
-              <div><div class="mode-option-label">Tester</div></div>
-            </label>
+            <div class="form-group">
+              <label>${escHtml(t('newSession.intent.label'))}</label>
+              <div class="simple-intent-grid">
+                ${Object.keys(SIMPLE_INTENT_PRESETS).map(intentButton).join('')}
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>${t('newSession.responseLanguage')}</label>
+              <div class="language-selector">
+                <button type="button" class="language-option ${ns.language === 'en' ? 'active' : ''}" data-action="select-language" data-lang="en">English</button>
+                <button type="button" class="language-option ${ns.language === 'fr' ? 'active' : ''}" data-action="select-language" data-lang="fr">Français</button>
+              </div>
+            </div>
+
+            <div class="simple-submit-row">
+              <button class="btn btn-primary btn-lg" data-action="launch-session" ${state.isLoading ? 'disabled' : ''}>
+                ${state.isLoading ? '<span class="spinner"></span>' : ''}
+                ${escHtml(ns.isFork ? t('hitl.forkContinue') : t('newSession.launchAnalysis'))}
+              </button>
+            </div>
           </div>
         </div>
-
-        <div class="form-group">
-          <label>${t('newSession.responseLanguage')}</label>
-          <div class="language-selector">
-            <button class="language-option ${ns.language === 'en' ? 'active' : ''}" data-action="select-language" data-lang="en">🇬🇧 English</button>
-            <button class="language-option ${ns.language === 'fr' ? 'active' : ''}" data-action="select-language" data-lang="fr">🇫🇷 Français</button>
-          </div>
-        </div>
-
-        ${decisionDynamicsPresetOptionsHtml(ns, escHtml, t, 'ns-dd-preset-select-basic')}
-
-        <button class="btn btn-primary" data-action="launch-session" ${state.isLoading ? 'disabled' : ''}>
-          ${state.isLoading ? '<span class="spinner"></span>' : ''}
-          ${continueLabel}
-        </button>
-      </div>
+      </section>
     `;
   }
 
@@ -501,7 +514,7 @@ function renderNewSession() {
         <div class="form-group" id="rounds-field">
           <label for="ns-rounds">${ns.mode === 'jury' ? t('jury.rounds') : t('newSession.rounds')} (${ns.rounds}) ${tip(t('tooltip.rounds'))}</label>
           <input class="input" id="ns-rounds" type="range" min="1" max="5" value="${ns.rounds}" data-field="rounds" style="padding:6px 0;">
-          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-top:2px;"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span></div>
+          <div class="range-scale"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span></div>
         </div>
       ` : ''}
 
@@ -519,7 +532,7 @@ function renderNewSession() {
         <div class="form-group" data-ui="expert-only">
           <label for="ns-da-threshold">${t('devil.advocate.threshold')}: <strong id="ns-da-threshold-val">${Math.round((ns.devilAdvocateThreshold || 0.65) * 100)}%</strong></label>
           <input class="input" id="ns-da-threshold" type="range" min="0.50" max="0.90" step="0.05" value="${ns.devilAdvocateThreshold || 0.65}" data-action="change-da-threshold" style="padding:6px 0;">
-          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-top:2px;"><span>50%</span><span>65%</span><span>80%</span><span>90%</span></div>
+          <div class="range-scale"><span>50%</span><span>65%</span><span>80%</span><span>90%</span></div>
         </div>` : ''}
 
         <div data-ui="expert-only">
@@ -533,7 +546,7 @@ function renderNewSession() {
         <div class="form-group" style="margin-top:16px;">
           <label for="jury-threshold">${t('vote.consensusThreshold')}: <strong id="jury-threshold-val">${((ns.juryThreshold || 0.55) * 100).toFixed(0)}%</strong> ${tip(t('tooltip.threshold'))}</label>
           <input class="input" id="jury-threshold" type="range" min="0.50" max="0.80" step="0.01" value="${ns.juryThreshold || 0.55}" data-field="juryThreshold" style="padding:6px 0;">
-          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted);margin-top:2px;"><span>50%</span><span>55%</span><span>65%</span><span>70%</span><span>80%</span></div>
+          <div class="range-scale"><span>50%</span><span>55%</span><span>65%</span><span>70%</span><span>80%</span></div>
           <div class="card-description">${t('vote.consensusThresholdDesc')}</div>
         </div>
         </div>

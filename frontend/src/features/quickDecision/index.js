@@ -57,9 +57,9 @@ function renderQuickDecision() {
           ${renderDecisionBrief(results.decision_brief || null, {
             sessionId: session.id,
             agentDecisionDynamics: results.agent_decision_dynamics,
-            uiComplexity: state.uiComplexity || 'advanced',
+            uiMode: state.uiMode,
           })}
-          ${renderTradeoffSection(results.decision_brief || null, { uiComplexity: state.uiComplexity || 'advanced', tradeoffUid: session.id })}
+          ${renderTradeoffSection(results.decision_brief || null, { uiMode: state.uiMode, tradeoffUid: session.id })}
           ${renderPremortemStructuredCard(results.premortem_summary || null, t, escHtml)}
           ${renderDecisionDynamicsSummary(results.agent_decision_dynamics || [], {
             escHtml, agentName, t, session, votes: results.votes || [],

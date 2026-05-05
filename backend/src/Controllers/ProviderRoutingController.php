@@ -10,6 +10,8 @@ class ProviderRoutingController {
     private ProviderRoutingSettingsRepository $settingsRepo;
     private ProviderRepository $providerRepo;
 
+    private const COMMERCIAL_IDS = ['openai', 'anthropic', 'mistral', 'openrouter'];
+
     public function __construct() {
         $this->settingsRepo = new ProviderRoutingSettingsRepository();
         $this->providerRepo = new ProviderRepository();
@@ -73,9 +75,11 @@ class ProviderRoutingController {
     }
 
     private function isEnabledProviderId(string $id): bool {
+        if (in_array($id, self::COMMERCIAL_IDS, true)) {
+            return true;
+        }
         $p = $this->providerRepo->findById($id);
         if (!$p) return false;
-        return (int)($p['enabled'] ?? 0) === 1;
+        return $this->providerRepo->rowIsRoutingEligible($p);
     }
 }
-

@@ -5,6 +5,107 @@ import {
 } from '../utils/decisionDynamics.js';
 import { dynamicsPresetDisplayLabel } from '../utils/sessionDynamicsPresetUi.js';
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function attrsToHtml(attrs = {}) {
+  return Object.entries(attrs)
+    .filter(([, v]) => v !== null && v !== undefined && v !== false)
+    .map(([k, v]) => v === true ? escapeHtml(k) : `${escapeHtml(k)}="${escapeHtml(String(v))}"`)
+    .join(' ');
+}
+
+function renderCard({ bodyHtml = '', footerHtml = '', className = '', id = '', attrs = {} } = {}) {
+  const idAttr = id ? ` id="${escapeHtml(id)}"` : '';
+  const extra = attrsToHtml(attrs);
+  const cls = ['card', className].filter(Boolean).join(' ');
+  return `<div class="${escapeHtml(cls)}"${idAttr}${extra ? ' ' + extra : ''}>${bodyHtml}${footerHtml}</div>`;
+}
+
+function renderSectionHeader({ title = '', subtitle = '', className = '', id = '' } = {}) {
+  const idAttr = id ? ` id="${escapeHtml(id)}"` : '';
+  const cls = ['section-header', className].filter(Boolean).join(' ');
+  const sub = subtitle ? `<p class="card-description">${escapeHtml(subtitle)}</p>` : '';
+  return `<div class="${escapeHtml(cls)}"${idAttr}><h3>${escapeHtml(title)}</h3>${sub}</div>`;
+}
+
+function renderEmptyState({ icon = '', text = '', actionsHtml = '' } = {}) {
+  const iconHtml = icon ? `<div class="empty-state-icon">${escapeHtml(icon)}</div>` : '';
+  return `<div class="empty-state">${iconHtml}<div class="empty-state-text">${escapeHtml(text)}</div>${actionsHtml}</div>`;
+}
+
+function renderBadge({ text = '', variant = 'default', attrs = {} } = {}) {
+  const extra = attrsToHtml(attrs);
+  return `<span class="badge badge-${escapeHtml(variant)}"${extra ? ' ' + extra : ''}>${escapeHtml(text)}</span>`;
+}
+
+function renderAlert({ text = '', bodyHtml = '', variant = 'info' } = {}) {
+  const content = bodyHtml || escapeHtml(text);
+  return `<div class="alert alert-${escapeHtml(variant)}">${content}</div>`;
+}
+
+function renderActionBar({ actionsHtml = '', className = '' } = {}) {
+  const cls = ['action-bar', className].filter(Boolean).join(' ');
+  return `<div class="${escapeHtml(cls)}">${actionsHtml}</div>`;
+}
+
+function renderAdvancedPanel({ bodyHtml = '', title = '', className = '' } = {}) {
+  const cls = ['advanced-panel', className].filter(Boolean).join(' ');
+  const titleHtml = title ? `<div class="advanced-panel-title">${escapeHtml(title)}</div>` : '';
+  return `<div class="${escapeHtml(cls)}" data-ui="expert-only">${titleHtml}${bodyHtml}</div>`;
+}
+
+/**
+ * Modal minimal pour Connecter / Modifier la clé BYOK (clés locales navigateur uniquement).
+ */
+function renderByokProviderConnectModal() {
+  return `
+<dialog id="provider-byok-modal" class="provider-byok-modal" aria-labelledby="provider-byok-modal-title">
+  <div class="provider-byok-modal-panel card">
+    <div class="provider-byok-modal-head">
+      <h3 id="provider-byok-modal-title" class="provider-byok-modal-title"></h3>
+      <button type="button" class="provider-byok-modal-close" data-action="close-provider-modal" aria-label="Fermer">×</button>
+    </div>
+    <p class="card-description provider-byok-modal-lead">La clé est enregistrée dans ce navigateur. Une vérification silencieuse est lancée à l’enregistrement.</p>
+    <div class="form-group">
+      <label for="byok-modal-api-key">Clé API</label>
+      <input id="byok-modal-api-key" type="password" class="input"
+        autocomplete="off" autocapitalize="off" spellcheck="false"
+        data-action="provider-key-input" data-provider="" />
+    </div>
+    <details class="byok-modal-advanced" data-ui="expert-only">
+      <summary class="byok-modal-advanced-summary">Avancé</summary>
+      <div data-ui="expert-only" style="margin-top:10px;">
+        <div class="form-group">
+          <label for="byok-modal-priority">Priorité</label>
+          <input id="byok-modal-priority" type="number" step="1" min="0" class="input" value="100" autocomplete="off" data-provider="" />
+        </div>
+        <div class="form-group">
+          <label for="byok-modal-default-model">Modèle par défaut</label>
+          <input id="byok-modal-default-model" type="text" class="input" placeholder="" autocomplete="off" data-provider="" />
+        </div>
+        <div class="form-group">
+          <label for="byok-modal-base-url">Base URL</label>
+          <input id="byok-modal-base-url" type="text" class="input byok-base-url-input" autocomplete="off" data-provider="" />
+        </div>
+      </div>
+    </details>
+    <div class="byok-modal-feedback provider-test-result" hidden role="status" aria-live="polite" data-feedback-slot="modal"></div>
+    <div class="provider-byok-modal-actions">
+      <button type="button" class="btn btn-danger btn-sm" id="byok-modal-disconnect" data-action="delete-provider-key" data-provider="" hidden>Déconnecter</button>
+      <button type="button" class="btn btn-secondary btn-sm" data-action="close-provider-modal">Annuler</button>
+      <button type="button" class="btn btn-primary btn-sm" data-action="save-provider-key">Connecter</button>
+    </div>
+  </div>
+</dialog>`;
+}
+
 function createErrorBanner(message, clearLabel = 'Clear') {
   if (!message) return '';
   return `
@@ -38,6 +139,17 @@ function renderTooltip(tooltip) {
   // Escape quotes for attribute safety
   const safe = tooltip.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   return `<span class="info-tooltip" data-tooltip="${safe}" aria-label="${safe}">?</span>`;
+}
+
+function normalizeComponentUiMode(value) {
+  if (value === 'expert' || value === 'advanced') return 'expert';
+  if (value === 'simple' || value === 'basic') return 'simple';
+  return 'simple';
+}
+
+function resolveUiMode(opts = {}) {
+  const state = window.DecisionArena?.store?.state || {};
+  return normalizeComponentUiMode(opts.uiMode ?? state.uiMode);
 }
 
 function renderPanelRecommendBadge(panelType, highlights, t) {
@@ -111,98 +223,81 @@ function renderPremortemStructuredCard(summary, t, escHtml) {
     </div>`;
 }
 
-/**
- * Decision-first summary card, safe for missing fields.
- * @param {{ decision?: string, confidence?: string|number, why?: string[]|string, risks?: string[]|string, next_step?: string, primary_warning?: string, quality_score?: number, reliability?: string }} data
- * @param {{ sessionId?: string, agentDecisionDynamics?: array, uiComplexity?: string }} opts
- */
-function renderDecisionBrief(data, opts = {}) {
-  if (!data || typeof data !== 'object') return '';
-  const d = data || {};
-  const hasCore = Boolean(d.decision || d.confidence || d.next_step || d.primary_warning || d.quality_score != null);
-  const whyList = Array.isArray(d.why) ? d.why.filter(Boolean) : (d.why ? [String(d.why)] : []);
-  const riskList = Array.isArray(d.risks) ? d.risks.filter(Boolean) : (d.risks ? [String(d.risks)] : []);
-  if (!hasCore && whyList.length === 0 && riskList.length === 0) return '';
+function formatDecisionBriefConfidence(value) {
+  if (value === null || value === undefined || value === '') return 'N/A';
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const pct = value >= 0 && value <= 1 ? Math.round(value * 100) : Math.round(value);
+    return `${pct}%`;
+  }
+  const raw = String(value).trim();
+  if (!raw) return 'N/A';
+  if (raw.includes('%')) return raw;
+  const numeric = Number(raw);
+  if (Number.isFinite(numeric)) {
+    const pct = numeric >= 0 && numeric <= 1 ? Math.round(numeric * 100) : Math.round(numeric);
+    return `${pct}%`;
+  }
+  return raw;
+}
 
+function cleanDecisionBriefText(value) {
+  return String(value ?? '')
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Decision-first brief, safe for missing fields.
+ * @param {{ decision?: string, confidence?: string|number, why?: string[]|string, risks?: string[]|string, nextStep?: string, next_step?: string }} data
+ */
+function renderDecisionBrief(data) {
+  const d = data && typeof data === 'object' ? data : {};
   const escHtml = window.DecisionArena?.utils?.escHtml || ((v) => String(v ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;'));
-  const t = (key) => window.i18n?.t(key) ?? key;
 
-  const colorMap = {
-    GO_CONFIDENT: '#15803d', GO_FRAGILE: '#854d0e',
-    NO_GO_CONFIDENT: '#991b1b', NO_GO_FRAGILE: '#92400e',
-    ITERATE_CONFIDENT: '#92400e', ITERATE_FRAGILE: '#78350f',
-    NO_CONSENSUS: '#7f1d1d', NO_CONSENSUS_FRAGILE: '#7f1d1d',
-    INSUFFICIENT_CONTEXT: '#374151',
-  };
-  const outcome = `${String(d.decision || '').toUpperCase()}_${String(d.reliability || '').toUpperCase()}`;
-  const bgColor = colorMap[outcome] || colorMap[String(d.decision || '').toUpperCase()] || '#374151';
-  const sessionId = opts.sessionId || '';
-  const hasSessionActions = Boolean(sessionId);
-  const uiComplexity = opts.uiComplexity ?? window.DecisionArena?.store?.state?.uiComplexity ?? 'advanced';
-  const loadingPm = Boolean(sessionId && window.DecisionArena?.store?.state?.premortemLaunchSessionId === sessionId);
-
-  const confidenceLabel = d.confidence != null ? String(d.confidence) : '—';
-  const scoreLabel = d.quality_score != null ? `${d.quality_score}/100` : '—';
-
-  const dynSrc = Array.isArray(opts.agentDecisionDynamics)
-    ? opts.agentDecisionDynamics
-    : (Array.isArray(d.agent_dynamics_summary) ? d.agent_dynamics_summary : null);
-  const showDynWeightedHint = Array.isArray(dynSrc) && dynSrc.some((row) => {
-    const rep = Number(row?.reputation ?? row?.dynamics?.reputation ?? 1);
-    return Number.isFinite(rep) && Math.abs(rep - 1.0) > 0.0005;
-  });
-
-  const showPmPrimary = hasSessionActions && shouldShowPremortemPrimaryCTA(d);
-  const showPmAdvancedFallback = hasSessionActions && !showPmPrimary && hasCore && (uiComplexity === 'advanced' || uiComplexity === 'expert');
-
-  const premRow = (() => {
-    if (!hasSessionActions) return '';
-    const parts = [];
-    if (showPmPrimary) {
-      parts.push(
-        `<button type="button" class="btn btn-primary btn-sm premortem-cta-main" data-action="launch-premortem" data-session-id="${escHtml(sessionId)}" ${loadingPm ? 'disabled' : ''}>🔮 ${escHtml(t('premortem.cta'))}</button>`,
-        `<span class="dynamics-muted" style="font-size:11px;max-width:320px;display:inline-block;margin-left:6px;line-height:1.4;vertical-align:middle;">${escHtml(t('premortem.desc'))}</span>`,
-      );
-    }
-    if (showPmAdvancedFallback) {
-      parts.push(
-        `<button type="button" class="btn btn-secondary btn-sm premortem-cta-fallback" style="margin-top:${showPmPrimary ? '8px' : '0'};" data-action="launch-premortem" data-session-id="${escHtml(sessionId)}" ${loadingPm ? 'disabled' : ''}>${escHtml(t('premortem.ctaAdvanced'))}</button>`,
-      );
-    }
-    if (parts.length === 0) return '';
-    return `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:100%;margin-top:4px;padding-top:8px;border-top:1px solid var(--border-color, var(--border));">${parts.join('')}</div>`;
-  })();
+  const decision = d.decision ? cleanDecisionBriefText(d.decision) : 'Non d\u00e9termin\u00e9e';
+  const confidence = formatDecisionBriefConfidence(d.confidence);
+  const whyList = (Array.isArray(d.why) ? d.why : (d.why ? [d.why] : []))
+    .map(cleanDecisionBriefText)
+    .filter(Boolean);
+  const riskList = (Array.isArray(d.risks) ? d.risks : (d.risks ? [d.risks] : []))
+    .map(cleanDecisionBriefText)
+    .filter(Boolean);
+  const why = whyList.length ? whyList.join(' ') : 'Aucune synth\u00e8se disponible.';
+  const nextStep = cleanDecisionBriefText(d.nextStep || d.next_step) || 'Approfondir l\u2019analyse';
+  const risksHtml = riskList.length
+    ? riskList.map((risk) => `<li>${escHtml(risk)}</li>`).join('')
+    : '<li>Aucun risque disponible dans les donn&eacute;es actuelles.</li>';
 
   return `
-<div class="decision-brief-card" style="margin-bottom:16px;">
-  <div class="brief-header" style="background:${bgColor}">
-    <span class="brief-decision">${escHtml(d.decision || 'Decision')}</span>
-    <span class="brief-meta">${escHtml(String(d.reliability || ''))} · ${escHtml(confidenceLabel)} · ${t('brief.score')}: ${escHtml(scoreLabel)}</span>
+<div class="decision-brief">
+  <div class="decision-header">
+    <div class="decision-label">D&eacute;cision</div>
+    <div class="decision-value">${escHtml(decision)}</div>
   </div>
-  <div class="brief-body">
-    ${whyList.length ? `<p><strong>${t('brief.why')}:</strong> ${whyList.map((w) => `<span>${escHtml(w)}</span>`).join(' ')}</p>` : ''}
-    ${riskList.length ? `<p><strong>${t('brief.risks')}:</strong> ${riskList.map((r) => `<span>${escHtml(r)}</span>`).join(' ')}</p>` : ''}
-    ${d.next_step ? `<p><strong>${t('brief.next_step')}:</strong> ${escHtml(d.next_step)}</p>` : ''}
-    ${d.primary_warning ? `<div class="brief-warning">⚠ ${escHtml(d.primary_warning)}</div>` : ''}
-    ${showDynWeightedHint ? `<div class="brief-dynamics-hint dynamics-muted">${escHtml(t('session.dynamics.warningWeightedVotes'))}</div>` : ''}
+
+  <div class="decision-meta">
+    <span class="confidence">Confiance : ${escHtml(confidence)}</span>
   </div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap;padding:0 14px 14px;">
-    ${hasSessionActions ? `<button class="btn btn-secondary btn-sm" data-action="show-debate-details">${escHtml(t('brief.viewDebateBtn'))}</button>` : ''}
-    <details>
-      <summary class="btn btn-secondary btn-sm" style="list-style:none;">${escHtml(t('brief.viewDetailsToggle'))}</summary>
-      <div style="margin-top:8px;font-size:12px;color:var(--text-secondary);">
-        <div><strong>Decision:</strong> ${escHtml(d.decision || '—')}</div>
-        <div><strong>${escHtml(t('brief.detailConfidence'))}</strong> ${escHtml(confidenceLabel)}</div>
-        <div><strong>${escHtml(t('brief.detailQuality'))}</strong> ${escHtml(scoreLabel)}</div>
-      </div>
-    </details>
-    ${hasSessionActions ? `<button class="btn btn-secondary btn-sm" data-action="rerun-with-contradiction" data-session-id="${escHtml(sessionId)}">${escHtml(t('brief.rerunContradiction'))}</button>` : ''}
-    ${premRow}
+
+  <div class="decision-why">
+    <strong>Pourquoi :</strong>
+    <p>${escHtml(why)}</p>
+  </div>
+
+  <div class="decision-risks">
+    <strong>Risques :</strong>
+    <ul>${risksHtml}</ul>
+  </div>
+
+  <div class="decision-next">
+    <strong>Prochaine &eacute;tape :</strong>
+    <p>${escHtml(nextStep)}</p>
   </div>
 </div>`;
 }
@@ -341,7 +436,7 @@ function renderTradeoffPaneInner(criteria, isAdv, t, escHtml) {
 /**
  * Matrice de compromis + radar ; comparaison d’options si `tradeoffs.options` présent.
  * @param {object|null} decisionBrief
- * @param {{ uiComplexity?: string, tradeoffUid?: string }} opts
+ * @param {{ uiMode?: string, tradeoffUid?: string }} opts
  */
 function renderTradeoffSection(decisionBrief, opts = {}) {
   const bundle = pickTradeoffs(decisionBrief);
@@ -354,9 +449,9 @@ function renderTradeoffSection(decisionBrief, opts = {}) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;'));
   const t = (key) => window.i18n?.t(key) ?? key;
-  const uiComplexity = opts.uiComplexity ?? window.DecisionArena?.store?.state?.uiComplexity ?? 'advanced';
-  const isAdv = uiComplexity === 'advanced' || uiComplexity === 'expert';
-  const expanded = uiComplexity !== 'basic';
+  const uiMode = resolveUiMode(opts);
+  const isAdv = uiMode === 'expert';
+  const expanded = uiMode === 'expert';
 
   let uid = opts.tradeoffUid ?? (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID().slice(0, 12) : `to_${Date.now().toString(36)}`);
   uid = String(uid).replace(/[^a-zA-Z0-9_-]/g, '') || `to_${Date.now().toString(36)}`;
@@ -427,14 +522,14 @@ function renderTradeoffSection(decisionBrief, opts = {}) {
 }
 
 /**
- * Panneau admin : édition des dynamiques (ouverts en Advanced / Expert ; résumé simple en Basic).
+ * Panneau admin : édition des dynamiques (ouvert en Expert ; résumé simple sinon).
  * @param {{ id: string, decision_dynamics?: object }} persona
- * @param {{ escHtml?: function, t?: function, uiComplexity?: string }} opts
+ * @param {{ escHtml?: function, t?: function, uiMode?: string }} opts
  */
 function renderDecisionDynamicsEditor(persona, opts = {}) {
   const escHtml = opts.escHtml ?? window.DecisionArena?.utils?.escHtml ?? ((s) => String(s ?? ''));
   const t = opts.t ?? ((k) => window.i18n?.t(k) ?? k);
-  const uiComplexity = opts.uiComplexity ?? window.DecisionArena?.store?.state?.uiComplexity ?? 'advanced';
+  const uiMode = resolveUiMode(opts);
   if (!persona?.id) return '';
   const pidEsc = escHtml(persona.id);
   const norm = normalizeDecisionDynamics(persona.decision_dynamics);
@@ -455,7 +550,7 @@ function renderDecisionDynamicsEditor(persona, opts = {}) {
     return `<option value="${val}"${selected}>${escHtml(label)}</option>`;
   }).join('');
 
-  if (uiComplexity === 'basic') {
+  if (uiMode !== 'expert') {
     const line = [
       `${t('admin.dynamics.reputation')}: ×${norm.reputation.toFixed(1)}`,
       `${t('admin.dynamics.consensusResistance')}: ${t(`admin.dynamics.consensus.${norm.consensus_resistance}`)}`,
@@ -466,7 +561,7 @@ function renderDecisionDynamicsEditor(persona, opts = {}) {
   }
 
   return `
-<section class="decision-dynamics-panel" data-complexity="advanced">
+<section class="decision-dynamics-panel" data-ui="expert-only">
   <div class="section-header">
     <h3>${escHtml(t('admin.dynamics.title'))}</h3>
     <p class="card-description">${escHtml(t('admin.dynamics.desc'))}</p>
@@ -554,7 +649,7 @@ function renderDecisionDynamicsSummary(agentRows, opts = {}) {
   </div>`;
 
   const wrapDynamicsSection = (bodyInner) => `
-<section class="decision-dynamics-summary card debate-card" data-complexity="advanced" style="margin:16px 0 20px;">
+<section class="decision-dynamics-summary card debate-card" data-ui="expert-only" style="margin:16px 0 20px;">
   ${headerHtml}
   <div class="dynamics-summary-list" style="padding:12px 18px 18px;">${bodyInner}</div>
 </section>`;
@@ -606,6 +701,16 @@ function renderDecisionDynamicsSummary(agentRows, opts = {}) {
 }
 
 export {
+  escapeHtml,
+  attrsToHtml,
+  renderCard,
+  renderSectionHeader,
+  renderEmptyState,
+  renderBadge,
+  renderAlert,
+  renderActionBar,
+  renderAdvancedPanel,
+  renderByokProviderConnectModal,
   createErrorBanner,
   mountHtml,
   renderCardDescription,

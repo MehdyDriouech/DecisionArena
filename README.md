@@ -80,6 +80,12 @@ Cette version consolide Decision Arena autour d'un flux plus guidé, plus audita
 - **Scenario packs, templates et builders** : parcours guidés, templates de session, création de personas custom et génération assistée côté admin.
 - **Learning, post-mortem et prompt policies** : suivi des performances agents/modes, calibration, export learning et édition encadrée de certaines politiques de prompts.
 - **UI modulaire FR/EN** : interface par features ES modules, niveaux `basic / advanced / expert`, sidebar de navigation et traductions embarquées.
+- **Bring your own key (BYOK)** : section **Administration → Providers — Bring your own API key** pour enregistrer localement dans le navigateur (`localStorage` / clé `providerSettings`) les clés **OpenAI, Anthropic, Mistral AI, OpenRouter** ; affichage masqué, activation, sauvegarde/suppression, test via `POST /api/providers/models` (proxy PHP, pas d’appel direct navigateur → cloud). Les clés ne sont pas préremplies en clair dans le DOM.
+- **Exports session** : prise en charge du rapport **qualité adversariale du jury** dans les exports enrichis ; correctif d’import `JuryAdversarialReportRepository` dans `ExportController`.
+- **Navigation** : suppression du bouton redondant « Analyser en 1 clic » sur le tableau de bord ; retrait de l’entrée **Sessions** et de **Nouvelle session** dans la sidebar — accès à la liste via **Tableau de bord → Voir tout** ; nouvelle analyse via **Configurer une analyse** sur le tableau de bord (`goto-new-session`).
+- **Administration** : hub regroupé par intention (Setup, Build, Run & Analyze, Avancé), fusion **Templates + scénarios** dans une même vue, hub simple épuré (cartes compactes), sections réservées au mode Expert via `data-ui="expert-only"`.
+- **Quick Decision — réouverture** : une session **Décision rapide** déjà exécutée (`completed`) rouvre l’UI avec **résultats rehydratés** (messages `quick-decision`, votes, brief, fiabilité, verdict) à partir de `GET /api/sessions/{id}` et `GET /api/sessions/{id}/verdict`, au lieu d’un écran vide invitant à relancer sans raison.
+- **Verdict — action recommandée** : si le modèle insère du JSON ou des *tradeoffs* dans *Recommended Action* (souvent après du texte ou dans un bloc de code Markdown), l’interface **isole le texte** et affiche une **matrice de compromis** lisible ; côté backend, `VerdictParser` **retire les blocs de code** avant persistance pour les nouveaux verdicts.
 
 ---
 
@@ -131,9 +137,9 @@ Puis ouvrez `frontend/index.html` dans votre navigateur.
 ## Démarrage
 
 1. Ouvrez l'application dans votre navigateur
-2. Allez dans **Administration → Providers** et ajoutez votre provider LLM
-3. Cliquez **Fetch models** pour auto-découvrir les modèles disponibles
-4. Créez votre première session via **Nouvelle session** (templates, **scenario packs** ou formulaire libre)
+2. Allez dans **Administration → Providers** : créez vos **providers LLM** serveur (Ollama, LM Studio, OpenAI-compatible, etc.) comme d’habitude ; en option, renseignez la section **Bring your own API key** (clés cloud locales au navigateur — visible aussi en mode simple pour la partie principale)
+3. Cliquez **Fetch models** sur un provider configuré côté serveur pour auto-découvrir les modèles
+4. Créez votre première session depuis le **tableau de bord** (bouton **Configurer une analyse**), avec templates, **scenario packs** ou formulaire libre.
 
 ---
 
@@ -183,6 +189,12 @@ Le backend supporte plusieurs stratégies de sélection du provider, configurabl
 
 > ⚠️ Deux providers locaux ne peuvent pas partager la même `base_url`. Cochez la case **local** pour Ollama / LM Studio.
 
+### Bring your own API key (BYOK)
+
+Sous **Administration → Providers**, la section *Bring your own API key* permet de stocker **dans le navigateur** (pas en SQLite) jusqu’à quatre profils : **OpenAI**, **Anthropic**, **Mistral AI**, **OpenRouter**. Chaque carte propose : saisie de clé (masquée), activation, sauvegarde, test, suppression ; la **Base URL** reste réservée au **mode Expert** UI (`data-ui="expert-only"`). Les clés ne sont jamais préremplies en clair ; l’aperçu utilise un masque (`••••••••` + quatre derniers caractères). Persistance : **`localStorage`** / clé **`providerSettings`**. Le test appelle **`POST /api/providers/models`** avec le type `openai-compatible` (le serveur PHP relaie la requête vers l’URL configurée).
+
+Les providers **BYOK** sont une couche **préparatoire** distincte des enregistrements SQLite : le **ProviderRouter** et les sessions continuent d’utiliser les providers serveur tant qu’un branchement explicite au BYOK n’est pas prévu.
+
 ---
 
 ## Modes d'analyse
@@ -219,7 +231,9 @@ Débat structuré entre une **Blue Team** (défense) et une **Red Team** (attaqu
 
 ### Quick Decision
 
-Analyse rapide (1 tour) + verdict immédiat.
+Analyse rapide (1 tour d’analyse agents + synthèse) + verdict, votes et brief décisionnel persistés en base.
+
+À la **réouverture** d’une session terminée depuis le tableau de bord, l’app reconstruit l’état d’affichage (`qdResults`) à partir des données API ; le panneau *Verdict* formate l’**action recommandée** (texte + compromis structurés si le modèle a renvoyé du JSON).
 
 > Idéal pour : arbitrage rapide, première évaluation.
 
@@ -418,7 +432,7 @@ Génération automatique d'un plan d'action depuis la synthèse, enrichissable m
 
 ### Exports
 
-- **Markdown** et **JSON** : messages, verdict, votes, contexte, routing LLM, **brief décisionnel**, **score qualité**, **guardrails**, **auto-retry**
+- **Markdown** et **JSON** : messages, verdict, votes, contexte, routing LLM, **brief décisionnel**, **score qualité**, **guardrails**, **auto-retry** ; lorsque des données existent, section **qualité adversariale du jury** (`jury_adversarial`)
 - **Mode redacted** : `?redacted=1` (masque secrets) · `?redacted=strong` (remplace messages par `[REDACTED]`)
 - **Snapshots** : capture persistée d'une session
 
@@ -512,6 +526,7 @@ Les deux systèmes sont **indépendants**. `uiComplexity` contrôle la visibilit
 | **DR / CF / QD / ST / LA** | Decision Room / Confrontation / Quick Decision / Stress Test / Launch Assistant |
 | **Scenario pack** | Parcours guidé (recommandations mode/agents/tours…) — distinct d’un *template* de session |
 | **Reactive Chat** | Variante de chat multi-tour avec presets (`minimal` / `standard` / `intense`) et persistance des métadonnées de fil |
+| **BYOK** | *Bring your own API key* : clés API cloud stockées localement navigateur (`localStorage` `providerSettings`) depuis Admin → Providers ; distinct des providers SQLite |
 | **challenge_rerun** | Motif de rerun : la variante a été créée avec `include_challenge_context` (voir bannière dans l’historique de session) |
 
 ---
@@ -533,7 +548,7 @@ decision-room-ai/
 │   │   │   ├── DecisionSummaryController.php   # GET /api/sessions/{id}/decision-summary
 │   │   │   ├── JuryController.php              # persiste result + decision_brief
 │   │   │   ├── SessionController.php           # read-through result persisté
-│   │   │   ├── ExportController.php            # lit result pour brief/guardrails
+│   │   │   ├── ExportController.php            # exports MD/JSON (+ reliability, jury_adversarial…)
 │   │   │   ├── AgentDynamicsRecommendationController.php  # GET …/suggestions + POST …/apply
 │   │   │   ├── LaunchAssistantController.php   # POST /api/launch-assistant/recommend
 │   │   │   ├── ScenarioPackController.php
@@ -603,7 +618,7 @@ decision-room-ai/
     ├── index.html
     ├── src/
     │   ├── core/
-    │   │   ├── store.js            # état global (uiComplexity, decisionBrief, …)
+    │   │   ├── store.js            # état global (uiComplexity, decisionBrief, providerSettings BYOK, …)
     │   │   ├── renderer.js         # sidebar + complexité badge/dropdown
     │   │   ├── router.js
     │   │   ├── events.js
@@ -841,7 +856,7 @@ Pour explorer plusieurs chemins :
 
 Les écrans d'administration servent à maintenir le système :
 
-- **Providers** : gérer les LLM, modèles, routage et fallback.
+- **Providers** : gérer les LLM SQLite, modèles, routage et fallback ; section **Bring your own API key** pour mémoriser des clés cloud dans le navigateur (OpenAI / Anthropic / Mistral / OpenRouter).
 - **Personas** : consulter, créer ou générer des agents custom.
 - **Templates** : préparer des sessions réutilisables.
 - **Scenario packs** : créer des parcours guidés par cas d'usage.

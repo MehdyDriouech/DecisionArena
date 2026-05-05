@@ -174,8 +174,8 @@ function renderAdversarialCard(juryAdversarial) {
 
 function renderAdversarialOptionsPanel() {
   const { state, t } = getCtx();
-  const complexity = state.uiComplexity ?? 'advanced';
-  if (complexity !== 'expert') return '';
+  const uiMode = state.uiMode || 'simple';
+  if (uiMode !== 'expert') return '';
 
   const cfg     = state.juryAdversarialConfig ?? {};
   const session = state.currentSession;
@@ -188,7 +188,7 @@ function renderAdversarialOptionsPanel() {
   ].join('');
 
   return `
-    <div class="collapsible-panel" data-ui-min="expert" style="margin:12px 0;border:1px solid var(--border-color);border-radius:8px;overflow:hidden;">
+    <div class="collapsible-panel" data-ui="expert-only" style="margin:12px 0;border:1px solid var(--border-color);border-radius:8px;overflow:hidden;">
       <div class="collapsible-panel-header" style="padding:10px 16px;background:var(--surface-2,#f8f9fa);cursor:pointer;display:flex;align-items:center;gap:8px;"
            data-action="toggle-panel-collapse" data-panel-key="jury-adversarial-options">
         <span>⚔️</span>
@@ -345,9 +345,9 @@ function renderJuryResults(results) {
   return renderDecisionBrief(results.decision_brief || null, {
     sessionId,
     agentDecisionDynamics: results.agent_decision_dynamics,
-    uiComplexity: state.uiComplexity || 'advanced',
+    uiMode: state.uiMode,
   })
-    + renderTradeoffSection(results.decision_brief || null, { uiComplexity: state.uiComplexity || 'advanced', tradeoffUid: sessionId })
+    + renderTradeoffSection(results.decision_brief || null, { uiMode: state.uiMode, tradeoffUid: sessionId })
     + renderPremortemStructuredCard(results.premortem_summary || null, t, escHtml)
     + dynamicsHtml
     + `<details id="debate-section-${sessionId}" data-section="debate-details" ${state.showDebateDetails ? 'open' : ''} style="margin:0 0 16px;"><summary class="btn btn-secondary btn-sm">Voir le debat complet</summary><div style="margin-top:12px;">${roundsHtml}${miniChallengeHtml}${minorityHtml}${synthHtml}</div></details>`

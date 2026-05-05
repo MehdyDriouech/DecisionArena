@@ -1,8 +1,219 @@
-const createInitialState = () => ({
+function normalizeUiMode(mode) {
+  if (mode === 'expert' || mode === 'advanced') return 'expert';
+  if (mode === 'simple' || mode === 'basic') return 'simple';
+  return 'simple';
+}
+
+function legacyComplexityToUiMode(level) {
+  return normalizeUiMode(level);
+}
+
+function uiModeToLegacyComplexity(mode) {
+  return normalizeUiMode(mode) === 'expert' ? 'expert' : 'basic';
+}
+
+function readInitialUiMode() {
+  try {
+    const savedMode = localStorage.getItem('da_ui_mode');
+    if (savedMode) return normalizeUiMode(savedMode);
+
+    const legacyComplexity = localStorage.getItem('da_ui_complexity');
+    if (legacyComplexity) return legacyComplexityToUiMode(legacyComplexity);
+  } catch (_) {}
+  return 'simple';
+}
+
+/** local BYOK keys; never log or stringify for errors */
+const PROVIDER_SETTINGS_STORAGE_KEY = 'providerSettings';
+
+const DEFAULT_PROVIDER_SETTINGS = {
+  openai: {
+    enabled: false,
+    apiKey: '',
+    baseUrl: 'https://api.openai.com/v1',
+    priority: 100,
+    defaultModel: '',
+  },
+  anthropic: {
+    enabled: false,
+    apiKey: '',
+    baseUrl: 'https://api.anthropic.com',
+    priority: 100,
+    defaultModel: '',
+  },
+  mistral: {
+    enabled: false,
+    apiKey: '',
+    baseUrl: 'https://api.mistral.ai/v1',
+    priority: 100,
+    defaultModel: '',
+  },
+  openrouter: {
+    enabled: false,
+    apiKey: '',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    priority: 100,
+    defaultModel: '',
+  },
+};
+
+function mergeProviderSettingsFromStorage(stored) {
+  const defaults = DEFAULT_PROVIDER_SETTINGS;
+  const next = {
+    openai: { ...defaults.openai },
+    anthropic: { ...defaults.anthropic },
+    mistral: { ...defaults.mistral },
+    openrouter: { ...defaults.openrouter },
+  };
+  if (!stored || typeof stored !== 'object') {
+    return next;
+  }
+  for (const key of Object.keys(defaults)) {
+    const row = stored[key];
+    if (row && typeof row === 'object') {
+      const pr = row.priority;
+      const prio =
+        typeof pr === 'number' && Number.isFinite(pr)
+          ? pr
+          : parseInt(String(pr ?? ''), 10);
+      const nextPriority = Number.isFinite(prio) ? prio : defaults[key].priority;
+      const dm = row.defaultModel;
+      const nextDefaultModel = typeof dm === 'string' ? dm : defaults[key].defaultModel;
+      next[key] = {
+        enabled: !!row.enabled,
+        apiKey: typeof row.apiKey === 'string' ? row.apiKey : '',
+        baseUrl:
+          typeof row.baseUrl === 'string' && row.baseUrl.trim() !== ''
+            ? row.baseUrl
+            : defaults[key].baseUrl,
+        priority: nextPriority,
+        defaultModel: nextDefaultModel,
+      };
+    }
+  }
+  return next;
+}
+
+function readStoredProviderSettings() {
+  try {
+    const raw = localStorage.getItem(PROVIDER_SETTINGS_STORAGE_KEY);
+    if (!raw || raw.trim() === '') {
+      return mergeProviderSettingsFromStorage(null);
+    }
+    const parsed = JSON.parse(raw);
+    return mergeProviderSettingsFromStorage(parsed);
+  } catch (_) {
+    return mergeProviderSettingsFromStorage(null);
+  }
+}
+
+function persistProviderSettingsSnapshot(settings) {
+  try {
+    localStorage.setItem(PROVIDER_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch (_) {}
+}
+
+const KNOWN_PROVIDER_SETTINGS_IDS = Object.freeze(
+  new Set(['openai', 'anthropic', 'mistral', 'openrouter']),
+);
+
+/**
+ * Snapshot of BYOK entries (cloned per vendor). Prefer mutating via updateProviderSettings.
+ * @returns {typeof DEFAULT_PROVIDER_SETTINGS}
+ */
+function getProviderSettings() {
+  const ps = state.providerSettings;
+  const out = {};
+  for (const id of KNOWN_PROVIDER_SETTINGS_IDS) {
+    const row = ps[id];
+    const def = DEFAULT_PROVIDER_SETTINGS[id];
+    if (!row) {
+      out[id] = { ...def };
+      continue;
+    }
+    const pr = row.priority;
+    const prio =
+      typeof pr === 'number' && Number.isFinite(pr)
+        ? pr
+        : parseInt(String(pr ?? ''), 10);
+    out[id] = {
+      enabled: !!row.enabled,
+      apiKey: typeof row.apiKey === 'string' ? row.apiKey : '',
+      baseUrl: typeof row.baseUrl === 'string' ? row.baseUrl : def.baseUrl,
+      priority: Number.isFinite(prio) ? prio : def.priority,
+      defaultModel: typeof row.defaultModel === 'string' ? row.defaultModel : def.defaultModel,
+    };
+  }
+  return /** @type {typeof DEFAULT_PROVIDER_SETTINGS} */ (out);
+}
+
+function updateProviderSettings(provider, patch) {
+  if (!KNOWN_PROVIDER_SETTINGS_IDS.has(provider) || !patch || typeof patch !== 'object') {
+    return state.providerSettings;
+  }
+  const def = DEFAULT_PROVIDER_SETTINGS[provider];
+  const cur = state.providerSettings[provider] || { ...def };
+  let nextEnabled = cur.enabled;
+  let nextApiKey = typeof cur.apiKey === 'string' ? cur.apiKey : '';
+  let nextBase = typeof cur.baseUrl === 'string' ? cur.baseUrl : def.baseUrl;
+  let nextPriority =
+    typeof cur.priority === 'number' && Number.isFinite(cur.priority) ? cur.priority : def.priority;
+  let nextDefaultModel = typeof cur.defaultModel === 'string' ? cur.defaultModel : def.defaultModel;
+
+  if ('enabled' in patch) nextEnabled = !!patch.enabled;
+  if ('apiKey' in patch) nextApiKey = typeof patch.apiKey === 'string' ? patch.apiKey : '';
+  if ('baseUrl' in patch)
+    nextBase =
+      typeof patch.baseUrl === 'string' && patch.baseUrl.trim() !== ''
+        ? patch.baseUrl
+        : def.baseUrl;
+  if ('priority' in patch) {
+    const p = patch.priority;
+    const n = typeof p === 'number' && Number.isFinite(p) ? p : parseInt(String(p ?? ''), 10);
+    nextPriority = Number.isFinite(n) ? n : def.priority;
+  }
+  if ('defaultModel' in patch) {
+    nextDefaultModel = typeof patch.defaultModel === 'string' ? patch.defaultModel : def.defaultModel;
+  }
+
+  state.providerSettings = {
+    ...state.providerSettings,
+    [provider]: {
+      enabled: nextEnabled,
+      apiKey: nextApiKey,
+      baseUrl: nextBase,
+      priority: nextPriority,
+      defaultModel: nextDefaultModel,
+    },
+  };
+
+  persistProviderSettingsSnapshot(state.providerSettings);
+  return state.providerSettings;
+}
+
+function deleteProviderKey(provider) {
+  return updateProviderSettings(provider, { apiKey: '', enabled: false });
+}
+
+/**
+ * Visible mask only (UI / display). Never use as real credential.
+ */
+function maskProviderKey(apiKey) {
+  const s = typeof apiKey === 'string' ? apiKey : '';
+  if (s.trim() === '') return '';
+  const tail = s.length >= 4 ? s.slice(-4) : '';
+  return tail === '' ? '••••••••' : `••••••••${tail}`;
+}
+
+const createInitialState = () => {
+  const initialUiMode = readInitialUiMode();
+  const providerSettingsHydrated = readStoredProviderSettings();
+  return ({
   view: 'dashboard',
   sessions: [],
   personas: [],
   providers: [],
+  providerSettings: providerSettingsHydrated,
   providerRoutingSettings: null,
   providerRoutingSaveStatus: null,
   providerRoutingSaveMessage: '',
@@ -60,12 +271,10 @@ const createInitialState = () => ({
   reactiveChatResults: null,
   snapshotStatus: null,
   error: null,
-  /** "simple" | "expert" — progressive disclosure (legacy) */
-  uiMode: 'simple',
-  /** "basic" | "advanced" | "expert" — persisted in localStorage */
-  uiComplexity: (() => {
-    try { return localStorage.getItem('da_ui_complexity') || 'advanced'; } catch (_) { return 'advanced'; }
-  })(),
+  /** "simple" | "expert" — progressive disclosure source of truth */
+  uiMode: initialUiMode,
+  /** Legacy alias. Mapped from uiMode: simple -> basic, expert -> expert. */
+  uiComplexity: uiModeToLegacyComplexity(initialUiMode),
   /** Set of panel keys currently collapsed in session history */
   collapsedPanels: (() => {
     try {
@@ -80,10 +289,11 @@ const createInitialState = () => ({
   adminDynamicsReco: null,
   collapsedMessages: {},
   showDebateDetails: false,
-  newSession: {
+    newSession: {
     title: '',
     idea: '',
     mode: 'chat',
+    simpleIntent: 'decide',
     selectedAgents: [],
     rounds: 3,
     language: 'fr',
@@ -257,7 +467,8 @@ const createInitialState = () => ({
     saveMessage: '',
     overwrite: false,
   },
-});
+  });
+};
 
 const state = createInitialState();
 
@@ -277,10 +488,19 @@ function setView(view) {
   state.view = view;
 }
 
+function setUiMode(mode) {
+  const normalized = normalizeUiMode(mode);
+  state.uiMode = normalized;
+  state.uiComplexity = uiModeToLegacyComplexity(normalized);
+  try {
+    localStorage.setItem('da_ui_mode', normalized);
+    localStorage.setItem('da_ui_complexity', state.uiComplexity);
+  } catch (_) {}
+  return normalized;
+}
+
 function setUiComplexity(level) {
-  if (!['basic', 'advanced', 'expert'].includes(level)) return;
-  state.uiComplexity = level;
-  try { localStorage.setItem('da_ui_complexity', level); } catch (_) {}
+  return setUiMode(legacyComplexityToUiMode(level));
 }
 
 export {
@@ -289,5 +509,20 @@ export {
   resetState,
   patchState,
   setView,
+  setUiMode,
   setUiComplexity,
+  normalizeUiMode,
+  legacyComplexityToUiMode,
+  uiModeToLegacyComplexity,
+  getProviderSettings,
+  updateProviderSettings,
+  deleteProviderKey,
+  maskProviderKey,
 };
+
+export {
+  getAvailableProviders,
+  selectPrimaryProvider,
+  formatRoutingOptionLabel,
+} from './providerRouting.js';
+export { withProviderRuntime, buildProviderRuntimePayload } from './providerRuntime.js';

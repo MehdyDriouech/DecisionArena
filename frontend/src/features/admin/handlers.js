@@ -1,6 +1,9 @@
 /* Admin feature — action handlers and change/input listeners for providers, personas, templates */
 import { registerAction, registerChangeListener, registerInputListener, registerSubmit } from '../../core/events.js';
 import { normalizeDecisionDynamics } from '../../utils/decisionDynamics.js';
+import { updateProviderSettings, deleteProviderKey, maskProviderKey } from '../../core/store.js';
+import { withProviderRuntime } from '../../core/providerRuntime.js';
+import { testProviderConnection } from '../../services/providerService.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -35,34 +38,94 @@ function updateProviderModelSelectDom(models) {
   select.innerHTML = options.join('');
 }
 
+function slugifyLocalProviderId(raw) {
+  const s = String(raw || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return s || 'serveur';
+}
+
+/** IDs uniques (tous providers serveur). L’entrée en cours d’édition est exclue des collisions pour un renommage. */
+function allocateLocalProviderId({ name, type, originalId, allProviders }) {
+  const typeSlug =
+    String(type || 'ollama')
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '-') || 'ollama';
+  const baseSlug = name.trim() ? slugifyLocalProviderId(name) : typeSlug;
+  let base = `local-${baseSlug}`;
+  const ids = new Set(
+    (allProviders || []).filter((p) => !originalId || p.id !== originalId).map((p) => p.id),
+  );
+  let candidate = base;
+  let n = 2;
+  while (ids.has(candidate) && candidate !== originalId) {
+    candidate = `${base}-${n++}`;
+  }
+  return candidate;
+}
+
 async function doSaveProvider() {
   const { state, render, apiFetch, escHtml, t } = getCtx();
-  const id            = document.getElementById('pf-id')?.value.trim();
-  const name          = document.getElementById('pf-name')?.value.trim();
-  const type          = document.getElementById('pf-type')?.value;
-  const base_url      = document.getElementById('pf-base-url')?.value.trim();
-  const api_key       = document.getElementById('pf-api-key')?.value.trim();
+  const originalId = document.getElementById('pf-original-id')?.value.trim() || '';
+  let id = document.getElementById('pf-id')?.value.trim() || '';
+  let name = document.getElementById('pf-name')?.value.trim() || '';
+  const type = document.getElementById('pf-type')?.value;
+  const base_url = document.getElementById('pf-base-url')?.value.trim();
+  const api_key = document.getElementById('pf-api-key')?.value.trim();
   const default_model = document.getElementById('pf-model')?.value.trim();
-  const enabled       = document.getElementById('pf-enabled')?.checked ?? true;
-  const priority      = parseInt(document.getElementById('pf-priority')?.value ?? '100', 10);
-  const resultEl      = document.getElementById('provider-form-result');
+  const enabled = document.getElementById('pf-enabled')?.checked ?? true;
+  const priority = parseInt(document.getElementById('pf-priority')?.value ?? '100', 10);
+  const resultEl = document.getElementById('provider-form-result');
+  const allProv = state.providers || [];
 
-  if (!id || !base_url) {
-    if (resultEl) resultEl.innerHTML = `<div class="provider-test-result fail">${escHtml(t('providers.fieldId'))} + ${escHtml(t('providers.fieldBaseUrl'))} required.</div>`;
+  if (!base_url) {
+    if (resultEl)
+      resultEl.innerHTML = `<div class="provider-test-result fail">${escHtml(t('providers.fieldBaseUrl'))} requis.</div>`;
     return;
   }
+
+  if (!id) {
+    id = allocateLocalProviderId({ name, type, originalId, allProviders: allProv });
+  }
+
+  if (id !== originalId && allProv.some((p) => p.id === id)) {
+    if (resultEl)
+      resultEl.innerHTML = `<div class="provider-test-result fail">Un provider local utilise déjà l’identifiant <strong>${escHtml(id)}</strong>. Choisissez un autre ID.</div>`;
+    return;
+  }
+
+  if (!name) name = id;
+
   try {
-    const body = { id, name, type, base_url, default_model, enabled, priority: Number.isFinite(priority) ? priority : 100 };
+    const body = {
+      id,
+      name,
+      type,
+      base_url,
+      default_model,
+      enabled,
+      priority: Number.isFinite(priority) ? priority : 100,
+    };
     if (api_key) body.api_key = api_key;
+
+    if (originalId && originalId !== id) {
+      await apiFetch(`/api/providers/${encodeURIComponent(originalId)}`, { method: 'DELETE' });
+    }
     const result = await apiFetch('/api/providers', { method: 'POST', body: JSON.stringify(body) });
     const existingIdx = state.providers.findIndex((p) => p.id === result.id);
     if (existingIdx >= 0) state.providers[existingIdx] = result;
     else state.providers.push(result);
     state.providerModelOptions = [];
-    state.providerModelStatus  = null;
-    state.providerModelError   = '';
+    state.providerModelStatus = null;
+    state.providerModelError = '';
     if (resultEl) resultEl.innerHTML = `<div class="provider-test-result ok">✅ ${escHtml(t('providers.save'))}</div>`;
-    setTimeout(() => { render(); }, 800);
+    const localDlg = document.getElementById('provider-local-modal');
+    if (localDlg && typeof localDlg.close === 'function') localDlg.close();
+    setTimeout(() => {
+      render();
+    }, 800);
   } catch (err) {
     if (resultEl) resultEl.innerHTML = `<div class="provider-test-result fail">❌ ${escHtml(err.message)}</div>`;
   }
@@ -86,16 +149,117 @@ function readProviderRoutingFromDom() {
   };
 }
 
-function registerAdminHandlers() {
-  registerAction('toggle-admin-advanced-tools', () => {
-    const { state, render } = getCtx();
-    state.adminShowAdvancedTools = !state.adminShowAdvancedTools;
-    try {
-      localStorage.setItem('da_admin_show_advanced_tools', state.adminShowAdvancedTools ? '1' : '0');
-    } catch (_) {}
-    render();
-  });
+/** Local BYOK (browser store) provider ids matching data-provider on cards. */
+const ALLOWED_BYOK = new Set(['openai', 'anthropic', 'mistral', 'openrouter']);
 
+const BYOK_UI_LABELS = {
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  mistral: 'Mistral AI',
+  openrouter: 'OpenRouter',
+};
+
+const BYOK_DEFAULT_BASE_URL = {
+  openai: 'https://api.openai.com/v1',
+  anthropic: 'https://api.anthropic.com',
+  mistral: 'https://api.mistral.ai/v1',
+  openrouter: 'https://openrouter.ai/api/v1',
+};
+
+function normalizeByokProvider(raw) {
+  const id = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  return ALLOWED_BYOK.has(id) ? id : null;
+}
+
+/**
+ * Feedback BYOK liste rapide (+ optionnel modal BYOK pendant que le dialogue est ouvert).
+ * @param {string} provider
+ * @param {string} message
+ * @param {'ok'|'fail'|'pending'} kind
+ * @param {{ modalOnly?: boolean }} [options]
+ */
+function setByokFeedback(provider, message, kind, options = {}) {
+  const modalOnly = options.modalOnly === true;
+  const esc = CSS.escape(provider);
+  const row = document.querySelector(`.byok-quick-row[data-byok-provider="${esc}"]`);
+
+  function apply(el) {
+    if (!el) return;
+    el.textContent = message || '';
+    el.hidden = !message;
+    const isModalSlot = el.dataset.feedbackSlot === 'modal' || el.classList.contains('byok-modal-feedback');
+    el.className = isModalSlot
+      ? 'byok-modal-feedback provider-test-result'
+      : 'byok-feedback provider-test-result byok-quick-feedback';
+    if (kind === 'ok') el.classList.add('ok');
+    else if (kind === 'fail') el.classList.add('fail');
+    else if (kind === 'pending') el.classList.add('pending');
+  }
+
+  if (!modalOnly) {
+    apply(row?.querySelector('.byok-feedback'));
+  }
+
+  const dlg = document.getElementById('provider-byok-modal');
+  if (dlg && dlg.dataset.openProvider === provider && (modalOnly || dlg.open)) {
+    apply(dlg.querySelector('.byok-modal-feedback'));
+  }
+}
+
+function resolveByokApiKeyInput(provider, input, state) {
+  const storeKey =
+    typeof state.providerSettings?.[provider]?.apiKey === 'string'
+      ? state.providerSettings[provider].apiKey.trim()
+      : '';
+  if (!input) return storeKey;
+  const typed = (input.value || '').trim();
+  if (input.dataset.byokMaskOnly === '1') return storeKey;
+  if (typed && storeKey && typed === maskProviderKey(storeKey)) return storeKey;
+  if (typed) return typed;
+  return storeKey;
+}
+
+/** Types « serveur » (même jeu que l’écran admin / formulaire provider). */
+const LOCAL_SERVER_PROVIDER_TYPES = new Set(['ollama', 'lmstudio', 'openai-compatible']);
+
+function sortedLocalServerProviders(providerList) {
+  return (providerList || [])
+    .filter((p) => p && LOCAL_SERVER_PROVIDER_TYPES.has(p.type))
+    .slice()
+    .sort((a, b) => {
+      const pa = Number(a.priority ?? 100);
+      const pb = Number(b.priority ?? 100);
+      if (pa !== pb) return pa - pb;
+      return String(a.id).localeCompare(String(b.id));
+    });
+}
+
+/** Injecte `renderProviderForm` dans le modal « Provider local ». */
+function mountLocalServerProviderIntoModal(provider) {
+  const renderFn = window.DecisionArena.views.shared?.renderProviderForm;
+  const host = document.getElementById('provider-local-modal-form-host');
+  const dlg = document.getElementById('provider-local-modal');
+  const titleEl = document.getElementById('provider-local-modal-title');
+  if (!renderFn || !host || !dlg || typeof dlg.showModal !== 'function') return false;
+
+  const { state } = getCtx();
+  state.providerModelOptions = [];
+  state.providerModelStatus = null;
+  state.providerModelError = '';
+
+  host.innerHTML = renderFn(provider ?? null);
+  if (titleEl) {
+    titleEl.textContent =
+      provider?.id ? `Modifier · ${provider.name || provider.id}` : 'Configurer un provider local';
+  }
+  dlg.showModal();
+  requestAnimationFrame(() => {
+    document.getElementById('pf-id')?.focus?.();
+  });
+  return true;
+}
+
+function registerAdminHandlers() {
   /* ── Persona ──────────────────────────────────────────────────────────── */
   registerAction('show-persona', ({ element }) => {
     const fn = getViews().showPersonaModal;
@@ -257,18 +421,24 @@ function registerAdminHandlers() {
   registerAction('edit-provider', ({ element }) => {
     const { state } = getCtx();
     const providerId = element.dataset.providerId;
-    const provider   = state.providers.find((p) => p.id === providerId);
+    const provider = state.providers.find((p) => p.id === providerId);
     if (!provider) return;
-    state.providerModelOptions = [];
-    state.providerModelStatus  = null;
-    state.providerModelError   = '';
-    const formContainer = document.querySelector('#provider-form');
-    if (!formContainer) return;
-    const formParent = formContainer.parentElement;
-    if (formParent) {
-      const renderFn = window.DecisionArena.views.shared?.renderProviderForm;
-      if (renderFn) { formParent.innerHTML = renderFn(provider); formParent.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
-    }
+    if (!LOCAL_SERVER_PROVIDER_TYPES.has(provider.type)) return;
+    mountLocalServerProviderIntoModal(provider);
+  });
+
+  registerAction('open-local-provider-modal', ({ element }) => {
+    const { state } = getCtx();
+    const providerId = typeof element?.dataset?.providerId === 'string' ? element.dataset.providerId.trim() : '';
+    const provider = providerId ? state.providers.find((p) => p.id === providerId) : null;
+    mountLocalServerProviderIntoModal(
+      provider && LOCAL_SERVER_PROVIDER_TYPES.has(provider.type) ? provider : null,
+    );
+  });
+
+  registerAction('close-local-provider-modal', () => {
+    const dlg = document.getElementById('provider-local-modal');
+    if (dlg && typeof dlg.close === 'function') dlg.close();
   });
 
   registerAction('fetch-provider-models', async () => {
@@ -361,6 +531,276 @@ function registerAdminHandlers() {
       state.error = err.message;
       render();
     }
+  });
+
+  /* ── BYOK (clés API locales, store navigateur) ────────────────────────── */
+  registerAction('open-provider-modal', ({ element }) => {
+    const provider = normalizeByokProvider(element?.dataset?.provider);
+    const modeRaw = typeof element?.dataset?.modalMode === 'string' ? element.dataset.modalMode : 'connect';
+    const mode = modeRaw === 'edit' ? 'edit' : 'connect';
+    if (!provider) return;
+    const { state } = getCtx();
+    const dlg = document.getElementById('provider-byok-modal');
+    if (!dlg || typeof dlg.showModal !== 'function') return;
+
+    dlg.dataset.openProvider = provider;
+    dlg.dataset.modalMode = mode;
+
+    const titleEl = dlg.querySelector('#provider-byok-modal-title');
+    const nm = BYOK_UI_LABELS[provider] || provider;
+    if (titleEl) titleEl.textContent = mode === 'edit' ? `Modifier — ${nm}` : `Connecter — ${nm}`;
+
+    const row = state.providerSettings?.[provider] || {};
+    const rawKey = typeof row.apiKey === 'string' ? row.apiKey : '';
+    const hasKey = rawKey.trim() !== '';
+
+    const keyInput = document.getElementById('byok-modal-api-key');
+    if (keyInput) {
+      keyInput.value = '';
+      keyInput.dataset.provider = provider;
+      delete keyInput.dataset.byokMaskOnly;
+    }
+
+    const baseInput = document.getElementById('byok-modal-base-url');
+    if (baseInput) {
+      const savedBase = typeof row.baseUrl === 'string' ? row.baseUrl.trim() : '';
+      baseInput.value = savedBase || BYOK_DEFAULT_BASE_URL[provider] || '';
+      baseInput.dataset.provider = provider;
+    }
+
+    const prioEl = document.getElementById('byok-modal-priority');
+    if (prioEl) {
+      const pr = row.priority;
+      const n = typeof pr === 'number' && Number.isFinite(pr) ? pr : parseInt(String(pr ?? '100'), 10);
+      prioEl.value = String(Number.isFinite(n) ? n : 100);
+      prioEl.dataset.provider = provider;
+    }
+
+    const dmEl = document.getElementById('byok-modal-default-model');
+    if (dmEl) {
+      dmEl.value = typeof row.defaultModel === 'string' ? row.defaultModel : '';
+      dmEl.dataset.provider = provider;
+    }
+
+    const disc = document.getElementById('byok-modal-disconnect');
+    if (disc) {
+      disc.dataset.provider = provider;
+      disc.hidden = !(mode === 'edit' && hasKey);
+    }
+
+    const feedback = dlg.querySelector('.byok-modal-feedback');
+    if (feedback) {
+      feedback.textContent = '';
+      feedback.hidden = true;
+      feedback.className = 'byok-modal-feedback provider-test-result';
+    }
+
+    const submitBtn = dlg.querySelector('[data-action="save-provider-key"]');
+    if (submitBtn) submitBtn.textContent = mode === 'edit' ? 'Enregistrer' : 'Connecter';
+
+    dlg.showModal();
+    requestAnimationFrame(() => keyInput?.focus?.());
+  });
+
+  registerAction('close-provider-modal', () => {
+    const dlg = document.getElementById('provider-byok-modal');
+    if (!dlg || typeof dlg.close !== 'function') return;
+    delete dlg.dataset.openProvider;
+    delete dlg.dataset.modalMode;
+    dlg.close();
+  });
+
+  registerAction('save-provider-key', async ({ element }) => {
+    const dlg = element.closest('#provider-byok-modal');
+    const provider =
+      normalizeByokProvider(element?.dataset?.provider) ||
+      normalizeByokProvider(dlg?.dataset?.openProvider);
+    if (!provider) return;
+
+    const { render, state } = getCtx();
+    const fromModal = !!dlg;
+    const modalMode = dlg?.dataset?.modalMode === 'edit' ? 'edit' : 'connect';
+
+    const input = fromModal
+      ? document.getElementById('byok-modal-api-key')
+      : document.querySelector(
+          `.byok-quick-row[data-byok-provider="${CSS.escape(provider)}"] input[data-action="provider-key-input"][data-provider="${CSS.escape(provider)}"]`,
+        );
+
+    const baseEl = fromModal
+      ? document.getElementById('byok-modal-base-url')
+      : document.querySelector(
+          `.byok-quick-row[data-byok-provider="${CSS.escape(provider)}"] input.byok-base-url-input[data-provider="${CSS.escape(provider)}"]`,
+        );
+
+    const prioEl = fromModal ? document.getElementById('byok-modal-priority') : null;
+    const dmEl = fromModal ? document.getElementById('byok-modal-default-model') : null;
+
+    const trimmed = input?.value?.trim() ?? '';
+
+    const patch = { enabled: true };
+    if (baseEl && typeof baseEl.value === 'string') {
+      const b = baseEl.value.trim();
+      if (b) patch.baseUrl = b;
+    }
+    if (prioEl && prioEl.value !== '') {
+      const pr = parseInt(prioEl.value, 10);
+      if (Number.isFinite(pr)) patch.priority = pr;
+    }
+    if (dmEl && typeof dmEl.value === 'string') {
+      patch.defaultModel = dmEl.value.trim();
+    }
+
+    /* Connexion rapide (hors modal) : exiger une clé. */
+    if (!fromModal && !trimmed) {
+      setByokFeedback(provider, 'Saisissez une clé API avant d\'enregistrer.', 'fail');
+      return;
+    }
+
+    /* Modal « modifier » : enregistrer priorité / modèle / URL sans ressaisir la clé. */
+    if (fromModal && modalMode === 'edit' && !trimmed) {
+      updateProviderSettings(provider, patch);
+      const dlgClose = document.getElementById('provider-byok-modal');
+      if (dlgClose && typeof dlgClose.close === 'function') {
+        delete dlgClose.dataset.openProvider;
+        delete dlgClose.dataset.modalMode;
+        dlgClose.close();
+      }
+      render();
+      requestAnimationFrame(() => setByokFeedback(provider, 'Paramètres enregistrés.', 'ok'));
+      return;
+    }
+
+    if (!trimmed) {
+      if (fromModal) setByokFeedback(provider, 'Saisissez une clé API.', 'fail', { modalOnly: true });
+      else setByokFeedback(provider, 'Saisissez une clé API avant d\'enregistrer.', 'fail');
+      return;
+    }
+
+    patch.apiKey = trimmed;
+
+    updateProviderSettings(provider, patch);
+
+    const baseUrlAfter =
+      (typeof state.providerSettings?.[provider]?.baseUrl === 'string'
+        ? state.providerSettings[provider].baseUrl.trim()
+        : '') ||
+      BYOK_DEFAULT_BASE_URL[provider] ||
+      '';
+
+    if (!fromModal) {
+      render();
+      requestAnimationFrame(async () => {
+        setByokFeedback(provider, 'Vérification de la connexion…', 'pending');
+        const testRes = await testProviderConnection(provider, { apiKey: trimmed, baseUrl: baseUrlAfter });
+        const msg = testRes.ok ? testRes.message : `Enregistré — ${testRes.message}`;
+        setByokFeedback(provider, msg, testRes.ok ? 'ok' : 'fail');
+      });
+      return;
+    }
+
+    setByokFeedback(provider, 'Vérification de la connexion…', 'pending', { modalOnly: true });
+    const testRes = await testProviderConnection(provider, { apiKey: trimmed, baseUrl: baseUrlAfter });
+    const msg = testRes.ok ? `Connecté · ${testRes.message}` : `Enregistré · ${testRes.message}`;
+    setByokFeedback(provider, msg, testRes.ok ? 'ok' : 'fail', { modalOnly: true });
+
+    if (testRes.ok) {
+      window.setTimeout(() => {
+        dlg.close();
+        delete dlg.dataset.openProvider;
+        delete dlg.dataset.modalMode;
+        render();
+      }, 900);
+    } else {
+      dlg.close();
+      delete dlg.dataset.openProvider;
+      delete dlg.dataset.modalMode;
+      render();
+      requestAnimationFrame(() => setByokFeedback(provider, msg, 'fail'));
+    }
+  });
+
+  registerAction('delete-provider-key', async ({ element }) => {
+    const dlg = element.closest('#provider-byok-modal');
+    const provider =
+      normalizeByokProvider(element?.dataset?.provider) ||
+      normalizeByokProvider(dlg?.dataset?.openProvider);
+    if (!provider) return;
+    const { render } = getCtx();
+    deleteProviderKey(provider);
+    if (dlg && typeof dlg.close === 'function') {
+      delete dlg.dataset.openProvider;
+      delete dlg.dataset.modalMode;
+      dlg.close();
+    }
+    render();
+    requestAnimationFrame(() => setByokFeedback(provider, 'Déconnecté — clé supprimée.', 'ok'));
+  });
+
+  registerAction('toggle-provider-key-visibility', ({ element }) => {
+    const provider = normalizeByokProvider(element?.dataset?.provider);
+    if (!provider) return;
+    const { state } = getCtx();
+    const root = element.closest('.byok-card') || element.closest('#provider-byok-modal');
+    const input = root?.querySelector(
+      `input[data-action="provider-key-input"][data-provider="${CSS.escape(provider)}"]`,
+    );
+    if (!input) return;
+    const savedKey = (state.providerSettings?.[provider]?.apiKey || '').trim();
+    const reveal = input.type === 'password';
+    if (reveal) {
+      input.type = 'text';
+      if (!input.value.trim() && savedKey) {
+        input.value = maskProviderKey(savedKey);
+        input.dataset.byokMaskOnly = '1';
+      }
+      element.textContent = 'Masquer';
+    } else {
+      if (input.dataset.byokMaskOnly === '1') {
+        input.value = '';
+        delete input.dataset.byokMaskOnly;
+      }
+      input.type = 'password';
+      element.textContent = 'Afficher';
+    }
+  });
+
+  registerAction('toggle-provider-enabled', ({ element }) => {
+    const provider = normalizeByokProvider(element?.dataset?.provider);
+    if (!provider) return;
+    const { render } = getCtx();
+    const checked = !!element.checked;
+    updateProviderSettings(provider, { enabled: checked });
+    render();
+    requestAnimationFrame(() =>
+      setByokFeedback(provider, checked ? 'Fournisseur activé.' : 'Fournisseur désactivé.', 'ok'),
+    );
+  });
+
+  registerAction('test-provider-key', async ({ element }) => {
+    const provider = normalizeByokProvider(element?.dataset?.provider);
+    if (!provider) return;
+    const { state } = getCtx();
+    const root =
+      element.closest('#provider-byok-modal') ||
+      element.closest('.byok-card') ||
+      element.closest('.byok-quick-row');
+    const input = root?.querySelector(
+      `input[data-action="provider-key-input"][data-provider="${CSS.escape(provider)}"]`,
+    );
+    const baseEl = root?.querySelector(`input.byok-base-url-input[data-provider="${CSS.escape(provider)}"]`);
+    const apiKey = resolveByokApiKeyInput(provider, input, state);
+    const baseDom = baseEl && typeof baseEl.value === 'string' ? baseEl.value.trim() : '';
+    const baseStore =
+      typeof state.providerSettings?.[provider]?.baseUrl === 'string'
+        ? state.providerSettings[provider].baseUrl.trim()
+        : '';
+    const baseUrl = baseDom || baseStore;
+    setByokFeedback(provider, 'Test en cours…', 'pending', { modalOnly: !!element.closest('#provider-byok-modal') });
+    const result = await testProviderConnection(provider, { apiKey, baseUrl });
+    setByokFeedback(provider, result.message, result.ok ? 'ok' : 'fail', {
+      modalOnly: !!element.closest('#provider-byok-modal'),
+    });
   });
 
   /* ── Logs (admin) ─────────────────────────────────────────────────────── */
@@ -534,6 +974,24 @@ function registerAdminHandlers() {
     }
   });
 
+  registerAction('admin-open-template-create', () => {
+    const { state, render, navigate } = getCtx();
+    const sel = document.querySelector('input[name="admin-template-create-type"]:checked');
+    const type = sel?.value || 'simple';
+    if (type === 'scenario') {
+      state.scenarioPackShowForm = true;
+      state.scenarioPackEditing = null;
+      render();
+      requestAnimationFrame(() => {
+        document.getElementById('scenario-pack-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    } else {
+      state.scenarioPackShowForm = false;
+      state.scenarioPackEditing = null;
+      navigate('template-maker');
+    }
+  });
+
   registerAction('delete-template', async ({ element }) => {
     const { state, render, apiFetch, t } = getCtx();
     const templateId = element.dataset.templateId;
@@ -610,7 +1068,9 @@ function registerAdminHandlers() {
     try {
       const result = await apiFetch('/api/templates/make', {
         method: 'POST',
-        body: JSON.stringify({ description: tm.description, provider_id: tm.providerId || null, model: tm.model || null }),
+        body: JSON.stringify(
+          withProviderRuntime({ description: tm.description, provider_id: tm.providerId || null, model: tm.model || null }),
+        ),
       });
       if (result.error) {
         state.templateMaker.error = result.message;
@@ -639,6 +1099,30 @@ function registerAdminHandlers() {
   });
   /* ── Provider form submit ─────────────────────────────────────────────── */
   registerSubmit('provider-form', () => doSaveProvider());
+
+  registerInputListener((e) => {
+    const el = e.target.closest('[data-action="provider-key-input"]');
+    if (!el) return false;
+    const prov = normalizeByokProvider(el.dataset.provider);
+    if (!prov) return false;
+    const { state } = getCtx();
+    if (el.dataset.byokMaskOnly === '1') {
+      const sk = (state.providerSettings?.[prov]?.apiKey || '').trim();
+      if (sk && el.value !== maskProviderKey(sk)) delete el.dataset.byokMaskOnly;
+    }
+    const modal = el.closest('#provider-byok-modal');
+    const slot = modal
+      ? modal.querySelector('.byok-modal-feedback')
+      : el.closest('.byok-quick-row')?.querySelector('.byok-feedback');
+    if (slot) {
+      slot.textContent = '';
+      slot.hidden = true;
+      slot.className = slot.dataset.feedbackSlot === 'modal'
+        ? 'byok-modal-feedback provider-test-result'
+        : 'byok-feedback provider-test-result byok-quick-feedback';
+    }
+    return false;
+  });
 
   /* ── Provider type change / model select (change listener) ───────────── */
   registerChangeListener((e) => {
@@ -794,7 +1278,7 @@ async function _generatePersonaMake(improve) {
   render();
   try {
     const body = { description: pm.description, provider_id: pm.providerId || null, model: pm.model.trim() || null };
-    const result = await apiFetch('/api/personas/make', { method: 'POST', body: JSON.stringify(body) });
+    const result = await apiFetch('/api/personas/make', { method: 'POST', body: JSON.stringify(withProviderRuntime(body)) });
     if (result.error) { state.personaMaker.error = result.message || 'Generation failed.'; }
     else { state.personaMaker.result = result; state.personaMaker.error = null; }
   } catch (err) { state.personaMaker.error = 'Request failed: ' + err.message; }
@@ -847,7 +1331,7 @@ async function _generatePersonaDraft(improve) {
       body.existing_persona = shared.buildPersonaMarkdownPreview?.() || '';
       body.existing_soul    = shared.buildSoulMarkdownPreview?.()    || '';
     }
-    const result  = await apiFetch('/api/personas/build-draft', { method: 'POST', body: JSON.stringify(body) });
+    const result  = await apiFetch('/api/personas/build-draft', { method: 'POST', body: JSON.stringify(withProviderRuntime(body)) });
     const persona = result.persona || {};
     const soul    = result.soul    || {};
     Object.assign(state.personaBuilder, {

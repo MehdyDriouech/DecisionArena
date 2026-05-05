@@ -1,11 +1,19 @@
 /**
  * Admin feature – view registration.
- * Covers: administration (hub par sections + Bien démarrer), personas, souls, providers,
- *         templates, template-maker, persona-maker, persona-builder, scenario-packs,
+ * Covers: administration (hub par intention : Setup, Build, Run & Analyze, Avancé), personas, souls, providers,
+ *         templates (y compris contexte scénario), template-maker, persona-maker, persona-builder,
  *         logs, retrospective.
  */
 
-import { renderTooltip, renderDecisionDynamicsEditor } from '../../ui/components.js';
+import {
+  renderTooltip,
+  renderDecisionDynamicsEditor,
+  renderEmptyState,
+  renderAlert,
+  renderByokProviderConnectModal,
+} from '../../ui/components.js';
+import { maskProviderKey } from '../../core/store.js';
+import { getAvailableProviders, formatRoutingOptionLabel } from '../../core/providerRouting.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -17,223 +25,334 @@ function getCtx() {
   return { state, escHtml, renderMarkdown, agentIcon, agentName, t };
 }
 
-/* ── Administration hub (sections + cartes intentionnelles) ─────────────── */
+/* ── Administration hub (blocs par intention : Setup → Build → Run → Avancé) ── */
 
-const ADMIN_HOME_SECTIONS = [
+function buildAdminBuildAgentsItems(uiMode) {
+  const items = [
+    {
+      nav: 'personas',
+      titleKey: 'admin.personas',
+      icon: '🎭',
+      descKey: 'admin.hub.short.personas',
+      actionKey: 'admin.hub.action.open',
+    },
+  ];
+  if (uiMode === 'expert') {
+    items.push({
+      nav: 'souls',
+      titleKey: 'admin.souls',
+      icon: '✨',
+      descKey: 'admin.hub.short.souls',
+      actionKey: 'admin.hub.action.open',
+      expertOnly: true,
+    });
+  } else {
+    items.push({
+      nav: 'persona-maker',
+      titleKey: 'admin.personaMaker',
+      icon: '🤖',
+      descKey: 'admin.hub.short.personaMaker',
+      actionKey: 'admin.hub.action.create',
+    });
+  }
+  return items;
+}
+
+const ADMIN_TEMPLATES_HUB_CARD = {
+  nav: 'templates',
+  titleKey: 'admin.templates',
+  icon: '📋',
+  descKey: 'admin.hub.short.templates',
+  actionKey: 'admin.hub.action.open',
+};
+
+/** Mode simple : 5 accès + CTA session (pas de carte « nouvelle session » dupliquée). */
+const ADMIN_SIMPLE_HUB_CARDS = [
   {
-    id: 'agents',
-    titleKey: 'admin.section.agents',
-    sectionIcon: '🧠',
-    items: [
-      { nav: 'personas',        titleKey: 'admin.personas',        icon: '🎭', descKey: 'admin.card.personas.desc',        usageKey: 'admin.card.personas.usage',        badgeKey: null },
-      { nav: 'persona-maker',   titleKey: 'admin.personaMaker',    icon: '🤖', descKey: 'admin.card.personaMaker.desc',    usageKey: 'admin.card.personaMaker.usage',    badgeKey: 'admin.badge.recommended' },
-      { nav: 'persona-builder', titleKey: 'admin.personaBuilder',  icon: '🔧', descKey: 'admin.card.personaBuilder.desc',  usageKey: 'admin.card.personaBuilder.usage',  badgeKey: 'admin.badge.advanced' },
-      { nav: 'souls',           titleKey: 'admin.souls',           icon: '✨', descKey: 'admin.card.souls.desc',           usageKey: 'admin.card.souls.usage',           badgeKey: 'admin.badge.advanced' },
-    ],
+    nav: 'providers',
+    icon: '⚙️',
+    titleKey: 'admin.providers',
+    descKey: 'admin.hub.short.providers',
+    actionKey: 'admin.hub.action.configure',
   },
   {
-    id: 'experiences',
-    titleKey: 'admin.section.experiences',
-    sectionIcon: '🧩',
-    items: [
-      { nav: 'templates',        titleKey: 'admin.templates',         icon: '📋', descKey: 'admin.card.templates.desc',        usageKey: 'admin.card.templates.usage',        badgeKey: 'admin.badge.recommended' },
-      { nav: 'template-maker',   titleKey: 'admin.templateMaker',     icon: '🧩', descKey: 'admin.card.templateMaker.desc',    usageKey: 'admin.card.templateMaker.usage',    badgeKey: 'admin.badge.advanced' },
-      { nav: 'scenario-packs',   titleKey: 'scenario.admin.title',    icon: '🎯', descKey: 'admin.card.scenarios.desc',        usageKey: 'admin.card.scenarios.usage',        badgeKey: 'admin.badge.recommended' },
-    ],
+    nav: 'personas',
+    icon: '🎭',
+    titleKey: 'admin.personas',
+    descKey: 'admin.hub.short.personas',
+    actionKey: 'admin.hub.action.open',
   },
   {
-    id: 'engine',
-    titleKey: 'admin.section.engine',
-    sectionIcon: '⚙️',
-    items: [
-      {
-        nav: 'providers',
-        titleKey: 'admin.providers',
-        icon: '⚙️',
-        descKey: 'admin.card.providers.desc',
-        usageKey: 'admin.card.providers.usage',
-        badgeKey: 'admin.badge.technical',
-        noteKey: 'admin.card.providers.noteRouting',
-      },
-      {
-        nav: 'prompt-policies',
-        titleKey: 'admin.promptPolicies.title',
-        icon: '📝',
-        descKey: 'admin.promptPolicies.desc',
-        usageKey: 'admin.promptPolicies.usage',
-        badgeKey: 'admin.badge.advanced',
-      },
-    ],
+    nav: 'persona-maker',
+    icon: '🤖',
+    titleKey: 'admin.personaMaker',
+    descKey: 'admin.hub.short.personaMaker',
+    actionKey: 'admin.hub.action.create',
   },
   {
-    id: 'monitoring',
-    titleKey: 'admin.section.monitoring',
-    sectionIcon: '📊',
-    items: [
-      { nav: 'logs', titleKey: 'admin.logs', icon: '🧾', descKey: 'admin.card.logs.desc', usageKey: 'admin.card.logs.usage', badgeKey: 'admin.badge.technical' },
-    ],
+    nav: 'templates',
+    icon: '📋',
+    titleKey: 'admin.templates',
+    descKey: 'admin.hub.short.templates',
+    actionKey: 'admin.hub.action.open',
   },
   {
-    id: 'intelligence',
-    titleKey: 'admin.section.intelligence',
-    sectionIcon: '✨',
-    items: [
-      {
-        nav: 'retrospective',
-        titleKey: 'admin.retrospective',
-        icon: '🔮',
-        descKey: 'admin.card.retrospective.desc',
-        usageKey: 'admin.card.retrospective.usage',
-        badgeKey: 'admin.badge.analysis',
-        featured: true,
-      },
-      {
-        nav: 'learning',
-        titleKey: 'admin.learning.title',
-        icon: '🧬',
-        descKey: 'admin.card.learning.desc',
-        usageKey: 'admin.card.learning.usage',
-        badgeKey: 'admin.badge.analysis',
-      },
-    ],
+    nav: 'sessions',
+    icon: '📁',
+    titleKey: 'sessions.title',
+    descKey: 'admin.hub.short.history',
+    actionKey: 'admin.hub.action.open',
+  },
+];
+
+const ADMIN_RUN_ANALYZE_ITEMS = [
+  {
+    nav: 'sessions',
+    titleKey: 'admin.run.label.history',
+    icon: '📁',
+    descKey: 'admin.hub.short.history',
+    actionKey: 'admin.hub.action.open',
+  },
+  {
+    nav: 'retrospective',
+    titleKey: 'admin.retrospective',
+    icon: '🔮',
+    descKey: 'admin.hub.short.retrospective',
+    actionKey: 'admin.hub.action.open',
+    expertOnly: true,
+  },
+];
+
+const ADMIN_ADVANCED_ITEMS = [
+  {
+    nav: 'persona-builder',
+    titleKey: 'admin.personaBuilder',
+    icon: '🔧',
+    descKey: 'admin.hub.short.personaBuilder',
+    actionKey: 'admin.hub.action.open',
+  },
+  {
+    nav: 'prompt-policies',
+    titleKey: 'admin.promptPolicies.title',
+    icon: '📝',
+    descKey: 'admin.hub.short.policies',
+    actionKey: 'admin.hub.action.open',
+  },
+  {
+    nav: 'logs',
+    titleKey: 'admin.logs',
+    icon: '🧾',
+    descKey: 'admin.hub.short.logs',
+    actionKey: 'admin.hub.action.open',
+  },
+  {
+    nav: 'learning',
+    titleKey: 'admin.learning.title',
+    icon: '🧬',
+    descKey: 'admin.hub.short.learning',
+    actionKey: 'admin.hub.action.open',
   },
 ];
 
 function renderAdminCard(item, t, escHtml) {
-  const badge = item.badgeKey
-    ? `<span class="admin-card-badge" aria-label="${escHtml(t(item.badgeKey))}">${escHtml(t(item.badgeKey))}</span>`
-    : '';
-  const note = item.noteKey
-    ? `<div class="admin-card-note">${escHtml(t(item.noteKey))}</div>`
-    : '';
-  const feat = item.featured ? ' admin-card-featured' : '';
+  const expertAttr = item.expertOnly ? ' data-ui="expert-only"' : '';
+  const actionKey = item.actionKey || 'admin.hub.action.open';
   const label = `${t(item.titleKey)} — ${t(item.descKey)}`;
   return `
-    <div class="admin-card${feat}" data-nav="${escHtml(item.nav)}" tabindex="0" role="link" aria-label="${escHtml(label)}">
-      ${badge}
+    <div class="admin-card admin-card--compact"${expertAttr} data-nav="${escHtml(item.nav)}" tabindex="0" role="link" aria-label="${escHtml(label)}">
       <span class="admin-card-icon" aria-hidden="true">${item.icon}</span>
-      <div class="admin-card-title">${escHtml(t(item.titleKey))}</div>
-      <div class="admin-card-description">${escHtml(t(item.descKey))}</div>
-      <div class="admin-card-usage">
-        <span class="admin-card-usage-label">${escHtml(t('admin.card.usageLabel'))}</span>
-        ${escHtml(t(item.usageKey))}
+      <div class="admin-card-main">
+        <div class="admin-card-title">${escHtml(t(item.titleKey))}</div>
+        <p class="admin-card-description">${escHtml(t(item.descKey))}</p>
+        <span class="admin-card-cta">${escHtml(t(actionKey))}</span>
       </div>
-      ${note}
     </div>`;
 }
 
 function renderAdminSection(section, t, escHtml) {
-  return `
-    <section class="admin-section" aria-labelledby="admin-section-${escHtml(section.id)}">
-      <h2 class="admin-section-title" id="admin-section-${escHtml(section.id)}">
+  const expertAttr = section.expertOnly ? ' data-ui="expert-only"' : '';
+  const hasHeading = Boolean(section.titleKey);
+  const labelledBy = hasHeading ? ` aria-labelledby="admin-section-${escHtml(section.id)}"` : '';
+  const titleHtml = hasHeading
+    ? `<h3 class="admin-section-title" id="admin-section-${escHtml(section.id)}">
         <span class="admin-section-emoji" aria-hidden="true">${section.sectionIcon}</span>
         ${escHtml(t(section.titleKey))}
-      </h2>
-      <div class="admin-card-grid">
+      </h3>`
+    : '';
+  const gridCls = ['admin-card-grid', section.gridClass].filter(Boolean).join(' ');
+  return `
+    <section class="admin-section"${expertAttr}${labelledBy}>
+      ${titleHtml}
+      <div class="${escHtml(gridCls)}">
         ${section.items.map((it) => renderAdminCard(it, t, escHtml)).join('')}
       </div>
     </section>`;
 }
 
-function renderGetStarted(t, escHtml) {
+function renderAdminCardGrid(items, t, escHtml, gridExtraClass = '') {
+  const cls = ['admin-card-grid', gridExtraClass].filter(Boolean).join(' ');
+  return `<div class="${escHtml(cls)}">${items.map((it) => renderAdminCard(it, t, escHtml)).join('')}</div>`;
+}
+
+/** Bloc visuel principal (Setup, Build, Run & Analyze, Advanced) */
+function renderAdminIntentBlock(t, escHtml, { blockId, titleKey, icon, innerHtml, expertOnly }) {
+  const eid = escHtml(blockId);
+  const expertAttr = expertOnly ? ' data-ui="expert-only"' : '';
+  const iconHtml = icon ? `<span class="admin-block-emoji" aria-hidden="true">${icon}</span>` : '';
   return `
-    <div class="admin-get-started" aria-labelledby="admin-get-started-title">
-      <div class="admin-get-started-title" id="admin-get-started-title">${escHtml(t('admin.home.getStarted.title'))}</div>
-      <p class="admin-get-started-lead">${escHtml(t('admin.home.getStarted.lead'))}</p>
+    <div class="admin-intent-block"${expertAttr}>
+      <h2 class="admin-block-title" id="admin-block-${eid}">
+        ${iconHtml}${escHtml(t(titleKey))}
+      </h2>
+      <div class="admin-intent-body" aria-labelledby="admin-block-${eid}">
+        ${innerHtml}
+      </div>
+    </div>`;
+}
+
+function renderSetupQuickPath(t, escHtml) {
+  return `
+    <div class="admin-get-started admin-get-started--compact" aria-labelledby="admin-block-setup">
+      <p class="admin-get-started-lead">${escHtml(t('admin.home.setup.leadShort'))}</p>
       <ol class="admin-get-started-list">
         <li>
           <button type="button" class="admin-get-started-link" data-nav="providers">
             <span class="admin-get-started-num">1.</span>
-            <span>${escHtml(t('admin.home.getStarted.step.provider'))}</span>
+            <span>${escHtml(t('admin.home.setup.step.connectAi'))}</span>
           </button>
         </li>
         <li>
           <button type="button" class="admin-get-started-link" data-nav="personas">
             <span class="admin-get-started-num">2.</span>
-            <span>${escHtml(t('admin.home.getStarted.step.agents'))}</span>
+            <span>${escHtml(t('admin.home.setup.step.createAgent'))}</span>
           </button>
         </li>
-        <li class="admin-get-started-li-split">
-          <span class="admin-get-started-num" aria-hidden="true">3.</span>
-          <div class="admin-get-started-split-body">
-            <div class="admin-get-started-split-intro">${escHtml(t('admin.home.getStarted.step.templatesIntro'))}</div>
-            <div class="admin-get-started-split-actions">
-              <button type="button" class="admin-get-started-chip" data-nav="templates" aria-label="${escHtml(t('admin.home.getStarted.step.templatesAria.templates'))}">
-                📋 ${escHtml(t('admin.templates'))}
-              </button>
-              <button type="button" class="admin-get-started-chip" data-nav="scenario-packs" aria-label="${escHtml(t('admin.home.getStarted.step.templatesAria.scenarios'))}">
-                🎯 ${escHtml(t('scenario.admin.title'))}
-              </button>
-            </div>
-          </div>
+        <li>
+          <button type="button" class="admin-get-started-link" data-nav="templates">
+            <span class="admin-get-started-num">3.</span>
+            <span>${escHtml(t('admin.home.setup.step.createTemplate'))}</span>
+          </button>
         </li>
-        <li class="admin-get-started-li-split">
-          <span class="admin-get-started-num" aria-hidden="true">4.</span>
-          <div class="admin-get-started-split-body">
-            <div class="admin-get-started-split-intro">${escHtml(t('admin.home.getStarted.step.analyzeIntro'))}</div>
-            <div class="admin-get-started-split-actions">
-              <button type="button" class="admin-get-started-chip" data-nav="new-session" aria-label="${escHtml(t('admin.home.getStarted.step.analyzeAria.launch'))}">
-                ✨ ${escHtml(t('nav.newSession'))}
-              </button>
-              <button type="button" class="admin-get-started-chip" data-nav="sessions" aria-label="${escHtml(t('admin.home.getStarted.step.analyzeAria.history'))}">
-                📁 ${escHtml(t('nav.sessions'))}
-              </button>
-            </div>
-          </div>
+        <li>
+          <button type="button" class="admin-get-started-link" data-nav="new-session">
+            <span class="admin-get-started-num">4.</span>
+            <span>${escHtml(t('admin.home.setup.step.startSession'))}</span>
+          </button>
         </li>
       </ol>
     </div>`;
 }
 
-function getFilteredAdminSections(state) {
-  const uiC = state.uiComplexity || 'advanced';
-  if (uiC !== 'basic') return ADMIN_HOME_SECTIONS;
+function renderSystemStatus() {
+  const { state, t, escHtml } = getCtx();
+  const providers = state.providers || [];
+  const hasProvider = providers.length > 0;
+  const isExpert = state.uiMode === 'expert';
+  const statusText = hasProvider
+    ? (t('admin.status.ready') !== 'admin.status.ready' ? t('admin.status.ready') : 'Setup prêt : vous pouvez lancer une analyse.')
+    : (t('admin.status.noProvider') !== 'admin.status.noProvider' ? t('admin.status.noProvider') : 'Setup incomplet : configurez un provider LLM.');
+  const expertNote = isExpert
+    ? `<div class="system-status-note">${t('admin.status.expertMode') !== 'admin.status.expertMode' ? escHtml(t('admin.status.expertMode')) : 'Mode expert : outils avancés visibles.'}</div>`
+    : '';
+  return `
+    <div class="system-status-card system-status-card--compact${hasProvider ? ' system-status-ok' : ' system-status-warning'}">
+      <div class="system-status-text">${escHtml(statusText)}</div>
+      ${expertNote}
+    </div>`;
+}
 
-  if (typeof state.adminShowAdvancedTools !== 'boolean') {
-    try {
-      state.adminShowAdvancedTools = localStorage.getItem('da_admin_show_advanced_tools') === '1';
-    } catch (_) {
-      state.adminShowAdvancedTools = false;
-    }
-  }
-  const showAdvanced = !!state.adminShowAdvancedTools;
-  if (showAdvanced) return ADMIN_HOME_SECTIONS;
+function renderAdministrationSimple(t, escHtml, pageTitle) {
+  return `
+    <div class="page-header">
+      <div class="page-title">${escHtml(pageTitle)}</div>
+      <div class="page-subtitle">${escHtml(t('admin.home.subtitleSimple'))}</div>
+    </div>
+    <div class="admin-home admin-home--simple">
+      ${renderSystemStatus()}
+      ${renderAdminCardGrid(ADMIN_SIMPLE_HUB_CARDS, t, escHtml, ' admin-card-grid--hub-simple')}
+    </div>
+  `;
+}
 
-  const hiddenNavs = new Set(['logs', 'prompt-policies']);
-  return ADMIN_HOME_SECTIONS
-    .map((sec) => ({
-      ...sec,
-      items: (sec.items || []).filter((it) => !hiddenNavs.has(it.nav)),
-    }))
-    .filter((sec) => (sec.items || []).length > 0);
+function renderAdministrationExpert(t, escHtml, state, pageTitle) {
+  const setupBlock = renderAdminIntentBlock(t, escHtml, {
+    blockId: 'setup',
+    titleKey: 'admin.block.setup',
+    icon: '🛠️',
+    innerHtml: renderSetupQuickPath(t, escHtml),
+    expertOnly: false,
+  });
+  const buildBlock = renderAdminIntentBlock(t, escHtml, {
+    blockId: 'build',
+    titleKey: 'admin.block.build',
+    icon: '🧱',
+    innerHtml: `
+      <div class="admin-sections admin-sections--nested">
+        ${renderAdminSection(
+          {
+            id: 'build-agents',
+            titleKey: 'admin.section.build.agents',
+            sectionIcon: '🧠',
+            gridClass: 'admin-card-grid--hub-expert',
+            items: buildAdminBuildAgentsItems(state.uiMode),
+          },
+          t,
+          escHtml,
+        )}
+        ${renderAdminSection(
+          {
+            id: 'build-templates',
+            titleKey: 'admin.section.build.templates',
+            sectionIcon: '📋',
+            gridClass: 'admin-card-grid--hub-expert',
+            items: [ADMIN_TEMPLATES_HUB_CARD],
+          },
+          t,
+          escHtml,
+        )}
+      </div>`,
+    expertOnly: false,
+  });
+  const runBlock = renderAdminIntentBlock(t, escHtml, {
+    blockId: 'run-analyze',
+    titleKey: 'admin.block.runAnalyze',
+    icon: '📊',
+    innerHtml: `
+      ${renderAdminCardGrid(ADMIN_RUN_ANALYZE_ITEMS, t, escHtml, ' admin-card-grid--hub-expert')}`,
+    expertOnly: false,
+  });
+  const advancedBlock = renderAdminIntentBlock(t, escHtml, {
+    blockId: 'advanced',
+    titleKey: 'admin.block.advanced',
+    icon: '🔬',
+    innerHtml: renderAdminCardGrid(ADMIN_ADVANCED_ITEMS, t, escHtml, ' admin-card-grid--hub-expert'),
+    expertOnly: true,
+  });
+  return `
+    <div class="page-header">
+      <div class="page-title">${escHtml(pageTitle)}</div>
+      <div class="page-subtitle">${escHtml(t('admin.home.subtitle'))}</div>
+    </div>
+    <div class="admin-home admin-home--expert">
+      ${renderSystemStatus()}
+      ${setupBlock}
+      ${buildBlock}
+      ${runBlock}
+      ${advancedBlock}
+    </div>
+  `;
 }
 
 function renderAdministration() {
   const { state, t, escHtml } = getCtx();
-  const uiC = state.uiComplexity || 'advanced';
-  const adminSections = getFilteredAdminSections(state);
-  const canToggleAdvanced = uiC === 'basic';
-  const showAdvanced = !!state.adminShowAdvancedTools;
-  const complexityToolbar = canToggleAdvanced
-    ? `<div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap;">
-        <button type="button" class="btn ${showAdvanced ? 'btn-primary' : 'btn-secondary'} btn-sm" style="font-size:11px;" data-action="toggle-admin-advanced-tools">
-          ${showAdvanced ? t('admin.hideAdvancedTools') : t('admin.showAdvancedTools')}
-        </button>
-      </div>`
-    : '';
-  return `
-    <div class="page-header">
-      <div class="page-title">${t('admin.title')}</div>
-      <div class="page-subtitle">${t('admin.home.subtitle')}</div>
-      ${complexityToolbar}
-    </div>
-    <div class="admin-home">
-      ${renderGetStarted(t, escHtml)}
-      <div class="admin-sections">
-        ${adminSections.map((sec) => renderAdminSection(sec, t, escHtml)).join('')}
-      </div>
-    </div>
-  `;
+  const isSimple = state.uiMode !== 'expert';
+  const pageTitle = isSimple
+    ? (t('admin.home.titleSimple') !== 'admin.home.titleSimple' ? t('admin.home.titleSimple') : 'Configuration')
+    : t('admin.title');
+  if (isSimple) {
+    return renderAdministrationSimple(t, escHtml, pageTitle);
+  }
+  return renderAdministrationExpert(t, escHtml, state, pageTitle);
 }
 
 /* ── Agent dynamics recommendations (post-mortem, suggestions only) ── */
@@ -376,7 +495,7 @@ function renderPersonas() {
                 <span class="mode-save-status" id="mode-status-${pid}"></span>
               </div>
               <div class="persona-dynamics-section" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
-                ${renderDecisionDynamicsEditor(p, { uiComplexity: state.uiComplexity || 'advanced', escHtml, t })}
+                ${renderDecisionDynamicsEditor(p, { uiMode: state.uiMode, escHtml, t })}
               </div>
             </div>
           `;
@@ -476,22 +595,74 @@ function renderTemplateAdminCard(template) {
   `;
 }
 
-function renderTemplates() {
-  const { state, t } = getCtx();
-  const templates = state.templates;
+function renderTemplatesCreatePanel(t, escHtml) {
   return `
-    <div class="page-header" style="flex-direction:row;justify-content:space-between;align-items:flex-start;">
+    <div class="card admin-templates-create-panel" style="margin-bottom:20px;padding:18px;">
+      <div style="font-weight:700;font-size:14px;margin-bottom:10px;color:var(--text-primary);">${escHtml(t('admin.templates.create.heading'))}</div>
+      <fieldset class="admin-templates-create-fieldset" style="border:none;margin:0;padding:0;">
+        <legend style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;">${escHtml(t('admin.templates.create.typeLegend'))}</legend>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">
+          <label class="admin-templates-type-option" style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;">
+            <input type="radio" name="admin-template-create-type" value="simple" checked style="accent-color:var(--accent);">
+            <span>${escHtml(t('admin.templates.create.typeSimple'))}</span>
+          </label>
+          <label class="admin-templates-type-option" style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;">
+            <input type="radio" name="admin-template-create-type" value="scenario" style="accent-color:var(--accent);">
+            <span>${escHtml(t('admin.templates.create.typeScenario'))}</span>
+          </label>
+        </div>
+      </fieldset>
+      <button type="button" class="btn btn-primary btn-sm" data-action="admin-open-template-create">${escHtml(t('admin.templates.create.continue'))}</button>
+    </div>`;
+}
+
+function renderTemplates() {
+  const { state, t, escHtml } = getCtx();
+  const templates = state.templates;
+  const allPacks = state.scenarioPacksAdmin || state.scenarioPacks || [];
+  const showScenarioForm = state.scenarioPackShowForm;
+  const editing = state.scenarioPackEditing;
+
+  if (!state.scenarioPacksAdmin) {
+    requestAnimationFrame(() => {
+      const v = window.DecisionArena?.store?.state?.view;
+      if (v === 'templates' || v === 'scenario-packs') {
+        window.DecisionArena.services?.ScenarioPackService?.list(true)
+          .then((data) => {
+            window.DecisionArena.store.state.scenarioPacksAdmin = Array.isArray(data) ? data : [];
+            window.DecisionArena.render?.();
+          }).catch(() => {});
+      }
+    });
+  }
+
+  const scenarioFormBlock = showScenarioForm ? renderScenarioPackForm(editing) : '';
+
+  return `
+    <div class="page-header" style="flex-direction:column;align-items:stretch;">
       <div>
         <div class="page-title">${t('admin.templates')}</div>
         <div class="page-subtitle">${t('admin.templatesDesc')}</div>
         <div class="card-description" style="margin-top:4px;">${t('admin.templates.page.desc')}</div>
         <button class="btn btn-secondary btn-sm" data-nav="administration" style="margin-top:8px;">${t('nav.backAdmin')}</button>
       </div>
-      <button class="btn btn-primary btn-sm" data-nav="template-maker" style="margin-top:4px;">+ ${t('template.create')}</button>
     </div>
+
+    ${renderTemplatesCreatePanel(t, escHtml)}
+
+    ${scenarioFormBlock}
+
+    <h3 class="admin-templates-section-title" style="font-size:15px;font-weight:700;margin:24px 0 10px;color:var(--text-primary);">${escHtml(t('admin.templates.section.simple'))}</h3>
     ${templates.length === 0 ? `<div class="empty-state"><div class="empty-state-icon">📋</div><div class="empty-state-text">${t('template.empty')}</div></div>` : `
-      <div style="display:flex;flex-direction:column;gap:10px;">${templates.map(renderTemplateAdminCard).join('')}</div>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:8px;">${templates.map(renderTemplateAdminCard).join('')}</div>
     `}
+
+    <h3 class="admin-templates-section-title" style="font-size:15px;font-weight:700;margin:28px 0 10px;color:var(--text-primary);">${escHtml(t('admin.templates.section.scenarioContext'))}</h3>
+    <p class="card-description" style="margin:0 0 14px;font-size:12px;line-height:1.45;">${escHtml(t('admin.templates.scenarioLead'))}</p>
+    ${allPacks.length === 0
+      ? renderEmptyState({ icon: '📋', text: t('admin.templates.scenarioEmpty') })
+      : `<div style="display:flex;flex-direction:column;gap:10px;">${allPacks.map(renderScenarioPackAdminCard).join('')}</div>`
+    }
   `;
 }
 
@@ -869,6 +1040,21 @@ function renderPersonaBuilder() {
 
 /* ── Providers ── */
 
+/** Types gérés par le bloc « provider serveur » / Provider local (même périmètre que l’ancien formulaire). */
+const LOCAL_SERVER_PROVIDER_TYPES = new Set(['ollama', 'lmstudio', 'openai-compatible']);
+
+function sortedLocalServerProviders(providerList) {
+  return (providerList || [])
+    .filter((p) => LOCAL_SERVER_PROVIDER_TYPES.has(p.type))
+    .slice()
+    .sort((a, b) => {
+      const pa = Number(a.priority ?? 100);
+      const pb = Number(b.priority ?? 100);
+      if (pa !== pb) return pa - pb;
+      return String(a.id).localeCompare(String(b.id));
+    });
+}
+
 function renderProviderItem(provider) {
   const { escHtml, t } = getCtx();
   return `
@@ -901,10 +1087,12 @@ function renderProviderForm(provider = null) {
   const options = state.providerModelOptions || [];
   const currentModel = p.default_model || '';
   const priority = (p.priority !== undefined && p.priority !== null) ? String(p.priority) : '100';
+  const originalId = p.id ? String(p.id) : '';
   return `
-    <form id="provider-form" class="card" style="max-width:600px;">
+    <form id="provider-form" class="provider-form-embed">
+      <input type="hidden" id="pf-original-id" value="${escHtml(originalId)}">
       <div class="form-row">
-        <div class="form-group"><label for="pf-id">${t('providers.fieldId')}</label><input class="input" id="pf-id" type="text" placeholder="my-provider" value="${escHtml(p.id || '')}" required></div>
+        <div class="form-group"><label for="pf-id">${t('providers.fieldId')}</label><input class="input" id="pf-id" type="text" placeholder="local-mon-serveur (auto si vide)" value="${escHtml(p.id || '')}"></div>
         <div class="form-group"><label for="pf-name">${t('providers.fieldName')}</label><input class="input" id="pf-name" type="text" placeholder="My Provider" value="${escHtml(p.name || '')}"></div>
       </div>
       <div class="form-group">
@@ -937,18 +1125,143 @@ function renderProviderForm(provider = null) {
         <input type="checkbox" id="pf-enabled" ${(p.enabled !== false) ? 'checked' : ''} style="width:16px;height:16px;accent-color:var(--accent);">
         <label for="pf-enabled" style="text-transform:none;font-size:13px;font-weight:500;margin:0;cursor:pointer;">${t('providers.fieldEnabled')}</label>
       </div>
-      <button class="btn btn-primary" data-action="save-provider" type="submit">${t('providers.save')}</button>
       <div id="provider-form-result" style="margin-top:8px;"></div>
     </form>
   `;
 }
 
+const BYOK_PROVIDER_ROWS = [
+  { id: 'openai', label: 'OpenAI' },
+  { id: 'anthropic', label: 'Anthropic' },
+  { id: 'mistral', label: 'Mistral AI' },
+  { id: 'openrouter', label: 'OpenRouter' },
+];
+
+function renderProviderLocalQuickRow() {
+  const { escHtml, state } = getCtx();
+  const locals = sortedLocalServerProviders(state.providers || []);
+  const activeLocals = locals.filter((p) => p.enabled !== false);
+  const n = locals.length;
+  const na = activeLocals.length;
+
+  let mid = '';
+  if (n === 0) mid = '0 configuré';
+  else if (n === 1) mid = na === 1 ? '1 configuré · 1 actif' : '1 configuré · 0 actif';
+  else mid = `${n} configurés / ${na} actif${na > 1 ? 's' : ''}`;
+
+  const actionsHtml = `<button type="button"
+          class="btn btn-primary btn-sm"
+          data-action="open-local-provider-modal">Ajouter</button>`;
+
+  return `
+      <div class="byok-quick-row card"
+           role="group"
+           aria-label="Providers locaux"
+           data-local-quick-provider="1">
+        <div class="byok-quick-row-main">
+          <span class="byok-quick-name">Providers locaux</span>
+          <span class="byok-quick-status-cell"><span class="byok-quick-status byok-quick-status--muted">${escHtml(mid)}</span></span>
+          <span class="byok-quick-actions">${actionsHtml}</span>
+        </div>
+        <div class="local-provider-quick-feedback provider-test-result byok-quick-feedback" hidden role="status" aria-live="polite"></div>
+      </div>`;
+}
+
+/** Dialogue : même formulaire / ids (#pf-*) que l’ancien ajout permanent (persisté via API `/api/providers`). */
+function renderProviderLocalModalShell() {
+  const { escHtml } = getCtx();
+  return `
+<dialog id="provider-local-modal" class="provider-byok-modal provider-local-modal" aria-labelledby="provider-local-modal-title">
+  <div class="provider-byok-modal-panel card">
+    <div class="provider-byok-modal-head">
+      <h3 id="provider-local-modal-title" class="provider-byok-modal-title">${escHtml('Configurer un provider local')}</h3>
+      <button type="button" class="provider-byok-modal-close" data-action="close-local-provider-modal" aria-label="Fermer">×</button>
+    </div>
+    <p class="card-description provider-local-modal-lead">${escHtml(
+      'Ollama, LM Studio ou compatible OpenAI. Les réglages sont enregistrés sur le serveur.',
+    )}</p>
+    <div id="provider-local-modal-form-host"></div>
+    <div class="provider-local-modal-footer">
+      <button type="button" class="btn btn-secondary btn-sm" data-action="close-local-provider-modal">${escHtml(
+        'Annuler',
+      )}</button>
+      <button type="submit" form="provider-form" class="btn btn-primary btn-sm">${escHtml('Enregistrer')}</button>
+    </div>
+  </div>
+</dialog>`;
+}
+
+/** Quick setup BYOK : liste compacte + dialogue Connecter / Modifier. */
+function renderProviderQuickSetupSection() {
+  const { escHtml, state } = getCtx();
+  const ps =
+    state.providerSettings && typeof state.providerSettings === 'object'
+      ? state.providerSettings
+      : {};
+
+  const localRowHtml = renderProviderLocalQuickRow();
+
+  const rows = BYOK_PROVIDER_ROWS.map(({ id, label }) => {
+    const row = ps[id] || {};
+    const rawKey = typeof row.apiKey === 'string' ? row.apiKey : '';
+    const hasKey = rawKey.trim() !== '';
+    const mask = hasKey ? maskProviderKey(rawKey) : '';
+
+    const statusHtml = hasKey
+      ? `<span class="byok-quick-status byok-quick-status--ok">Connecté ${escHtml(mask)}</span>`
+      : `<span class="byok-quick-status byok-quick-status--off">Non connecté</span>`;
+
+    const actionsHtml = hasKey
+      ? `<button type="button"
+            class="btn btn-secondary btn-sm"
+            data-action="open-provider-modal"
+            data-provider="${escHtml(id)}"
+            data-modal-mode="edit">Modifier</button>`
+      : `<button type="button"
+            class="btn btn-primary btn-sm"
+            data-action="open-provider-modal"
+            data-provider="${escHtml(id)}"
+            data-modal-mode="connect">Connecter</button>`;
+
+    return `
+      <div class="byok-quick-row card"
+           role="group"
+           aria-label="${escHtml(label)}"
+           data-byok-provider="${escHtml(id)}">
+        <div class="byok-quick-row-main">
+          <span class="byok-quick-name">${escHtml(label)}</span>
+          <span class="byok-quick-status-cell">${statusHtml}</span>
+          <span class="byok-quick-actions">${actionsHtml}</span>
+        </div>
+        <div class="byok-feedback provider-test-result byok-quick-feedback" hidden role="status" aria-live="polite"></div>
+      </div>`;
+  }).join('');
+
+  return `
+    <section class="section byok-quick-section" aria-labelledby="byok-quick-heading">
+      <h2 id="byok-quick-heading" class="section-label" style="margin-bottom:8px;font-size:15px;font-weight:600;">
+        Connecter votre fournisseur IA
+      </h2>
+      <p class="card-description" style="margin-bottom:14px;">
+        Provider local via le serveur (Ollama, LM Studio, …). Fournisseurs cloud : OpenAI, Anthropic, Mistral ou OpenRouter — clés uniquement dans ce navigateur (BYOK).
+      </p>
+      <div class="byok-quick-list">
+        ${localRowHtml}
+        ${rows}
+      </div>
+      ${renderProviderLocalModalShell()}
+      ${renderByokProviderConnectModal()}
+    </section>
+  `;
+}
+
 function renderProviderRoutingSection() {
   const { state, escHtml, t } = getCtx();
-  const providers = (state.providers || [])
-    .filter((p) => p.enabled !== false)
-    .slice()
-    .sort((a, b) => (Number(a.priority ?? 100) - Number(b.priority ?? 100)) || String(a.id).localeCompare(String(b.id)));
+  const routingCandidates = getAvailableProviders(state);
+  const emptyHint =
+    routingCandidates.length === 0
+      ? `<div class="provider-test-result fail" style="margin-bottom:12px;">Aucun fournisseur LLM valide pour le routage (serveur local avec URL, ou cloud avec clé API, priorité entre 0 et 1000000, fournisseur activé).</div>`
+      : '';
   const s = state.providerRoutingSettings || {
     routing_mode: 'single-primary',
     primary_provider_id: '',
@@ -960,10 +1273,13 @@ function renderProviderRoutingSection() {
   const mode = s.routing_mode || 'single-primary';
   const fallback = Array.isArray(s.fallback_provider_ids) ? s.fallback_provider_ids : [];
 
-  const providerOptionsFor = (selectedId) => providers.map((p) => {
-    const sel = selectedId && selectedId === p.id ? 'selected' : '';
-    return `<option value="${escHtml(p.id)}" ${sel}>${escHtml(p.name || p.id)}</option>`;
-  }).join('');
+  const providerOptionsFor = (selectedId) =>
+    routingCandidates
+      .map((p) => {
+        const sel = selectedId && selectedId === p.id ? 'selected' : '';
+        return `<option value="${escHtml(p.id)}" ${sel}>${escHtml(formatRoutingOptionLabel(p))}</option>`;
+      })
+      .join('');
 
   const modeOptions = [
     { v: 'single-primary',         label: t('providers.routing.singlePrimary') },
@@ -978,10 +1294,11 @@ function renderProviderRoutingSection() {
   const showLb        = mode === 'load-balance';
 
   return `
-    <div class="section" style="margin-top:24px;">
+    <div class="section providers-routing-section admin-provider-routing">
       <div class="section-label" style="margin-bottom:4px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">${t('providers.routing.title')} ${renderTooltip(t('tooltip.adminRouting'))}</div>
       <div class="card-description" style="margin-bottom:10px;">${t('admin.routing.desc')}</div>
-      <div class="card" style="max-width:800px;padding:18px;">
+      <div class="card admin-provider-routing-card">
+        ${emptyHint}
         <div class="form-row">
           <div class="form-group" style="flex:1;">
             <label for="pr-routing-mode">${t('providers.routing.mode')}</label>
@@ -1015,12 +1332,12 @@ function renderProviderRoutingSection() {
           <div class="form-group">
             <label>${t('providers.routing.fallback')}</label>
             <div style="display:flex;flex-direction:column;gap:6px;">
-              ${providers.map((p) => {
+              ${routingCandidates.map((p) => {
                 const checked = fallback.includes(p.id) ? 'checked' : '';
                 return `
                   <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;">
                     <input type="checkbox" class="pr-fallback" data-provider-id="${escHtml(p.id)}" ${checked} style="width:15px;height:15px;accent-color:var(--accent);">
-                    <span>${escHtml(p.name || p.id)} <span style="color:var(--text-muted);font-size:12px;">(${escHtml(p.id)})</span></span>
+                    <span>${escHtml(formatRoutingOptionLabel(p))} <span style="color:var(--text-muted);font-size:12px;">(${escHtml(p.id)})</span></span>
                   </label>
                 `;
               }).join('')}
@@ -1062,7 +1379,8 @@ function renderProviderRoutingSection() {
 
 function renderProviders() {
   const { state, t } = getCtx();
-  const providers = state.providers;
+  const providers = state.providers || [];
+  const localsOnly = sortedLocalServerProviders(providers);
   return `
     <div class="page-header">
       <div class="page-title">${t('providers.title')}</div>
@@ -1070,13 +1388,18 @@ function renderProviders() {
       <div class="card-description" style="margin-top:6px;">${t('admin.providers.page.desc')}</div>
       <button class="btn btn-secondary btn-sm" style="margin-top:8px;" data-nav="administration">${t('nav.backAdmin')}</button>
     </div>
-    <div data-ui="expert-only">
-    ${renderProviderRoutingSection()}
+    ${renderProviderQuickSetupSection()}
+    <div data-ui="expert-only" class="providers-expert-servers">
+      <div class="section" style="margin-top:28px;">
+        <div class="section-label" style="margin-bottom:12px;">Serveurs techniques</div>
+        <p class="card-description" style="margin-bottom:12px;">
+          Liste des providers locaux enregistrés sur le serveur. Utilisez <strong>Ajouter</strong> dans la section Quick setup ci-dessus pour en créer un nouveau, ou les actions ci-dessous pour tester, rafraîchir les modèles, modifier ou supprimer chaque entrée.
+        </p>
+      </div>
+      ${localsOnly.length === 0 ? `<div class="empty-state"><div class="empty-state-icon">⚙️</div><div class="empty-state-text">${t('providers.empty')}</div></div>` : localsOnly.map(renderProviderItem).join('')}
     </div>
-    ${providers.length === 0 ? `<div class="empty-state"><div class="empty-state-icon">⚙️</div><div class="empty-state-text">${t('providers.empty')}</div></div>` : providers.map(renderProviderItem).join('')}
-    <div class="section" style="margin-top:24px;">
-      <div class="section-label" style="margin-bottom:12px;">${t('providers.add')}</div>
-      ${renderProviderForm()}
+    <div data-ui="expert-only" class="providers-expert-routing">
+      ${renderProviderRoutingSection()}
     </div>
   `;
 }
@@ -1214,18 +1537,18 @@ function renderLogs() {
           </div>
         </div>
         ${logsState.maintenanceStatus ? `<div style="padding:10px 12px;font-size:12px;color:var(--text-muted);border-bottom:1px solid var(--border);">${escHtml(logsState.maintenanceStatus)}</div>` : ''}
-        <div style="max-height:520px;overflow:auto;">
-          <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+        <div class="data-table-wrap">
+          <table class="data-table">
             <thead>
-              <tr style="text-align:left;background:var(--bg-secondary);position:sticky;top:0;z-index:1;">
-                <th style="padding:8px 10px;border-bottom:1px solid var(--border);">${t('logs.col.time')}</th>
-                <th style="padding:8px 10px;border-bottom:1px solid var(--border);">${t('logs.col.level')}</th>
-                <th style="padding:8px 10px;border-bottom:1px solid var(--border);">${t('logs.col.category')}</th>
-                <th style="padding:8px 10px;border-bottom:1px solid var(--border);">${t('logs.col.session')}</th>
-                <th style="padding:8px 10px;border-bottom:1px solid var(--border);">${t('logs.col.agent')}</th>
-                <th style="padding:8px 10px;border-bottom:1px solid var(--border);">${t('logs.col.provider')}</th>
-                <th style="padding:8px 10px;border-bottom:1px solid var(--border);">${t('logs.col.action')}</th>
-                <th style="padding:8px 10px;border-bottom:1px solid var(--border);">${t('logs.col.message')}</th>
+              <tr>
+                <th>${t('logs.col.time')}</th>
+                <th>${t('logs.col.level')}</th>
+                <th>${t('logs.col.category')}</th>
+                <th>${t('logs.col.session')}</th>
+                <th>${t('logs.col.agent')}</th>
+                <th>${t('logs.col.provider')}</th>
+                <th>${t('logs.col.action')}</th>
+                <th>${t('logs.col.message')}</th>
               </tr>
             </thead>
             <tbody>
@@ -1235,17 +1558,17 @@ function renderLogs() {
                 const lvl = r.level || 'info';
                 const cat = r.category || '';
                 const msg = r.error_message || r.action || '';
-                const rowCls = (logsState.selectedId === r.id) ? 'background:rgba(99,102,241,0.10);' : '';
+                const rowStyle = (logsState.selectedId === r.id) ? ' style="background:rgba(99,102,241,0.10);"' : '';
                 return `
-                  <tr data-action="logs-open" data-log-id="${escHtml(r.id)}" style="cursor:pointer;${rowCls}">
-                    <td style="padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap;">${escHtml((r.created_at||'').replace('T',' ').replace('Z',''))}</td>
-                    <td style="padding:8px 10px;border-bottom:1px solid var(--border);">${badge(lvl, lvl)}</td>
-                    <td style="padding:8px 10px;border-bottom:1px solid var(--border);">${escHtml(cat)}</td>
-                    <td style="padding:8px 10px;border-bottom:1px solid var(--border);">${escHtml(r.session_id || '')}</td>
-                    <td style="padding:8px 10px;border-bottom:1px solid var(--border);">${escHtml(r.agent_id || '')}</td>
-                    <td style="padding:8px 10px;border-bottom:1px solid var(--border);">${escHtml(r.provider_id ? `${r.provider_id}${r.model ? ' / ' + r.model : ''}` : '')}</td>
-                    <td style="padding:8px 10px;border-bottom:1px solid var(--border);">${escHtml(r.action || '')}</td>
-                    <td style="padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text-muted);max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(msg)}</td>
+                  <tr data-action="logs-open" data-log-id="${escHtml(r.id)}"${rowStyle}>
+                    <td style="white-space:nowrap;">${escHtml((r.created_at||'').replace('T',' ').replace('Z',''))}</td>
+                    <td>${badge(lvl, lvl)}</td>
+                    <td>${escHtml(cat)}</td>
+                    <td>${escHtml(r.session_id || '')}</td>
+                    <td>${escHtml(r.agent_id || '')}</td>
+                    <td>${escHtml(r.provider_id ? `${r.provider_id}${r.model ? ' / ' + r.model : ''}` : '')}</td>
+                    <td>${escHtml(r.action || '')}</td>
+                    <td style="color:var(--text-muted);max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(msg)}</td>
                   </tr>
                 `;
               }).join('')}
@@ -1280,15 +1603,15 @@ function renderLogs() {
 
           <details open style="margin-top:8px;">
             <summary style="cursor:pointer;font-weight:600;margin-bottom:6px;">${t('logs.requestPayload')}</summary>
-            <pre style="white-space:pre-wrap;max-height:220px;overflow:auto;background:var(--bg-secondary);padding:10px;border-radius:6px;border:1px solid var(--border);">${escHtml(selected.request_payload || '')}</pre>
+            <pre class="code-preview">${escHtml(selected.request_payload || '')}</pre>
           </details>
           <details style="margin-top:10px;">
             <summary style="cursor:pointer;font-weight:600;margin-bottom:6px;">${t('logs.responsePayload')}</summary>
-            <pre style="white-space:pre-wrap;max-height:220px;overflow:auto;background:var(--bg-secondary);padding:10px;border-radius:6px;border:1px solid var(--border);">${escHtml(selected.response_payload || '')}</pre>
+            <pre class="code-preview">${escHtml(selected.response_payload || '')}</pre>
           </details>
           <details style="margin-top:10px;">
             <summary style="cursor:pointer;font-weight:600;margin-bottom:6px;">${t('logs.metadata')}</summary>
-            <pre style="white-space:pre-wrap;max-height:220px;overflow:auto;background:var(--bg-secondary);padding:10px;border-radius:6px;border:1px solid var(--border);">${escHtml(selected.metadata || '')}</pre>
+            <pre class="code-preview">${escHtml(selected.metadata || '')}</pre>
           </details>
           </div>
         `}
@@ -1341,7 +1664,7 @@ function renderScenarioPackForm(pack = null) {
   return `
     <form id="scenario-pack-form" class="card" style="max-width:700px;margin-top:16px;">
       <div style="font-weight:600;font-size:14px;margin-bottom:14px;">
-        ${p.id ? t('scenario.admin.edit') : t('scenario.admin.new')}
+        ${p.id ? t('scenario.admin.edit') : t('admin.templates.scenarioFormNew')}
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -1403,43 +1726,9 @@ function renderScenarioPackForm(pack = null) {
   `;
 }
 
+/** Même contenu que `templates` (les vues `scenario-packs` restent enregistrées pour compatibilité). */
 function renderScenarioPacks() {
-  const { state, t } = getCtx();
-  const packs    = (state.scenarioPacks || []);
-  const editing  = state.scenarioPackEditing || null;
-  const showForm = state.scenarioPackShowForm || false;
-
-  // Admin mode: show all packs (enabled + disabled)
-  // Trigger a background load if not yet loaded
-  const allPacks = (state.scenarioPacksAdmin || packs);
-  if (!state.scenarioPacksAdmin) {
-    requestAnimationFrame(() => {
-      window.DecisionArena?.store?.state?.view === 'scenario-packs' &&
-        window.DecisionArena.services?.ScenarioPackService?.list(true)
-          .then((data) => {
-            window.DecisionArena.store.state.scenarioPacksAdmin = Array.isArray(data) ? data : [];
-            window.DecisionArena.render?.();
-          }).catch(() => {});
-    });
-  }
-
-  return `
-    <div class="page-header" style="flex-direction:row;justify-content:space-between;align-items:flex-start;">
-      <div>
-        <div class="page-title">${t('scenario.admin.title')}</div>
-        <div class="page-subtitle">${t('scenario.admin.desc')}</div>
-        <button class="btn btn-secondary btn-sm" data-nav="administration" style="margin-top:8px;">${t('nav.backAdmin')}</button>
-      </div>
-      <button class="btn btn-primary btn-sm" data-action="new-scenario-pack" style="margin-top:4px;">${t('scenario.admin.new')}</button>
-    </div>
-
-    ${showForm ? renderScenarioPackForm(editing) : ''}
-
-    ${allPacks.length === 0
-      ? `<div class="empty-state"><div class="empty-state-icon">🎯</div><div class="empty-state-text">${t('scenario.admin.title')} — aucun pack</div></div>`
-      : `<div style="display:flex;flex-direction:column;gap:10px;">${allPacks.map(renderScenarioPackAdminCard).join('')}</div>`
-    }
-  `;
+  return renderTemplates();
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -1554,7 +1843,7 @@ function renderRetrospective() {
   const modeKeys = Object.keys(byMode);
   const byModeHtml = modeKeys.length === 0 ? '' : `
     <div class="card" style="padding:18px;margin-bottom:16px;">
-      <div style="font-weight:600;font-size:13px;margin-bottom:14px;">📊 ${t('postmortem.stats.by_mode')}</div>
+      <div class="stats-section-title">📊 ${t('postmortem.stats.by_mode')}</div>
       ${modeKeys.map((mode) => {
         const d = byMode[mode];
         const pct = d.total > 0 ? Math.round(d.correct / d.total * 100) : 0;
@@ -1574,7 +1863,7 @@ function renderRetrospective() {
   const agentKeys = Object.keys(byAgent);
   const byAgentHtml = agentKeys.length === 0 ? '' : `
     <div class="card" style="padding:18px;">
-      <div style="font-weight:600;font-size:13px;margin-bottom:14px;">🎭 ${t('postmortem.stats.by_agent')}</div>
+      <div class="stats-section-title">🎭 ${t('postmortem.stats.by_agent')}</div>
       <div style="display:flex;flex-wrap:wrap;gap:10px;">
         ${agentKeys.map((aid) => {
           const d = byAgent[aid];
@@ -1680,7 +1969,7 @@ function renderLearning() {
   const modes = Array.isArray(data.mode_performance) ? data.mode_performance : [];
   const modeHtml = modes.length === 0 ? '' : `
     <div class="card" style="padding:18px;margin-bottom:16px;">
-      <div style="font-weight:600;font-size:13px;margin-bottom:14px;">🗂️ ${t('learning.modePerformance')}</div>
+      <div class="stats-section-title">🗂️ ${t('learning.modePerformance')}</div>
       ${modes.map((m) => {
         const correct   = m.insufficient_data ? 'N/A' : `${pct(m.correct_rate)}%`;
         const incorrect = m.insufficient_data ? 'N/A' : `${pct(m.incorrect_rate)}%`;
@@ -1710,7 +1999,7 @@ function renderLearning() {
   const agents = Array.isArray(data.agent_performance) ? data.agent_performance : [];
   const agentHtml = agents.length === 0 ? '' : `
     <div class="card" style="padding:18px;margin-bottom:16px;">
-      <div style="font-weight:600;font-size:13px;margin-bottom:14px;">🎭 ${t('learning.agentPerformance')}</div>
+      <div class="stats-section-title">🎭 ${t('learning.agentPerformance')}</div>
       <div style="display:flex;flex-wrap:wrap;gap:10px;">
         ${agents.map((a) => {
           const warnColor = a.calibration_warning === 'overconfident_when_wrong' ? '#ef4444'
@@ -1734,7 +2023,7 @@ function renderLearning() {
   const cal = data.calibration || {};
   const calHtml = (cal.total_sessions_analyzed || 0) === 0 ? '' : `
     <div class="card" style="padding:18px;margin-bottom:16px;">
-      <div style="font-weight:600;font-size:13px;margin-bottom:14px;">🎯 ${t('learning.calibration')}</div>
+      <div class="stats-section-title">🎯 ${t('learning.calibration')}</div>
       <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px;">
         <div style="min-width:140px;">
           <div style="font-size:20px;font-weight:700;color:${(cal.overconfidence_rate||0)>0.2?'#ef4444':'#22c55e'};">${pct(cal.overconfidence_rate)}%</div>
@@ -1918,6 +2207,7 @@ function registerAdminFeature() {
   window.DecisionArena.views.shared.showPersonaModal             = showPersonaModal;
   window.DecisionArena.views.shared.buildPersonaMarkdownPreview  = buildPersonaMarkdownPreview;
   window.DecisionArena.views.shared.buildSoulMarkdownPreview     = buildSoulMarkdownPreview;
+  window.DecisionArena.views.shared.renderProviderForm           = renderProviderForm;
 }
 
 export {

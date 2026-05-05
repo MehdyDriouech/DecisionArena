@@ -30,12 +30,18 @@ class Router {
             if ($params !== null) {
                 $request->setParams($params);
                 $handler = $route['handler'];
-                if (is_callable($handler)) {
-                    return $handler($request);
+                $body = $request->body();
+                \Domain\Providers\CommercialRuntimeContext::loadFromRequestBody($body);
+                try {
+                    if (is_callable($handler)) {
+                        return $handler($request);
+                    }
+                    [$class, $action] = $handler;
+                    $controller = new $class();
+                    return $controller->$action($request);
+                } finally {
+                    \Domain\Providers\CommercialRuntimeContext::clear();
                 }
-                [$class, $action] = $handler;
-                $controller = new $class();
-                return $controller->$action($request);
             }
         }
         http_response_code(404);

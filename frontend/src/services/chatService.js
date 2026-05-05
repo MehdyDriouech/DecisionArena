@@ -1,42 +1,43 @@
 import { API_BASE, apiFetch } from './apiClient.js';
+import { withProviderRuntime } from '../core/providerRuntime.js';
 
 const ChatService = {
   send(body, signal) {
     return apiFetch('/api/chat/send', {
       method: 'POST',
       signal,
-      body: JSON.stringify(body),
+      body: JSON.stringify(withProviderRuntime(body)),
     });
   },
   sendReactive(body, signal) {
     return apiFetch('/api/chat/reactive', {
       method: 'POST',
       signal,
-      body: JSON.stringify(body),
+      body: JSON.stringify(withProviderRuntime(body)),
     });
   },
   runDecisionRoom(body) {
     return apiFetch('/api/decision-room/run', {
       method: 'POST',
-      body: JSON.stringify(body),
+      body: JSON.stringify(withProviderRuntime(body)),
     });
   },
   runConfrontation(body) {
     return apiFetch('/api/confrontation/run', {
       method: 'POST',
-      body: JSON.stringify(body),
+      body: JSON.stringify(withProviderRuntime(body)),
     });
   },
   runQuickDecision(body) {
     return apiFetch('/api/quick-decision/run', {
       method: 'POST',
-      body: JSON.stringify(body),
+      body: JSON.stringify(withProviderRuntime(body)),
     });
   },
   runStressTest(body) {
     return apiFetch('/api/stress-test/run', {
       method: 'POST',
-      body: JSON.stringify(body),
+      body: JSON.stringify(withProviderRuntime(body)),
     });
   },
   async uploadContextDocument(sessionId, title, file) {

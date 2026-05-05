@@ -4,7 +4,8 @@
  * sessionHistory, and stressTest.
  */
 
-import { renderTooltip, renderPanelRecommendBadge, renderCardDescription, renderDecisionBrief, renderTradeoffSection, renderDecisionDynamicsSummary, renderPremortemStructuredCard } from '../../ui/components.js';
+import { renderTooltip, renderPanelRecommendBadge, renderCardDescription, renderDecisionBrief, renderTradeoffSection, renderDecisionDynamicsSummary, renderPremortemStructuredCard, pickTradeoffs, renderTradeoffMatrix } from '../../ui/components.js';
+import { parseRecommendedActionForDisplay } from '../../utils/verdictUi.js';
 import { getVoteAppliedReputation, formatVoteReputationCaption } from '../../utils/decisionDynamics.js';
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
 import { renderExportButtons, renderAgentChatPanel } from '../chat/view.js';
@@ -375,7 +376,7 @@ function renderDecisionReliabilityCard(source) {
 }
 
 function renderVerdictCard(verdict) {
-  const { escHtml, t } = getCtx();
+  const { escHtml, t, renderMarkdown } = getCtx();
   if (!verdict) return '';
   const labelConfig = { 'go': { icon: '✅', cls: 'badge-success', label: t('verdict.go') }, 'no-go': { icon: '❌', cls: 'badge-danger', label: t('verdict.noGo') }, 'risky': { icon: '⚠️', cls: 'badge-warning', label: t('verdict.risky') }, 'needs-more-info': { icon: '❓', cls: 'badge-info', label: t('verdict.needsMoreInfo') }, 'reduce-scope': { icon: '✂️', cls: 'badge-muted', label: t('verdict.reduceScope') } };
   const cfg = labelConfig[verdict.verdict_label] || { icon: '📊', cls: 'badge-default', label: verdict.verdict_label };
@@ -385,7 +386,19 @@ function renderVerdictCard(verdict) {
     const color = inverted ? (score <= 3 ? '#34d399' : score <= 6 ? '#fbbf24' : '#f87171') : (score >= 7 ? '#34d399' : score >= 4 ? '#fbbf24' : '#f87171');
     return `<div style="margin-bottom:8px;"><div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-secondary);margin-bottom:3px;"><span>${label}</span><span>${score}/10</span></div><div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;"><div style="height:100%;width:${pct}%;background:${color};border-radius:3px;"></div></div></div>`;
   };
-  return `<div class="verdict-card"><div class="verdict-card-header"><span style="font-size:28px;">${cfg.icon}</span><div style="flex:1;"><div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;">${t('verdict.title')}</div><span class="badge ${cfg.cls}" style="font-size:14px;padding:4px 12px;margin-top:4px;">${cfg.label}</span></div></div>${verdict.verdict_summary ? `<div style="margin:12px 0;font-size:14px;color:var(--text-secondary);line-height:1.6;">${escHtml(verdict.verdict_summary)}</div>` : ''}<div style="margin:16px 0;">${scoreBar(t('verdict.feasibility'), verdict.feasibility_score)}${scoreBar(t('verdict.productValue'), verdict.product_value_score)}${scoreBar(t('verdict.ux'), verdict.ux_score)}${scoreBar(t('verdict.risk'), verdict.risk_score, true)}${scoreBar(t('verdict.confidence'), verdict.confidence_score)}</div>${verdict.recommended_action ? `<div style="padding:12px;background:var(--bg-secondary);border-radius:6px;border-left:3px solid var(--accent);"><div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px;">${t('verdict.recommendedAction')}</div><div style="font-size:13px;color:var(--text-primary);">${escHtml(verdict.recommended_action)}</div></div>` : ''}</div>`;
+  let recommendedBlock = '';
+  if (verdict.recommended_action) {
+    const { prose, tradeoffBrief } = parseRecommendedActionForDisplay(verdict.recommended_action);
+    const bundle = tradeoffBrief ? pickTradeoffs(tradeoffBrief) : null;
+    const proseHtml = prose
+      ? `<div class="md-content" style="font-size:13px;color:var(--text-primary);line-height:1.55;">${renderMarkdown(prose)}</div>`
+      : '';
+    const tradeoffHtml = bundle && bundle.criteria.length > 0
+      ? `<div class="verdict-embedded-tradeoffs" style="margin-top:12px;">${bundle.summary ? `<p class="tradeoff-summary-line" style="margin:0 0 10px;font-size:13px;">${escHtml(bundle.summary)}</p>` : ''}${renderTradeoffMatrix(bundle.criteria, t, escHtml)}</div>`
+      : '';
+    recommendedBlock = `<div style="padding:12px;background:var(--bg-secondary);border-radius:6px;border-left:3px solid var(--accent);"><div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;">${t('verdict.recommendedAction')}</div>${proseHtml}${tradeoffHtml}</div>`;
+  }
+  return `<div class="verdict-card"><div class="verdict-card-header"><span style="font-size:28px;">${cfg.icon}</span><div style="flex:1;"><div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;">${t('verdict.title')}</div><span class="badge ${cfg.cls}" style="font-size:14px;padding:4px 12px;margin-top:4px;">${cfg.label}</span></div></div>${verdict.verdict_summary ? `<div style="margin:12px 0;font-size:14px;color:var(--text-secondary);line-height:1.6;">${escHtml(verdict.verdict_summary)}</div>` : ''}<div style="margin:16px 0;">${scoreBar(t('verdict.feasibility'), verdict.feasibility_score)}${scoreBar(t('verdict.productValue'), verdict.product_value_score)}${scoreBar(t('verdict.ux'), verdict.ux_score)}${scoreBar(t('verdict.risk'), verdict.risk_score, true)}${scoreBar(t('verdict.confidence'), verdict.confidence_score)}</div>${recommendedBlock}</div>`;
 }
 
 function renderSessionMemoryPanel(session) {
@@ -413,9 +426,9 @@ function renderConfrontationResults(results) {
   const briefHtml = renderDecisionBrief(results.decision_brief || null, {
     sessionId: sid,
     agentDecisionDynamics: results.agent_decision_dynamics,
-    uiComplexity: state.uiComplexity || 'advanced',
+    uiMode: state.uiMode,
   }) + renderTradeoffSection(results.decision_brief || null, {
-    uiComplexity: state.uiComplexity || 'advanced',
+    uiMode: state.uiMode,
     tradeoffUid: sid,
   });
   if (results.rounds && Object.keys(results.rounds).length > 0) {

@@ -18,16 +18,19 @@ function registerGlobalHandlers() {
   registerAction('set-ui-mode', ({ element }) => {
     const m = element?.dataset?.uiMode;
     if (m !== 'simple' && m !== 'expert') return;
-    window.DecisionArena.store.state.uiMode = m;
-    document.body.classList.toggle('ui-expert', m === 'expert');
-    document.body.classList.toggle('ui-simple', m !== 'expert');
+    const normalized = window.DecisionArena.store.setUiMode?.(m);
+    if (!normalized) return;
+    window.DecisionArena.applyUiModeVisibility?.(normalized);
     window.DecisionArena.render?.();
   });
 
   registerAction('set-ui-complexity', ({ element }) => {
     const c = element?.dataset?.complexity;
     if (!['basic', 'advanced', 'expert'].includes(c)) return;
-    window.DecisionArena.setUiComplexity?.(c);
+    const normalized = window.DecisionArena.store.setUiComplexity?.(c);
+    if (!normalized) return;
+    window.DecisionArena.applyUiModeVisibility?.(normalized);
+    window.DecisionArena.render?.();
     document.getElementById('complexity-dropdown')?.style?.setProperty('display', 'none');
   });
 

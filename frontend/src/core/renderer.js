@@ -1,4 +1,5 @@
 /* Renderer — manages DOM updates for sidebar and main content */
+import { normalizeUiMode } from './store.js';
 
 function t(key) {
   return window.i18n?.t(key) ?? key;
@@ -15,8 +16,6 @@ function renderSidebar() {
   const nav = [
     { id: 'launch-assistant', icon: '🚀', label: t('dashboard.launchAssistant') },
     { id: 'dashboard',        icon: '🏠', label: t('nav.dashboard') },
-    { id: 'new-session',      icon: '✨', label: t('nav.newSession') },
-    { id: 'sessions',         icon: '📁', label: t('nav.sessions') },
     { id: 'administration',   icon: '⚙️', label: t('nav.admin') },
   ];
 
@@ -38,7 +37,8 @@ function renderSidebar() {
         const isFeatureSubView = featureViews.includes(state.view);
         const isActive = state.view === item.id
           || (item.id === 'administration' && isAdminSubView)
-          || (item.id === 'dashboard' && isFeatureSubView);
+          || (item.id === 'dashboard' && isFeatureSubView)
+          || (item.id === 'dashboard' && state.view === 'new-session');
         return `
           <div class="nav-item ${isActive ? 'active' : ''}" data-nav="${escHtml(item.id)}">
             <span class="nav-item-icon">${item.icon}</span>
@@ -117,13 +117,26 @@ function renderMain() {
   }
 }
 
-function applyComplexityVisibility(level) {
-  const levels = { basic: 1, advanced: 2, expert: 3 };
-  const current = levels[level] || 1;
+function applyUiModeVisibility(mode) {
+  const normalized = normalizeUiMode(mode);
+
+  document.body.classList.toggle('ui-simple', normalized === 'simple');
+  document.body.classList.toggle('ui-expert', normalized === 'expert');
+
+  // Legacy compatibility: old "advanced" blocks are intentionally treated
+  // as expert-only in this two-level migration lot.
   document.querySelectorAll('[data-complexity]').forEach((el) => {
-    const required = levels[el.dataset.complexity] || 2;
-    el.style.display = current >= required ? '' : 'none';
+    el.style.display = normalized === 'expert' ? '' : 'none';
   });
+
+  document.querySelectorAll('[data-ui-min]').forEach((el) => {
+    const min = el.dataset.uiMin;
+    el.style.display = (normalized === 'expert' || min === 'simple') ? '' : 'none';
+  });
+}
+
+function applyComplexityVisibility(level) {
+  applyUiModeVisibility(level);
 }
 
 function render() {
@@ -131,14 +144,8 @@ function render() {
   renderMain();
   try {
     const mode = window.DecisionArena.store.state.uiMode || 'simple';
-    document.body.classList.toggle('ui-expert', mode === 'expert');
-    document.body.classList.toggle('ui-simple', mode !== 'expert');
-  } catch (_) {}
-  try {
-    const complexity = window.DecisionArena.store.state.uiComplexity || 'advanced';
-    document.body.setAttribute('data-ui-complexity', complexity);
-    applyComplexityVisibility(complexity);
+    applyUiModeVisibility(mode);
   } catch (_) {}
 }
 
-export { render, renderSidebar, renderMain, applyComplexityVisibility };
+export { render, renderSidebar, renderMain, applyUiModeVisibility, applyComplexityVisibility };

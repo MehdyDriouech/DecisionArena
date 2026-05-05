@@ -4,7 +4,7 @@
  */
 
 import { renderConfrontationAgentCard, renderDebateInsightsPanels, renderWeightedVotePanel, renderDecisionReliabilityCard, renderVerdictCard, renderSessionMemoryPanel, renderSessionContextDocPanel } from '../confrontation/index.js';
-import { renderDecisionBrief, renderDecisionDynamicsSummary, renderPremortemInvertedBanner, renderPremortemStructuredCard, renderTradeoffSection } from '../../ui/components.js';
+import { renderDecisionBrief, renderDecisionDynamicsSummary, renderPremortemInvertedBanner, renderPremortemStructuredCard, renderTradeoffSection, renderEmptyState, renderActionBar } from '../../ui/components.js';
 import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
 import { renderSixThinkingMethodBanner } from '../../utils/sixThinkingHats.js';
 
@@ -137,6 +137,9 @@ function renderTemplateCard(template) {
       </div>
       ${agents.length > 0 ? `<div class="template-card-agents">${agents.map((id) => `<span class="agent-badge" style="font-size:11px;">${agentIcon(id)}</span>`).join('')}</div>` : ''}
       <div class="template-card-hint" aria-hidden="true">▶ ${t('template.use')}</div>
+      </div>
+      </div>
+    </div>
     </div>
   `;
 }
@@ -200,6 +203,8 @@ function renderActionPlanPanel(sessionId, actionPlan) {
         <button class="btn btn-secondary btn-sm" style="margin-top:8px;" data-action="save-action-plan-notes" data-session-id="${escHtml(sessionId)}">${t('actionPlan.saveNotes')}</button>
         <span id="ap-notes-status" style="font-size:12px;margin-left:8px;color:var(--text-muted);"></span>
       </div>
+      </div>
+    </div>
     </div>
   `;
 }
@@ -433,7 +438,7 @@ function renderConfidenceTimelinePanel(sessionId, timeline) {
 
   return `
     <div class="card debate-card" style="margin-top:16px;" id="timeline-panel-${escHtml(sessionId)}">
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <div class="panel-row-header">
         <div class="debate-card-title" style="margin:0;">📈 ${t('timeline.title')}</div>
         ${tooltipHtml}
         ${lateBadge}
@@ -584,7 +589,7 @@ function renderBiasDetectionPanel(sessionId, biasReport) {
 
   return `
     <div class="card debate-card" style="margin-top:16px;" id="bias-panel-${escHtml(sessionId)}">
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <div class="panel-row-header">
         <div class="debate-card-title" style="margin:0;">🧠 ${t('bias.title')}</div>
         ${tooltipHtml}
         <span class="badge badge-danger" style="font-size:11px;">${detected.length} ${t('bias.detected')}</span>
@@ -714,7 +719,7 @@ function renderEvidencePanel(sessionId, report) {
 
   return `
     <div class="card debate-card" style="margin-top:16px;" id="evidence-panel-${escHtml(sessionId)}">
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <div class="panel-row-header">
         <div class="debate-card-title" style="margin:0;">🔎 ${t('evidence.title')}</div>
         ${tip}
         <button class="btn btn-secondary btn-sm" style="margin-left:auto;font-size:11px;" data-action="recompute-evidence" data-session-id="${escHtml(sessionId)}"
@@ -739,7 +744,7 @@ function renderEvidencePanel(sessionId, report) {
           <div class="evidence-metric-value" style="color:${impactColor};text-transform:uppercase;font-size:12px;">${escHtml(impact)}</div>
         </div>
       </div>
-      <details style="margin-bottom:10px;font-size:12px;color:var(--text-secondary);">
+      <details data-ui="expert-only" style="margin-bottom:10px;font-size:12px;color:var(--text-secondary);">
         <summary style="cursor:pointer;color:var(--text-muted);">${escHtml(t('evidence.advanced'))}</summary>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-top:10px;">
           <div><span style="color:var(--text-muted);">${escHtml(t('evidence.density'))}</span><br /><strong>${densPct != null ? `${densPct}%` : '–'}</strong></div>
@@ -747,7 +752,7 @@ function renderEvidencePanel(sessionId, report) {
           <div><span style="color:var(--text-muted);">${escHtml(t('evidence.hiContradicted'))}</span><br /><strong>${hiContra}</strong></div>
         </div>
       </details>
-      <details style="margin-bottom:10px;font-size:12px;color:var(--text-secondary);">
+      <details data-ui="expert-only" style="margin-bottom:10px;font-size:12px;color:var(--text-secondary);">
         <summary style="cursor:pointer;color:var(--text-muted);">${escHtml(t('evidence.expert'))}</summary>
         ${claimsTableHtml}
       </details>
@@ -866,7 +871,7 @@ function renderRiskPanel(sessionId, profile, thresholdInfo) {
     const adj = Math.round(ti.risk_adjusted_threshold * 100);
     const adjColor = ti.was_adjusted ? 'var(--warning)' : 'var(--text-secondary)';
     thrHtml = `
-      <div style="display:flex;gap:16px;margin-top:12px;flex-wrap:wrap;">
+      <div data-ui="expert-only" style="display:flex;gap:16px;margin-top:12px;flex-wrap:wrap;">
         <div class="evidence-metric-cell" style="flex:1;min-width:120px;">
           <div class="evidence-metric-label">${escHtml(t('risk.configuredThreshold'))}</div>
           <div class="evidence-metric-value" style="color:var(--text-secondary);font-size:18px;">${cfg}%</div>
@@ -886,7 +891,7 @@ function renderRiskPanel(sessionId, profile, thresholdInfo) {
 
   return `
     <div class="card debate-card" style="margin-top:16px;" id="risk-panel-${escHtml(sessionId)}">
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <div class="panel-row-header">
         <div class="debate-card-title" style="margin:0;">⚠️ ${t('risk.title')}</div>
         ${tip}
         <button class="btn btn-secondary btn-sm" style="margin-left:auto;font-size:11px;" data-action="recompute-risk-profile" data-session-id="${escHtml(sessionId)}"
@@ -918,14 +923,157 @@ function renderRiskPanel(sessionId, profile, thresholdInfo) {
 
 /* ── Collapsible panel wrapper ── */
 
-function renderCollapsiblePanel(key, title, innerHtml, state) {
+function parseHistoryObject(value) {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function firstNonEmpty(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    if (Array.isArray(value)) {
+      const cleaned = value.map(cleanBriefValue).filter(Boolean);
+      if (cleaned.length) return cleaned;
+      continue;
+    }
+    const text = cleanBriefValue(value);
+    if (text) return text;
+  }
+  return '';
+}
+
+function cleanBriefValue(value) {
+  return String(value || '')
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function briefList(...values) {
+  for (const value of values) {
+    if (!value) continue;
+    const list = Array.isArray(value) ? value : [value];
+    const cleaned = list.map(cleanBriefValue).filter(Boolean);
+    if (cleaned.length) return cleaned;
+  }
+  return [];
+}
+
+function normalizeDecisionLabel(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return raw.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').toUpperCase();
+}
+
+function scoreFromDecision(decision) {
+  if (!decision || typeof decision !== 'object') return null;
+  const score = decision.decision_score ?? decision.score ?? decision.confidence;
+  const numeric = Number(score);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function summarizeLatestMessages(messages) {
+  const chunks = (Array.isArray(messages) ? messages : [])
+    .filter((msg) => msg?.content && msg.role !== 'system')
+    .slice(-2)
+    .map((msg) => String(msg.content || '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  const summary = chunks.join(' ');
+  if (!summary) return 'Aucune synth\u00e8se disponible.';
+  return summary.length > 260 ? `${summary.slice(0, 257)}...` : summary;
+}
+
+function buildSessionDecisionBrief(data, messages) {
+  const brief = parseHistoryObject(data?.decision_brief) || {};
+  const adjusted = parseHistoryObject(data?.adjusted_decision);
+  const raw = parseHistoryObject(data?.raw_decision);
+  const automatic = parseHistoryObject(data?.automatic_decision);
+  const finalDecision = adjusted || raw || automatic || {};
+  const ds = data?.decisionSummary || {};
+  const verdict = data?.verdict || {};
+  const relSummary = data?.decision_reliability_summary || {};
+  const riskProfile = data?.risk_profile || {};
+  const actionPlan = data?.actionPlan || {};
+  const immediateActions = Array.isArray(actionPlan.immediate_actions) ? actionPlan.immediate_actions : [];
+
+  const decision = normalizeDecisionLabel(firstNonEmpty(
+    finalDecision.ui_decision_label,
+    finalDecision.legacy_decision_label,
+    finalDecision.decision_label,
+    finalDecision.vote_label,
+    finalDecision.final_outcome,
+    brief.decision,
+    ds.decision,
+    verdict.verdict_label,
+  )) || 'Non d\u00e9termin\u00e9e';
+
+  const confidence = firstNonEmpty(
+    scoreFromDecision(finalDecision),
+    brief.confidence,
+    ds.confidence,
+    verdict.confidence_score != null ? Number(verdict.confidence_score) / 10 : null,
+    finalDecision.confidence_level,
+  ) || 'N/A';
+
+  const why = firstNonEmpty(
+    brief.why,
+    brief.summary,
+    ds.summary,
+    verdict.verdict_summary,
+    summarizeLatestMessages(messages),
+  );
+
+  const risks = briefList(
+    brief.risks,
+    ds.risks,
+    riskProfile.risk_categories,
+    relSummary.top_issues,
+  );
+
+  const nextStep = firstNonEmpty(
+    brief.nextStep,
+    brief.next_step,
+    relSummary.recommended_action,
+    verdict.recommended_action,
+    immediateActions[0]?.title,
+    'Approfondir l\u2019analyse',
+  );
+
+  return { decision, confidence, why, risks, nextStep };
+}
+
+function renderSessionPrimaryActions(session, state, escHtml) {
+  const sessionId = escHtml(session.id || '');
+  const loadingPm = Boolean(state.premortemLaunchSessionId === session.id);
+  return renderActionBar({ actionsHtml: `
+      <button type="button" class="btn btn-secondary btn-sm" data-action="show-debate-details">Voir le d&eacute;bat</button>
+      <button type="button" class="btn btn-secondary btn-sm" data-action="rerun-with-contradiction" data-session-id="${sessionId}">Relancer avec contradiction</button>
+      <button type="button" class="btn btn-secondary btn-sm" data-action="launch-premortem" data-session-id="${sessionId}" ${loadingPm ? 'disabled' : ''}>Lancer un pre-mortem</button>
+    ` });
+}
+
+function renderExpertOnly(innerHtml) {
+  if (!innerHtml || String(innerHtml).trim() === '') return '';
+  return `<div data-ui="expert-only">${innerHtml}</div>`;
+}
+
+function renderCollapsiblePanel(key, title, innerHtml, state, opts = {}) {
   if (!innerHtml || innerHtml.trim() === '') return '';
-  const collapsed  = state?.collapsedPanels instanceof Set
+  const toggled  = state?.collapsedPanels instanceof Set
     ? state.collapsedPanels.has(key)
     : false;
+  const collapsed = opts.defaultCollapsed ? !toggled : toggled;
+  const expertAttr = opts.expertOnly ? ' data-ui="expert-only"' : '';
   const { t } = getCtx();
   return `
-    <div class="collapsible-panel" data-panel-key="${key}">
+    <div class="collapsible-panel" data-panel-key="${key}"${expertAttr}>
       <div class="collapsible-panel-header" data-action="toggle-panel-collapse" data-panel-key="${key}" style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:8px 0;border-bottom:1px solid var(--border);margin-bottom:${collapsed ? '0' : '8px'};">
         <span style="font-size:13px;font-weight:600;color:var(--text-secondary);flex:1;">${title}</span>
         <span style="font-size:11px;color:var(--text-muted);">${collapsed ? t('session.section.expand') : t('session.section.collapse')}</span>
@@ -991,7 +1139,7 @@ function renderSessionHistory() {
   const { state, escHtml, renderMarkdown, formatDate, agentIcon, agentName, t } = getCtx();
   const data = state.sessionHistory;
   if (!data) {
-    return `<div class="view-container"><div class="empty-state"><div class="empty-state-icon">📂</div><div class="empty-state-text">${t('sessions.noneSelected')}</div></div></div>`;
+    return `<div class="view-container">${renderEmptyState({ icon: '📂', text: t('sessions.noneSelected') })}</div>`;
   }
 
   const session  = data.session || data;
@@ -1041,26 +1189,29 @@ function renderSessionHistory() {
       </span>` : '';
     const messageId = String(msg.id || `${session.id}-hist-${msg.agent_id || 'agent'}-${idx}`);
     const isLong = String(msg.content || '').length > 650;
-    const collapsed = !!state.collapsedMessages?.[messageId];
+    const isSimpleMode = state.uiMode !== 'expert';
+    const canCollapse = isSimpleMode || isLong;
+    const toggled = state.collapsedMessages?.[messageId];
+    const collapsed = canCollapse ? (isSimpleMode ? toggled !== true : !!toggled) : false;
     const preview = escHtml(String(msg.content || '').slice(0, 320));
-    const contentHtml = isLong && collapsed
+    const contentHtml = canCollapse && collapsed
       ? `<div class="agent-content md-content"><p>${preview}…</p></div>`
       : `<div class="agent-content md-content">${renderMarkdown(msg.content)}</div>`;
-    const toggleBtn = isLong
+    const toggleBtn = canCollapse
       ? `<button class="btn btn-secondary btn-sm" data-action="toggle-agent-message" data-message-id="${escHtml(messageId)}">${collapsed ? 'Voir' : 'Masquer'}</button>`
       : '';
     const chBtn = window.DecisionArena?.utils?.canChallengeMessage?.(msg)
       ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;font-size:11px;" data-action="challenge-claim" data-message-id="${escHtml(String(msg.id))}">${escHtml(t('hitl.challenge'))}</button>`
       : '';
     const hitlAg = window.DecisionArena?.utils?.formatHitlMessageBadges?.(msg, t, escHtml) || '';
-    return `<div class="agent-card${daClass}" style="margin-bottom:12px;"><div class="agent-card-header"><span class="agent-icon">${icon}</span><div style="flex:1;min-width:0;"><div class="agent-name">${escHtml(name)}</div></div>${daBadge}${targetBadge}${typeBadge}</div>${hitlAg}${contentHtml}${toggleBtn}${chBtn}<div class="agent-card-footer" style="font-size:11px;color:var(--text-muted);">${provBadge}${msg.created_at ? `<span style="margin-left:auto;">${formatDate(msg.created_at)}</span>` : ''}</div></div>`;
+    return `<div class="agent-card agent-message${collapsed ? ' collapsed' : ''}${daClass}" style="margin-bottom:12px;"><div class="agent-card-header"><span class="agent-icon">${icon}</span><div style="flex:1;min-width:0;"><div class="agent-name">${escHtml(name)}</div></div>${daBadge}${targetBadge}${typeBadge}</div>${hitlAg}${contentHtml}${toggleBtn}${chBtn}<div class="agent-card-footer" style="font-size:11px;color:var(--text-muted);">${provBadge}${msg.created_at ? `<span style="margin-left:auto;">${formatDate(msg.created_at)}</span>` : ''}</div></div>`;
   };
 
   const bodyHtml = (() => {
     if (!hasRounds || mode === 'chat') {
       return flat.map((m, i) => renderHistoryMessage(m, i)).join('') ||
         messages.map((m, i) => renderHistoryMessage(m, i)).join('') ||
-        `<div class="empty-state"><div class="empty-state-text">${t('sessions.noMessages')}</div></div>`;
+        renderEmptyState({ text: t('sessions.noMessages') });
     }
     const roundNums = Object.keys(grouped).map(Number).sort((a, b) => a - b);
     return roundNums.map((r) => {
@@ -1068,7 +1219,12 @@ function renderSessionHistory() {
       if (msgs.length === 0) return '';
       const isSynth = msgs.some((m) => m.message_type === 'synthesis' || m.phase === 'synthesis');
       const label   = isSynth ? `✨ ${t('confrontation.phaseFinal')}` : mode === 'confrontation' ? `${t('confrontation.round')} ${r}` : `${t('dr.round')} ${r}`;
-      return `<div class="phase-section" style="margin-bottom:24px;"><div class="phase-header ${isSynth ? 'synthesis' : 'blue'}" style="margin-bottom:12px;"><span>${label}</span></div><div class="phase-agents-grid">${msgs.map((m, i) => renderConfrontationAgentCard(m, isSynth, `${session.id}-hist-r${r}-m${i}`)).join('')}</div></div>`;
+      const cards = msgs.map((m, i) => (
+        state.uiMode !== 'expert'
+          ? renderHistoryMessage(m, i)
+          : renderConfrontationAgentCard(m, isSynth, `${session.id}-hist-r${r}-m${i}`)
+      )).join('');
+      return `<div class="phase-section" style="margin-bottom:24px;"><div class="phase-header ${isSynth ? 'synthesis' : 'blue'}" style="margin-bottom:12px;"><span>${label}</span></div><div class="phase-agents-grid">${cards}</div></div>`;
     }).join('');
   })();
 
@@ -1116,6 +1272,24 @@ function renderSessionHistory() {
         <button class="btn btn-secondary btn-sm" data-nav="sessions">← ${t('nav.back')}</button>
       </div>
 
+      <div class="session-view">
+        ${mode !== 'chat' ? renderDecisionBrief(buildSessionDecisionBrief(data, messages)) : ''}
+
+        ${mode !== 'chat' ? renderSessionPrimaryActions(session, state, escHtml) : ''}
+
+        <div style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:16px;text-transform:uppercase;letter-spacing:.05em;">
+          ${t('sessions.history')} (${messages.length} ${t('sessions.messages')})
+        </div>
+
+        <details id="debate-section-${escHtml(session.id)}" data-section="debate-details" ${state.showDebateDetails ? 'open' : ''} style="margin-bottom:16px;">
+          <summary class="btn btn-secondary btn-sm">Voir le d&eacute;bat complet</summary>
+          <div style="margin-top:12px;">${bodyHtml}</div>
+        </details>
+
+        ${mode !== 'chat' ? renderCollapsiblePanel('decision-summary', 'Decision summary', renderDecisionSummaryCard(data), state, { defaultCollapsed: true }) : ''}
+
+        ${mode !== 'chat' ? renderCollapsiblePanel('confidence-timeline', 'Confiance', renderConfidenceTimelinePanel(session.id, confidenceTimeline || null), state, { defaultCollapsed: true }) : ''}
+
       ${variantBanner}
 
       ${challengeRerunBanner}
@@ -1124,11 +1298,7 @@ function renderSessionHistory() {
 
       ${isPremortemSession ? renderPremortemInvertedBanner(t, escHtml) : ''}
 
-      ${mode !== 'chat' ? renderDecisionSummaryCard(data) : ''}
-
-      ${mode !== 'chat' ? renderConfidenceTimelinePanel(session.id, confidenceTimeline || null) : ''}
-
-      <div class="card" style="margin-bottom:24px;padding:20px;">
+      <div class="card" data-ui="expert-only" style="margin-bottom:24px;padding:20px;">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <span style="font-size:28px;">${modeIcons[mode] || '💬'}</span>
           <div style="flex:1;min-width:0;">
@@ -1149,39 +1319,33 @@ function renderSessionHistory() {
         </div>
       </div>
 
-      ${renderSessionMemoryPanel(session)}
-      ${renderSessionContextDocPanel(session)}
+      ${renderExpertOnly(renderSessionMemoryPanel(session))}
+      ${renderExpertOnly(renderSessionContextDocPanel(session))}
 
       ${mode === 'jury' && data.jury_adversarial ? renderSessionJuryAdversarialCard(data.jury_adversarial) : ''}
 
-      ${mode !== 'chat' ? renderDecisionBrief(data.decision_brief || null, {
-        sessionId: session.id,
-        agentDecisionDynamics: data.agent_decision_dynamics,
-        uiComplexity: state.uiComplexity || 'advanced',
-      }) : ''}
+      ${mode !== 'chat' ? renderCollapsiblePanel('tradeoffs', 'Compromis', renderTradeoffSection(data.decision_brief || null, { uiMode: state.uiMode, tradeoffUid: session.id }), state, { defaultCollapsed: true }) : ''}
 
-      ${mode !== 'chat' ? renderTradeoffSection(data.decision_brief || null, { uiComplexity: state.uiComplexity || 'advanced', tradeoffUid: session.id }) : ''}
+      ${mode !== 'chat' ? renderCollapsiblePanel('premortem-summary', 'Pre-mortem', renderPremortemStructuredCard(data.premortem_summary || null, t, escHtml), state, { defaultCollapsed: true }) : ''}
 
-      ${mode !== 'chat' ? renderPremortemStructuredCard(data.premortem_summary || null, t, escHtml) : ''}
+      ${mode !== 'chat' ? renderCollapsiblePanel('decision-dynamics', t('session.dynamics.title'), renderDecisionDynamicsSummary(data.agent_decision_dynamics || [], { escHtml, agentName, t, session, votes: data.votes || [] }), state, { defaultCollapsed: true, expertOnly: true }) : ''}
 
-      ${mode !== 'chat' ? renderDecisionDynamicsSummary(data.agent_decision_dynamics || [], { escHtml, agentName, t, session, votes: data.votes || [] }) : ''}
-
-      ${mode !== 'chat' ? renderDebateInsightsPanels({
+      ${mode !== 'chat' ? renderCollapsiblePanel('debate-insights', 'Analyse du d&eacute;bat', renderDebateInsightsPanels({
         arguments: data.arguments || [],
         positions: data.positions || [],
         interaction_edges: data.interaction_edges || [],
         weighted_analysis: data.weighted_analysis || {},
         dominance_indicator: data.dominance_indicator || '',
-      }) : ''}
-      ${mode !== 'chat' ? renderWeightedVotePanel({
+      }), state, { defaultCollapsed: true }) : ''}
+      ${mode !== 'chat' ? renderCollapsiblePanel('weighted-vote', 'Vote pond&eacute;r&eacute;', renderWeightedVotePanel({
         votes: data.votes || [],
         automatic_decision: data.automatic_decision || null,
         raw_decision: data.raw_decision || null,
         adjusted_decision: data.adjusted_decision || null,
         decision_reliability_summary: data.decision_reliability_summary || null,
         context_clarification: data.context_clarification || null,
-      }, session.id) : ''}
-      ${mode !== 'chat' ? renderDecisionReliabilityCard({
+      }, session.id), state, { defaultCollapsed: true, expertOnly: true }) : ''}
+      ${mode !== 'chat' ? renderCollapsiblePanel('decision-reliability', 'Fiabilit&eacute; de la d&eacute;cision', renderDecisionReliabilityCard({
         context_quality: data.context_quality || null,
         reliability_cap: data.reliability_cap || null,
         raw_decision: data.raw_decision || data.automatic_decision || null,
@@ -1190,35 +1354,26 @@ function renderSessionHistory() {
         false_consensus: data.false_consensus || null,
         reliability_warnings: data.reliability_warnings || [],
         decision_reliability_summary: data.decision_reliability_summary || null,
-      }) : ''}
+      }), state, { defaultCollapsed: true, expertOnly: true }) : ''}
 
-      ${mode !== 'chat' ? renderThresholdPanel(session) : ''}
+      ${mode !== 'chat' ? renderCollapsiblePanel('threshold', t('vote.consensusThreshold'), renderThresholdPanel(session), state, { defaultCollapsed: true, expertOnly: true }) : ''}
 
-      <div style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:16px;text-transform:uppercase;letter-spacing:.05em;">
-        ${t('sessions.history')} (${messages.length} ${t('sessions.messages')})
-      </div>
-
-      <details id="debate-section-${escHtml(session.id)}" data-section="debate-details" ${state.showDebateDetails ? 'open' : ''} style="margin-bottom:8px;">
-        <summary class="btn btn-secondary btn-sm">Voir le debat complet</summary>
-        <div style="margin-top:12px;">${bodyHtml}</div>
-      </details>
-
-      ${data.verdict ? renderVerdictCard(data.verdict) : ''}
+      ${data.verdict ? renderCollapsiblePanel('verdict', 'Verdict', renderVerdictCard(data.verdict), state, { defaultCollapsed: true }) : ''}
 
       ${renderActionPlanPanel(session.id, data.actionPlan || null)}
 
       ${mode !== 'chat' ? `
       <div class="session-history-analytics-panels">
-        ${renderCollapsiblePanel('debate-audit', t('session.section.debateAudit'), (window.DecisionArena.views.shared.renderDebateAuditPanel || (() => ''))(session.id), state)}
-        ${renderCollapsiblePanel('persona-scores', t('session.section.personaScores'), renderPersonaScorePanel(session.id, personaScores || null), state)}
-        ${renderCollapsiblePanel('social-dynamics', t('session.section.socialDynamics'), renderSocialDynamicsPanel(session.id, socialDynamics ?? null), state)}
-        ${renderCollapsiblePanel('llm-used', t('session.section.llmUsed'), renderLlmUsedPanel(messages), state)}
-        ${renderCollapsiblePanel('evidence', t('session.section.evidence'), renderEvidencePanel(session.id, evidenceReport), state)}
-        ${renderCollapsiblePanel('risk', t('session.section.risk'), renderRiskPanel(session.id, riskProfile, riskThresholdInfo), state)}
-        ${(window.DecisionArena.views.shared.renderGraphViewPanel || (() => ''))(session.id)}
-        ${(window.DecisionArena.views.shared.renderArgumentHeatmapPanel || (() => ''))(session.id)}
-        ${renderCollapsiblePanel('bias-detection', t('session.section.biasDetection'), renderBiasDetectionPanel(session.id, biasReport || null), state)}
-        ${(window.DecisionArena.views.shared.renderDebateReplayPanel || (() => ''))(session.id)}
+        ${renderCollapsiblePanel('debate-audit', t('session.section.debateAudit'), (window.DecisionArena.views.shared.renderDebateAuditPanel || (() => ''))(session.id), state, { defaultCollapsed: true, expertOnly: true })}
+        ${renderCollapsiblePanel('persona-scores', t('session.section.personaScores'), renderPersonaScorePanel(session.id, personaScores || null), state, { defaultCollapsed: true, expertOnly: true })}
+        ${renderCollapsiblePanel('social-dynamics', t('session.section.socialDynamics'), renderSocialDynamicsPanel(session.id, socialDynamics ?? null), state, { defaultCollapsed: true, expertOnly: true })}
+        ${renderCollapsiblePanel('llm-used', t('session.section.llmUsed'), renderLlmUsedPanel(messages), state, { defaultCollapsed: true, expertOnly: true })}
+        ${renderCollapsiblePanel('evidence', t('session.section.evidence'), renderEvidencePanel(session.id, evidenceReport), state, { defaultCollapsed: true })}
+        ${renderCollapsiblePanel('risk', t('session.section.risk'), renderRiskPanel(session.id, riskProfile, riskThresholdInfo), state, { defaultCollapsed: true })}
+        ${renderExpertOnly((window.DecisionArena.views.shared.renderGraphViewPanel || (() => ''))(session.id))}
+        ${renderExpertOnly((window.DecisionArena.views.shared.renderArgumentHeatmapPanel || (() => ''))(session.id))}
+        ${renderCollapsiblePanel('bias-detection', t('session.section.biasDetection'), renderBiasDetectionPanel(session.id, biasReport || null), state, { defaultCollapsed: true })}
+        ${renderExpertOnly((window.DecisionArena.views.shared.renderDebateReplayPanel || (() => ''))(session.id))}
       </div>
       ` : ''}
 
@@ -1227,7 +1382,7 @@ function renderSessionHistory() {
 
       ${renderDynamicsInsightsPanel(session, state.dynamicsRecoBySession?.[session.id])}
 
-      <div class="card" style="padding:16px;margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;">
+      <div class="card" data-ui="expert-only" style="padding:16px;margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;">
         <button class="btn btn-secondary btn-sm" data-action="open-rerun-modal" data-session-id="${escHtml(session.id)}">
           🔁 ${t('rerun.title')}
         </button>
@@ -1235,6 +1390,7 @@ function renderSessionHistory() {
           ⚖️ ${(state.compareSelectedIds||[]).includes(session.id) ? t('sessions.removeFromCompare') : t('sessions.addToCompare')}
         </button>
       </div>
+    </div>
     </div>
   `;
 }

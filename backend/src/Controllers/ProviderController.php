@@ -28,13 +28,18 @@ class ProviderController {
         }
         $now = date('c');
         $type = (string)$data['type'];
-        $isLocal = in_array(strtolower($type), ['ollama', 'lmstudio'], true) ? 1 : 0;
+        $isLocal = in_array(strtolower($type), ['ollama', 'lmstudio', 'openai-compatible'], true) ? 1 : 0;
+        $existing = $this->repo->findById((string)$data['id']);
+        $apiKeyIncoming = array_key_exists('api_key', $data);
+        $apiKey = $apiKeyIncoming
+            ? (string)($data['api_key'] ?? '')
+            : ($existing ? (string)($existing['api_key'] ?? '') : '');
         $provider = [
             'id'            => $data['id'],
             'name'          => $data['name'],
             'type'          => $type,
             'base_url'      => $data['base_url'] ?? '',
-            'api_key'       => $data['api_key'] ?? '',
+            'api_key'       => $apiKey,
             'default_model' => $data['default_model'] ?? '',
             'enabled'       => isset($data['enabled']) ? (int)(bool)$data['enabled'] : 1,
             'priority'      => isset($data['priority']) ? (int)$data['priority'] : 100,

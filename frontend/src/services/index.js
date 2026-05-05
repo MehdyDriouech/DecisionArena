@@ -2,7 +2,7 @@ export { API_BASE, apiFetch } from './apiClient.js';
 export { SessionService } from './sessionService.js';
 export { ChatService } from './chatService.js';
 export { PersonaService } from './personaService.js';
-export { ProviderService } from './providerService.js';
+export { ProviderService, testProviderConnection } from './providerService.js';
 export { TemplateService } from './templateService.js';
 export { ComparisonService } from './comparisonService.js';
 export { LaunchAssistantService } from './launchAssistantService.js';

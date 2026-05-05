@@ -8,7 +8,7 @@ import * as messageLookup from './utils/messageLookup.js';
 import { renderSidebarShell } from './core/shell.js';
 
 /* ── Core: renderer + router + events ── */
-import { render, renderSidebar, renderMain, applyComplexityVisibility } from './core/renderer.js';
+import { render, renderSidebar, renderMain, applyUiModeVisibility, applyComplexityVisibility } from './core/renderer.js';
 import { navigate, scrollMainToTop, scrollMessagesToBottom, scrollFollowUpToBottom } from './core/router.js';
 import { bindGlobalEventDelegation } from './core/events.js';
 import { registerHumanLoopHandlers } from './core/humanLoopHandlers.js';
@@ -150,10 +150,13 @@ async function startApp() {
     store.setUiComplexity(level);
     render();
   };
+  window.DecisionArena.setUiMode = (mode) => {
+    store.setUiMode(mode);
+    render();
+  };
+  window.DecisionArena.applyUiModeVisibility = applyUiModeVisibility;
   window.DecisionArena.applyComplexityVisibility = applyComplexityVisibility;
-  // Restore uiComplexity body attribute from saved state
-  const savedComplexity = window.DecisionArena?.store?.state?.uiComplexity || 'advanced';
-  document.body.setAttribute('data-ui-complexity', savedComplexity);
+  applyUiModeVisibility(window.DecisionArena?.store?.state?.uiMode || 'simple');
   renderSidebarShell(window.i18n);
   await init();
 }

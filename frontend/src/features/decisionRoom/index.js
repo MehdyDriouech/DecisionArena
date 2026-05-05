@@ -112,8 +112,8 @@ function renderDRResults(results) {
     `;
   }).join('');
 
-  const complexity = state.uiComplexity || 'advanced';
-  const groupedHatsHtml = sixHats && complexity !== 'basic'
+  const uiMode = state.uiMode || 'simple';
+  const groupedHatsHtml = sixHats && uiMode === 'expert'
     ? renderSixThinkingHatsGroupedDebate(rounds, {
       escHtml,
       renderMarkdown,
@@ -129,9 +129,9 @@ function renderDRResults(results) {
     + renderDecisionBrief(results.decision_brief || null, {
       sessionId,
       agentDecisionDynamics: results.agent_decision_dynamics,
-      uiComplexity: complexity,
+      uiMode,
     })
-    + renderTradeoffSection(results.decision_brief || null, { uiComplexity: complexity, tradeoffUid: sessionId })
+    + renderTradeoffSection(results.decision_brief || null, { uiMode, tradeoffUid: sessionId })
     + renderPremortemStructuredCard(results.premortem_summary || null, t, escHtml)
     + dynamicsHtml
     + groupedHatsHtml

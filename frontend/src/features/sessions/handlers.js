@@ -1,5 +1,9 @@
 /* Sessions feature — action handlers */
 import { registerAction } from '../../core/events.js';
+import {
+  shouldHydrateQuickDecisionResults,
+  buildQuickDecisionResultsFromSession,
+} from '../../utils/quickDecisionHydrate.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -45,33 +49,27 @@ function registerSessionsHandlers() {
     const DA = window.DecisionArena;
     DA.store.state.newSession = {
       ...DA.store.state.newSession,
-      mode: 'chat',
-      intent: 'explore',
+      simpleIntent: 'explore',
     };
     DA.router.navigate('new-session');
-    DA.render?.();
   });
 
   registerAction('dashboard-intent-decide', () => {
     const DA = window.DecisionArena;
     DA.store.state.newSession = {
       ...DA.store.state.newSession,
-      mode: 'quick-decision',
-      intent: 'decide',
+      simpleIntent: 'decide',
     };
     DA.router.navigate('new-session');
-    DA.render?.();
   });
 
   registerAction('dashboard-intent-test', () => {
     const DA = window.DecisionArena;
     DA.store.state.newSession = {
       ...DA.store.state.newSession,
-      mode: 'stress-test',
-      intent: 'test',
+      simpleIntent: 'test',
     };
     DA.router.navigate('new-session');
-    DA.render?.();
   });
 
   registerAction('open-session', async ({ element }) => {
@@ -102,8 +100,19 @@ function registerSessionsHandlers() {
         navigate('chat');
         setTimeout(() => window.DecisionArena.router.scrollMessagesToBottom?.(), 50);
       } else if (mode === 'quick-decision') {
-        state.qdResults        = null;
         state.followUpMessages = [];
+        let qdResults = null;
+        if (shouldHydrateQuickDecisionResults(session, data)) {
+          let verdict = null;
+          try {
+            const vd = await SessionService.getVerdict(sessionId);
+            verdict = vd?.verdict ?? null;
+          } catch (_) {
+            /* verdict optionnel */
+          }
+          qdResults = buildQuickDecisionResultsFromSession(data, verdict);
+        }
+        state.qdResults = qdResults;
         navigate('quick-decision');
       } else if (mode === 'stress-test') {
         state.stResults = null;
