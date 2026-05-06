@@ -210,7 +210,8 @@ function translateReliabilityRecommended(recKeyOrText, t) {
 
 function renderWeightedVotePanel(source, sessionId) {
   const { state, escHtml, agentName, t } = getCtx();
-  const votes = source?.votes || [];
+  const voteSource = source?.vote_timeline || source?.votes || [];
+  const votes = voteSource;
   const decision = source?.automatic_decision || null;
   const rawDecision = source?.raw_decision || decision;
   const adjustedDecision = source?.adjusted_decision || null;
@@ -244,6 +245,23 @@ function renderWeightedVotePanel(source, sessionId) {
   const voteTaxonomy = adjustedDecision?.vote_label || adjustedDecision?.decision_label;
   const statusLine = adjustedDecision?.decision_status
     ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">${t('reliability.voteLabel')}: <strong>${escHtml(String(voteTaxonomy || '—'))}</strong> · ${t('reliability.qualityStatus')}: <strong>${escHtml(String(adjustedDecision.decision_status))}</strong></div>`
+    : '';
+
+  const mem = source?.memory_summary || null;
+  const interactionExpert = mem
+    ? `<div data-ui="expert-only" style="margin-top:8px;font-size:11px;color:var(--text-muted);">
+        ${escHtml(t('audit.metric.interaction_density'))}:
+        ${Math.round(Number(mem.interaction_density || 0) * 100)}%
+        <span style="margin-left:8px;">reliable: ${escHtml(String(mem.reliable_edge_count ?? 0))}</span>
+      </div>`
+    : '';
+  const gr = source?.guardrails || null;
+  const guardWarnings = Array.isArray(gr?.warnings) ? gr.warnings : [];
+  const guardHtml = guardWarnings.length
+    ? `<div style="margin-top:10px;padding:10px;background:rgba(245,158,11,0.08);border-radius:8px;font-size:12px;">
+        <div style="font-weight:600;margin-bottom:6px;">${escHtml(t('reliability.warnings') || 'Avertissements')}</div>
+        <ul style="margin:0;padding-left:18px;">${guardWarnings.map((w) => `<li>${escHtml(String(w))}</li>`).join('')}</ul>
+      </div>`
     : '';
 
   const topIssues = Array.isArray(relSummary?.top_issues) ? relSummary.top_issues : [];
@@ -319,6 +337,8 @@ function renderWeightedVotePanel(source, sessionId) {
         ${relLevel}
       </div>
       ${statusLine}
+      ${guardHtml}
+      ${interactionExpert}
     </div>`;
 
   return `<div class="card debate-card" style="margin:16px 0 24px;"><div class="debate-card-title" style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;">${titleRow}</div>${renderCardDescription({ text: t('panel.votes.desc') })}${mainBlock}${adjustmentHint}${issuesHtml}${todoHtml}${clarifyHtml}<div style="overflow:auto;margin-top:12px;"><table class="debate-table"><thead><tr><th>${t('debate.agent')}</th><th>${t('vote.vote')}</th><th>${t('debate.confidence')}</th><th>${t('debate.impact')}</th><th>${t('debate.domainWeight')}</th><th>${t('debate.weightScore')}</th><th>${t('vote.rationale')}</th></tr></thead><tbody>${voteRows || `<tr><td colspan="7">${t('vote.noVotes')}</td></tr>`}</tbody></table></div>${distributionHtml ? `<div class="debate-subtitle">${t('vote.distribution')}</div><ul class="debate-list">${distributionHtml}</ul>` : ''}${actionsHtml}</div>`;
@@ -495,15 +515,21 @@ function renderConfrontationView() {
   return `
     <div class="full-height-view confrontation-view">
       <div class="dr-header">
-        <div class="dr-header-info">
-          <div class="dr-title">⚔️ ${escHtml(session.title || t('confrontation.title'))}</div>
-          <div class="dr-objective">${escHtml(session.initial_prompt || session.idea || session.objective || '')}</div>
-          ${renderSessionPresetUsedBanner(session, escHtml, t)}
-          ${renderContextDocBadge()}
+        <div class="session-result-toolbar">
+          <div class="session-result-context">
+            <div class="dr-header-info">
+              <div class="dr-title">⚔️ ${escHtml(session.title || t('confrontation.title'))}</div>
+              <div class="dr-objective">${escHtml(session.initial_prompt || session.idea || session.objective || '')}</div>
+              ${renderSessionPresetUsedBanner(session, escHtml, t)}
+              ${renderContextDocBadge()}
+            </div>
+          </div>
+          <div class="session-result-actions">
+            ${!state.confrontationRunning ? `<button class="btn btn-primary" data-action="run-confrontation">${t('confrontation.run')}</button>` : ''}
+            <div class="export-actions">${renderExportButtons(session.id)}</div>
+            <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
+          </div>
         </div>
-        ${!state.confrontationRunning ? `<button class="btn btn-primary" data-action="run-confrontation">${t('confrontation.run')}</button>` : ''}
-        <div class="export-actions">${renderExportButtons(session.id)}</div>
-        <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
       </div>
       ${renderContextDocPanel()}
       <div class="dr-content">

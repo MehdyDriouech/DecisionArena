@@ -1,6 +1,8 @@
 <?php
 namespace Domain\DecisionReliability;
 
+use Domain\Vote\VoteTimelineReducer;
+
 class FalseConsensusDetector {
     /**
      * @param array<string,mixed> $contextQuality
@@ -11,7 +13,7 @@ class FalseConsensusDetector {
      * @param ?array<string,mixed> $timeline
      * @param ?array<int,array> $personaScores
      * @param ?array<string,mixed> $biasReport
-     * @return array{false_consensus_risk:string, signals:array<int,array>, recommendations:array<int,string>, diversity_score:float, lexical_uniformity:float, explicit_disagreement_observed:bool}
+     * @return array{false_consensus_risk:string, signals:array<int,array>, recommendations:array<int,string>, diversity_score:float, lexical_uniformity:float, explicit_disagreement_observed:bool, interaction_density:float, reliable_edge_count:int, possible_edge_count:int}
      */
     public function detect(
         array $contextQuality,
@@ -27,11 +29,15 @@ class FalseConsensusDetector {
         $recommendations = [];
         $riskScore = 0;
 
-        $diversityScore = $this->computeDiversityScore($votes, $positions);
-        $lexicalUniformity = $this->computeLexicalUniformity($votes, $positions);
-        $explicitDisagreement = $this->detectExplicitDisagreement($votes, $positions);
+        $finalVotes = VoteTimelineReducer::latestValidVotesByAgent($votes);
+        $memorySummary = MemorySummaryBuilder::buildMemorySummary($edges, $positions);
+        $interactionDensity = $memorySummary['interaction_density'];
 
-        if ($diversityScore < 0.30 && count($votes) >= 3) {
+        $diversityScore = $this->computeDiversityScore($finalVotes, $positions);
+        $lexicalUniformity = $this->computeLexicalUniformity($finalVotes, $positions);
+        $explicitDisagreement = $this->detectExplicitDisagreement($finalVotes, $positions);
+
+        if ($diversityScore < 0.30 && count($finalVotes) >= 3) {
             $signals[] = [
                 'type' => 'low_argument_diversity',
                 'severity' => 'high',
@@ -41,7 +47,7 @@ class FalseConsensusDetector {
             $recommendations[] = 'Require each agent to cite a distinct risk or counter-argument before closing.';
         }
 
-        if ($lexicalUniformity >= 0.72 && count($votes) >= 3) {
+        if ($lexicalUniformity >= 0.72 && count($finalVotes) >= 3) {
             $signals[] = [
                 'type' => 'lexical_uniformity',
                 'severity' => 'medium',
@@ -51,7 +57,7 @@ class FalseConsensusDetector {
             $recommendations[] = 'Ask agents to rewrite positions without reusing the same opening phrases.';
         }
 
-        if (!$explicitDisagreement && count($votes) >= 3 && count($edges) >= 2) {
+        if (!$explicitDisagreement && count($finalVotes) >= 3 && count($edges) >= 2) {
             $signals[] = [
                 'type' => 'no_explicit_disagreement',
                 'severity' => 'medium',
@@ -82,6 +88,16 @@ class FalseConsensusDetector {
             ];
             $riskScore += 2;
             $recommendations[] = 'Increase forced disagreement and assign explicit challenge targets.';
+        }
+
+        if ($interactionDensity < 0.15 && count($edges) >= 1) {
+            $signals[] = [
+                'type' => 'low_reliable_interaction_density',
+                'severity' => 'medium',
+                'message' => 'Debate graph has few reliable interactions; fallback or unknown edges are not counted as strong interaction.',
+            ];
+            $riskScore += 2;
+            $recommendations[] = 'Require explicit target blocks and cited claims before closing the debate.';
         }
 
         $dominant = $this->detectDominantAgent($positions, $personaScores);
@@ -162,6 +178,9 @@ class FalseConsensusDetector {
             'diversity_score' => $diversityScore,
             'lexical_uniformity' => $lexicalUniformity,
             'explicit_disagreement_observed' => $explicitDisagreement,
+            'interaction_density' => $interactionDensity,
+            'reliable_edge_count' => $memorySummary['reliable_edge_count'],
+            'possible_edge_count' => $memorySummary['possible_edge_count'],
         ];
     }
 
@@ -211,7 +230,7 @@ class FalseConsensusDetector {
      */
     private function syntheticVotesForIncrementalCheck(array $votes, array $positions): array {
         $out = [];
-        foreach ($votes as $v) {
+        foreach (VoteTimelineReducer::latestValidVotesByAgent($votes) as $v) {
             $ag = (string)($v['agent_id'] ?? '');
             $t  = trim((string)($v['rationale'] ?? ''));
             if ($ag !== '' && $t !== '') {
@@ -436,12 +455,22 @@ class FalseConsensusDetector {
             return 0.0;
         }
         $ch = 0;
+        $reliable = 0;
         foreach ($edges as $e) {
+            if (!MemorySummaryBuilder::isReliableInteractionEdge($e)) {
+                continue;
+            }
+            $reliable++;
             if (($e['edge_type'] ?? '') === 'challenge') {
                 $ch++;
             }
         }
-        return $ch / max(1, count($edges));
+        return $ch / max(1, $reliable);
+    }
+
+    private function countsAsDebateAgent(string $agentId): bool {
+        $agentId = trim($agentId);
+        return $agentId !== '' && !in_array($agentId, ['synthesizer', 'devil_advocate'], true);
     }
 
     private function detectDominantAgent(array $positions, ?array $personaScores): ?array {

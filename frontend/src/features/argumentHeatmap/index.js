@@ -107,10 +107,17 @@ function renderArgumentHeatmapPanel(sessionId) {
   }).join('');
 
   const filtersHtml = filterTypes.map(([type, label]) => `
-    <button class="btn btn-sm ${filter === type ? 'btn-primary' : 'btn-secondary'}" 
+    <button class="btn btn-sm ${filter === type ? 'btn-primary' : 'btn-secondary'}"
       data-action="set-heatmap-filter" data-filter="${type}" data-session-id="${escHtml(sessionId)}"
       style="font-size:11px;padding:3px 8px;">${label}</button>
   `).join('');
+
+  const hasInteractionData = items.some((i) => (i.challenge_count ?? 0) > 0 || (i.support_count ?? 0) > 0);
+  const interactionDisclaimer = hasInteractionData
+    ? `<div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;padding:6px 10px;background:var(--bg-secondary);border-radius:6px;border-left:2px solid var(--color-info,#3b82f6);">
+        ℹ️ Certaines interactions sont inférées ou non vérifiées. Les compteurs reflètent toutes les edges, quelle que soit leur provenance.
+       </div>`
+    : '';
 
   return `
     <div class="card debate-card" style="margin:16px 0;padding:16px 20px;">
@@ -120,6 +127,7 @@ function renderArgumentHeatmapPanel(sessionId) {
           style="font-size:11px;padding:3px 8px;">⟳</button>
       </div>
       <div class="heatmap-filters" style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0;">${filtersHtml}</div>
+      ${interactionDisclaimer}
       <div class="heatmap-list">${itemsHtml || `<p style="color:var(--text-muted);font-size:13px;">${t('heatmap.noData')}</p>`}</div>
     </div>
   `;

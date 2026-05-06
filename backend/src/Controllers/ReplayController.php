@@ -81,9 +81,17 @@ class ReplayController {
                 'title'           => ucfirst($source) . ' ' . $type . 's ' . ucfirst($target),
                 'content'         => ucfirst($source) . ' ' . $type . 's ' . ucfirst($target),
                 'metadata'        => [
-                    'vote'          => null,
-                    'confidence'    => null,
-                    'relation_type' => $type,
+                    'vote'            => null,
+                    'confidence'      => null,
+                    'relation_type'   => $type,
+                    'edge_source'     => $edge['edge_source'] ?? null,
+                    'edge_confidence' => isset($edge['edge_confidence']) ? (float)$edge['edge_confidence'] : null,
+                    'claim_challenged'=> $edge['claim_challenged'] ?? null,
+                    'objection'       => $edge['objection'] ?? null,
+                    'concession'      => $edge['concession'] ?? null,
+                    'position_change' => $edge['position_change'] ?? null,
+                    'verified_interaction' => isset($edge['verified_interaction']) ? (int)$edge['verified_interaction'] : null,
+                    'target_mismatch' => isset($edge['target_mismatch']) ? (int)$edge['target_mismatch'] : null,
                 ],
             ];
         }

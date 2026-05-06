@@ -1,6 +1,7 @@
 <?php
 namespace Domain\Orchestration;
 
+use Domain\DecisionReliability\MemorySummaryBuilder;
 use Infrastructure\Persistence\DebateRepository;
 
 class DebateMemoryService {
@@ -35,7 +36,8 @@ class DebateMemoryService {
         string $agentId,
         string $content,
         ?string $targetAgentId,
-        array &$state
+        array &$state,
+        string $edgeSource = 'unknown'
     ): void {
         $lastPosition = $this->findLatestPositionForAgent($state['positions'] ?? [], $agentId);
         $position = $this->extractPosition($content, $lastPosition);
@@ -86,22 +88,156 @@ class DebateMemoryService {
             $state['arguments'][] = $row;
         }
 
+        $contract = $this->parseInteractionContract($content);
+        $targetResolution = $this->resolveEdgeTarget($targetAgentId, $edgeSource, $content, $agentId, $state);
+        $targetAgentId = $targetResolution['target_agent_id'];
+        $edgeSource = $targetResolution['edge_source'];
+
         if ($targetAgentId) {
             $edgeType = $this->resolveEdgeType($content);
+            $edgeConfidence = $this->computeEdgeConfidence($edgeSource, $content);
             $edgeWeight = (int)round(($position['confidence'] + ($edgeType === 'challenge' ? 8 : 5)) / 2);
-            $edge = $this->repo->createEdge([
+
+            $targetMismatch = 0;
+            $parsedTarget = $contract['target_agent'];
+            if ($parsedTarget !== null && $parsedTarget !== '') {
+                if (mb_strtolower(trim($parsedTarget), 'UTF-8') !== mb_strtolower(trim($targetAgentId), 'UTF-8')) {
+                    $targetMismatch = 1;
+                }
+            }
+
+            $edgePayload = [
                 'id'              => $this->uuid(),
                 'session_id'      => $sessionId,
                 'round'           => $round,
                 'source_agent_id' => $agentId,
                 'target_agent_id' => $targetAgentId,
                 'edge_type'       => $edgeType,
+                'edge_source'     => $edgeSource,
+                'edge_confidence' => $edgeConfidence,
                 'weight'          => min(10, max(1, $edgeWeight)),
                 'argument_id'     => $primaryArgumentId,
+                'claim_challenged'=> $contract['claim_challenged'],
+                'objection'       => $contract['objection'],
+                'concession'      => $contract['concession'],
+                'position_change' => $contract['position_change'],
+                'target_mismatch' => $targetMismatch,
                 'created_at'      => date('c'),
-            ]);
+            ];
+            $edgePayload['verified_interaction'] = MemorySummaryBuilder::isVerifiedStructuredInteraction($edgePayload) ? 1 : 0;
+
+            $edge = $this->repo->createEdge($edgePayload);
             $state['edges'][] = $edge;
         }
+    }
+
+    /**
+     * Parses explicit interaction-contract sections from agent markdown (prompt contract).
+     *
+     * @return array{
+     *   target_agent:?string,
+     *   claim_challenged:?string,
+     *   objection:?string,
+     *   concession:?string,
+     *   position_change:?string
+     * }
+     */
+    private function parseInteractionContract(string $content): array {
+        $targetBody = $this->extractMarkdownHeadingBody($content, 'Target Agent');
+        $claimBody = $this->extractMarkdownHeadingBody($content, 'Claim Challenged');
+        $objectionBody = $this->extractMarkdownHeadingBody($content, 'Objection');
+        $concessionBody = $this->extractMarkdownHeadingBody($content, 'Concession');
+        $positionBody = $this->extractMarkdownHeadingBody($content, 'Position Change');
+
+        $target = $targetBody !== null
+            ? $this->normalizeContractScalar($targetBody, 120, true)
+            : null;
+
+        $claim = null;
+        if ($claimBody !== null) {
+            $claim = $this->normalizeContractScalar($this->stripBalancedQuotes($claimBody), 500, false);
+        }
+        $objection = null;
+        if ($objectionBody !== null) {
+            $objection = $this->normalizeContractScalar($this->stripBalancedQuotes($objectionBody), 1000, false);
+        }
+        $concession = null;
+        if ($concessionBody !== null) {
+            $concession = $this->normalizeContractScalar($this->stripBalancedQuotes($concessionBody), 1000, false);
+        }
+        $positionChange = null;
+        if ($positionBody !== null) {
+            $positionChange = $this->normalizeInteractionPositionChange($positionBody);
+        }
+
+        return [
+            'target_agent' => $target,
+            'claim_challenged' => $claim,
+            'objection' => $objection,
+            'concession' => $concession,
+            'position_change' => $positionChange,
+        ];
+    }
+
+    private function extractMarkdownHeadingBody(string $content, string $headingText): ?string {
+        $h = preg_quote($headingText, '/');
+        if (!preg_match('/^##\s*' . $h . '\s*$/mi', $content, $m, PREG_OFFSET_CAPTURE)) {
+            return null;
+        }
+        $start = $m[0][1] + strlen($m[0][0]);
+        $tail = substr($content, $start);
+        if ($tail === '') {
+            return null;
+        }
+        if (preg_match('/\A([\s\S]*?)(?=(?:\r\n|\n|\r)##\s)/', $tail, $bm)) {
+            $body = $bm[1];
+        } else {
+            $body = $tail;
+        }
+        $body = trim($body);
+        return $body === '' ? null : $body;
+    }
+
+    private function normalizeContractScalar(?string $raw, int $maxLen, bool $firstLineOnly): ?string {
+        if ($raw === null) {
+            return null;
+        }
+        $s = trim($raw);
+        if ($firstLineOnly) {
+            $lines = preg_split('/\R/u', $s) ?: [];
+            $s = trim((string)($lines[0] ?? ''));
+        }
+        if ($s === '') {
+            return null;
+        }
+        if (preg_match('/^(none|n\/a|n\.a\.|null)$/iu', $s)) {
+            return null;
+        }
+        return $this->truncate($s, $maxLen);
+    }
+
+    private function stripBalancedQuotes(string $s): string {
+        $s = trim($s);
+        if (preg_match('/^(\x{201C}|")([\s\S]+)(\x{201D}|")$/u', $s, $m)) {
+            return trim($m[2]);
+        }
+        return $s;
+    }
+
+    private function normalizeInteractionPositionChange(string $body): ?string {
+        $lines = preg_split('/\R/u', trim($body)) ?: [];
+        $raw = trim((string)($lines[0] ?? ''));
+        if ($raw === '') {
+            return null;
+        }
+        if (preg_match('/^(none|n\/a|n\.a\.|null)$/iu', $raw)) {
+            return null;
+        }
+        $v = mb_strtolower($raw, 'UTF-8');
+        if (in_array($v, ['unchanged', 'weakened', 'strengthened', 'changed'], true)) {
+            return $v;
+        }
+        return null;
     }
 
     public function buildArgumentMemorySummary(array $arguments, array $positions): string {
@@ -355,6 +491,88 @@ class DebateMemoryService {
             $arg = $existingArguments[$i];
             if (($arg['agent_id'] ?? null) === $targetAgentId) {
                 return $arg['id'] ?? null;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * @param array<string,mixed> $state
+     * @return array{target_agent_id:?string,edge_source:string}
+     */
+    private function resolveEdgeTarget(?string $targetAgentId, string $edgeSource, string $content, string $authorAgentId, array $state): array {
+        $edgeSource = $this->normalizeEdgeSource($edgeSource);
+        if ($targetAgentId !== null && trim($targetAgentId) !== '') {
+            return [
+                'target_agent_id' => trim($targetAgentId),
+                'edge_source' => $edgeSource,
+            ];
+        }
+
+        $inferred = $this->inferMentionedTargetAgent($content, $authorAgentId, $state);
+        if ($inferred !== null) {
+            return [
+                'target_agent_id' => $inferred,
+                'edge_source' => 'inferred_mention',
+            ];
+        }
+
+        return [
+            'target_agent_id' => null,
+            'edge_source' => 'unknown',
+        ];
+    }
+
+    private function normalizeEdgeSource(string $source): string {
+        $source = strtolower(trim($source));
+        return in_array($source, ['explicit_target', 'assigned_fallback', 'inferred_mention', 'unknown'], true)
+            ? $source
+            : 'unknown';
+    }
+
+    private function computeEdgeConfidence(string $source, string $content): float {
+        $source = $this->normalizeEdgeSource($source);
+        if ($source === 'explicit_target') {
+            return $this->hasQuotedClaim($content) ? 0.9 : 0.75;
+        }
+        return match ($source) {
+            'assigned_fallback' => 0.45,
+            'inferred_mention'  => 0.6,
+            default             => 0.3,
+        };
+    }
+
+    private function hasQuotedClaim(string $content): bool {
+        return preg_match('/(?:^|\n)\s*#{1,3}\s*(?:claim challenged|quoted claim)\s*\n+\s*(?:[-*]\s*)?\S.{10,}/iu', $content) === 1
+            || preg_match('/\b(?:claim challenged|quoted claim)\s*:\s*\S.{10,}/iu', $content) === 1
+            || preg_match('/^\s*>\s+\S.+$/mu', $content) === 1
+            || preg_match('/["“][^"”]{12,}["”]/u', $content) === 1;
+    }
+
+    /**
+     * Mention inference is intentionally conservative: only @agent-id and
+     * [agent-id] count. Plain words are too ambiguous for honest graph edges.
+     *
+     * @param array<string,mixed> $state
+     */
+    private function inferMentionedTargetAgent(string $content, string $authorAgentId, array $state): ?string {
+        $candidateIds = [];
+        foreach (['positions', 'arguments', 'edges'] as $bucket) {
+            foreach (($state[$bucket] ?? []) as $row) {
+                foreach (['agent_id', 'source_agent_id', 'target_agent_id'] as $key) {
+                    $id = trim((string)($row[$key] ?? ''));
+                    if ($id !== '' && $id !== $authorAgentId && $id !== 'synthesizer') {
+                        $candidateIds[] = $id;
+                    }
+                }
+            }
+        }
+        $candidateIds = array_values(array_unique($candidateIds));
+        foreach ($candidateIds as $id) {
+            $quoted = preg_quote($id, '/');
+            if (preg_match('/@' . $quoted . '\b/i', $content) === 1
+                || preg_match('/\[' . $quoted . '\]/i', $content) === 1) {
+                return $id;
             }
         }
         return null;

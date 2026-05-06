@@ -37,7 +37,9 @@ class DecisionGuardrailService
         $contextLevel        = $contextQuality['level'] ?? 'medium';
         $criticalMissing     = $contextQuality['critical_missing'] ?? [];
         $fcRisk              = $falseConsensus['false_consensus_risk'] ?? 'low';
-        $interactionDensity  = (float)($falseConsensus['interaction_density'] ?? 0.5);
+        $interactionDensity  = isset($falseConsensus['interaction_density'])
+            ? (float)$falseConsensus['interaction_density']
+            : 0.0;
         $explicitDisagreement= (bool)($falseConsensus['explicit_disagreement_observed'] ?? false);
 
         // Rule 3.1 — Context block

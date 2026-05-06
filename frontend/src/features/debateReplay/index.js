@@ -2,7 +2,7 @@
  * Debate Replay — view module.
  */
 
-import { renderPanelRecommendBadge, renderTooltip } from '../../ui/components.js';
+import { renderPanelRecommendBadge, renderTooltip, getInteractionSourceLabel, getInteractionSourceClass, renderInteractionContractVerifiedBadge, renderInteractionContractExpertDetail } from '../../ui/components.js';
 
 function panelHl(state) {
   return state.sessionHistory?.panelHighlights || state.auditData?.highlights || [];
@@ -25,30 +25,63 @@ const EVENT_ICONS = {
 };
 
 function renderEventCard(event, isCurrent) {
-  const { escHtml, t } = getCtx();
+  const { escHtml } = getCtx();
   if (!event) return '';
-  const icon  = EVENT_ICONS[event.type] || '•';
-  const meta  = event.metadata ?? {};
-  const voteBadge = meta.vote ? `<span class="badge badge-info" style="font-size:10px;">${escHtml(meta.vote)}</span>` : '';
-  const targetBadge = event.target_agent_id ? `<span class="badge badge-muted" style="font-size:10px;">→ ${escHtml(event.target_agent_id)}</span>` : '';
+  const icon = EVENT_ICONS[event.type] || '•';
+  const meta = event.metadata ?? {};
+  const voteBadge = meta.vote
+    ? `<span class="badge badge-info" style="font-size:10px;">${escHtml(meta.vote)}</span>`
+    : '';
+
+  const isInteraction = event.type === 'interaction';
+
+  const titleHtml = isInteraction
+    ? `${escHtml(event.agent_id ?? '')} → ${escHtml(event.target_agent_id ?? '')}`
+    : escHtml(event.title ?? '');
+
+  const provenanceBadge = isInteraction
+    ? `<span class="interaction-source-badge ${getInteractionSourceClass(meta.edge_source)}" style="font-size:10px;">${getInteractionSourceLabel(meta.edge_source)}</span>`
+    : (event.target_agent_id
+        ? `<span class="badge badge-muted" style="font-size:10px;">→ ${escHtml(event.target_agent_id)}</span>`
+        : '');
+
+  const contractVerifiedBadge = isInteraction
+    ? (() => {
+        const t0 = (key) => window.i18n?.t(key) ?? key;
+        const b = renderInteractionContractVerifiedBadge(meta, t0);
+        return b ? `<span style="display:inline-flex;margin-left:4px;">${b}</span>` : '';
+      })()
+    : '';
+
+  const expertDetail = isInteraction
+    ? `<div data-ui="expert-only" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:3px;">
+        ${meta.relation_type ? `<span class="badge badge-muted" style="font-size:10px;">${escHtml(meta.relation_type)}</span>` : ''}
+        ${meta.edge_confidence != null ? `<span class="badge badge-muted" style="font-size:10px;">conf=${Number(meta.edge_confidence).toFixed(2)}</span>` : ''}
+       </div>
+       ${(() => {
+         const t0 = (key) => window.i18n?.t(key) ?? key;
+         return renderInteractionContractExpertDetail(meta, t0);
+       })()}`
+    : '';
 
   return `
     <div class="replay-event-card ${isCurrent ? 'replay-event-active' : ''}" id="replay-event-${event.id ?? ''}">
       <div class="replay-event-header">
         <span class="replay-event-icon">${icon}</span>
         <div class="replay-event-meta">
-          <span class="replay-event-title">${escHtml(event.title ?? '')}</span>
+          <span class="replay-event-title">${titleHtml}</span>
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:3px;">
             ${event.round ? `<span class="badge badge-muted" style="font-size:10px;">R${event.round}</span>` : ''}
-            ${event.phase ? `<span class="badge badge-neutral" style="font-size:10px;">${escHtml(event.phase)}</span>` : ''}
-            ${voteBadge}${targetBadge}
+            ${event.phase && !isInteraction ? `<span class="badge badge-neutral" style="font-size:10px;">${escHtml(event.phase)}</span>` : ''}
+            ${voteBadge}${provenanceBadge}${contractVerifiedBadge}
           </div>
+          ${expertDetail}
         </div>
         <div class="replay-event-timestamp" style="font-size:10px;color:var(--text-muted);margin-left:auto;">
           ${event.timestamp ? event.timestamp.slice(0, 16).replace('T', ' ') : ''}
         </div>
       </div>
-      ${event.content && isCurrent ? `<div class="replay-event-content">${escHtml(event.content)}</div>` : ''}
+      ${event.content && isCurrent && !isInteraction ? `<div class="replay-event-content">${escHtml(event.content)}</div>` : ''}
     </div>
   `;
 }

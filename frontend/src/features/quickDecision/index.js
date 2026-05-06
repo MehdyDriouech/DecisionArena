@@ -30,15 +30,21 @@ function renderQuickDecision() {
   return `
     <div class="full-height-view">
       <div class="dr-header">
-        <div class="dr-header-info">
-          <div class="dr-title">⚡ ${escHtml(session.title || t('mode.quickDecision'))}</div>
-          <div class="dr-objective">${escHtml(session.initial_prompt || session.idea || '')}</div>
-          ${renderSessionPresetUsedBanner(session, escHtml, t)}
-          ${renderContextDocBadge()}
+        <div class="session-result-toolbar">
+          <div class="session-result-context">
+            <div class="dr-header-info">
+              <div class="dr-title">⚡ ${escHtml(session.title || t('mode.quickDecision'))}</div>
+              <div class="dr-objective">${escHtml(session.initial_prompt || session.idea || '')}</div>
+              ${renderSessionPresetUsedBanner(session, escHtml, t)}
+              ${renderContextDocBadge()}
+            </div>
+          </div>
+          <div class="session-result-actions">
+            ${!state.qdRunning ? `<button class="btn btn-primary" data-action="run-quick-decision">${t('qd.run')}</button>` : ''}
+            <div class="export-actions">${renderExportButtons(session.id)}</div>
+            <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
+          </div>
         </div>
-        ${!state.qdRunning ? `<button class="btn btn-primary" data-action="run-quick-decision">${t('qd.run')}</button>` : ''}
-        <div class="export-actions">${renderExportButtons(session.id)}</div>
-        <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
       </div>
       ${renderContextDocPanel()}
 

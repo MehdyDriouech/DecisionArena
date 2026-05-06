@@ -4,6 +4,8 @@ import {
   shouldHydrateQuickDecisionResults,
   buildQuickDecisionResultsFromSession,
 } from '../../utils/quickDecisionHydrate.js';
+import { applyIntentPreset } from '../../utils/intentPresets.js';
+import { applyAnalysisFamily } from '../newSession/analysisCatalog.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -33,43 +35,40 @@ function downloadBlob(blob, filename) {
 function registerSessionsHandlers() {
   registerAction('launch-quick-analysis', () => {
     const DA = window.DecisionArena;
-    DA.store.state.newSession = {
-      ...DA.store.state.newSession,
-      mode: 'quick-decision',
-      title: '',
-      idea: '',
-      language: window.i18n?.getLanguage?.() || 'fr',
-      fastDecisionEnabled: true,
-    };
+    applyAnalysisFamily('validate');
+    DA.store.state.newSession.language = DA.store.state.newSession.language || window.i18n?.getLanguage?.() || 'fr';
+    DA.router.navigate('new-session');
+    DA.render?.();
+  });
+
+  registerAction('dashboard-select-family', ({ element }) => {
+    const DA = window.DecisionArena;
+    const family = element?.dataset?.family;
+    if (!family) return;
+    applyAnalysisFamily(family);
     DA.router.navigate('new-session');
     DA.render?.();
   });
 
   registerAction('dashboard-intent-explore', () => {
     const DA = window.DecisionArena;
-    DA.store.state.newSession = {
-      ...DA.store.state.newSession,
-      simpleIntent: 'explore',
-    };
+    applyIntentPreset('explore');
     DA.router.navigate('new-session');
+    DA.render?.();
   });
 
   registerAction('dashboard-intent-decide', () => {
     const DA = window.DecisionArena;
-    DA.store.state.newSession = {
-      ...DA.store.state.newSession,
-      simpleIntent: 'decide',
-    };
+    applyIntentPreset('decide');
     DA.router.navigate('new-session');
+    DA.render?.();
   });
 
   registerAction('dashboard-intent-test', () => {
     const DA = window.DecisionArena;
-    DA.store.state.newSession = {
-      ...DA.store.state.newSession,
-      simpleIntent: 'test',
-    };
+    applyIntentPreset('test');
     DA.router.navigate('new-session');
+    DA.render?.();
   });
 
   registerAction('open-session', async ({ element }) => {
@@ -128,6 +127,9 @@ function registerSessionsHandlers() {
           weighted_analysis:   data.weighted_analysis   || {},
           dominance_indicator: data.dominance_indicator || '',
           votes:               data.votes               || [],
+          vote_timeline:       data.vote_timeline       || data.votes || [],
+          final_votes:         data.final_votes         || null,
+          memory_summary:      data.memory_summary      || null,
           automatic_decision:  data.automatic_decision  || null,
           raw_decision:        data.raw_decision        || null,
           adjusted_decision:   data.adjusted_decision   || null,
@@ -138,6 +140,8 @@ function registerSessionsHandlers() {
           reliability_warnings: data.reliability_warnings || [],
           decision_reliability_summary: data.decision_reliability_summary ?? null,
           context_clarification: data.context_clarification ?? null,
+          guardrails:          data.guardrails          || null,
+          decision_quality_score: data.decision_quality_score ?? null,
           decision_brief:       data.decision_brief ?? null,
           premortem_summary:   data.premortem_summary ?? null,
           jury_adversarial:    data.jury_adversarial || null,

@@ -9,7 +9,7 @@ class VoteRepository {
     }
 
     public function findVotesBySession(string $sessionId): array {
-        $stmt = $this->pdo->prepare('SELECT * FROM session_votes WHERE session_id = ? ORDER BY created_at ASC');
+        $stmt = $this->pdo->prepare('SELECT * FROM session_votes WHERE session_id = ? ORDER BY created_at ASC, COALESCE(round, 0) ASC, rowid ASC');
         $stmt->execute([$sessionId]);
         return $stmt->fetchAll(\PDO::FETCH_ASSOC);
     }

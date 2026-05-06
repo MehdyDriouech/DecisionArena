@@ -7,6 +7,7 @@ use Http\Response;
 use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\ContextDocumentRepository;
 use Domain\Orchestration\StressTestRunner;
+use Domain\Orchestration\StructuredRunResult;
 use Domain\Orchestration\PromptBuilder;
 
 class StressTestController {
@@ -84,6 +85,10 @@ class StressTestController {
             'context_quality_report' => json_encode($result['context_quality'] ?? [], JSON_UNESCAPED_UNICODE),
             'reliability_cap' => (float)($result['reliability_cap'] ?? 1.0),
             'decision_brief' => json_encode($result['decision_brief'] ?? null, JSON_UNESCAPED_UNICODE),
+            'result' => json_encode(
+                StructuredRunResult::persistableResultSlice($result),
+                JSON_UNESCAPED_UNICODE
+            ),
         ]);
 
         return [
@@ -96,6 +101,9 @@ class StressTestController {
             'weighted_analysis' => $result['weighted_analysis'] ?? [],
             'dominance_indicator' => $result['dominance_indicator'] ?? '',
             'votes' => $result['votes'] ?? [],
+            'vote_timeline' => $result['vote_timeline'] ?? ($result['votes'] ?? []),
+            'final_votes' => $result['final_votes'] ?? null,
+            'memory_summary' => $result['memory_summary'] ?? null,
             'automatic_decision' => $result['automatic_decision'] ?? null,
             'raw_decision' => $result['raw_decision'] ?? null,
             'adjusted_decision' => $result['adjusted_decision'] ?? null,
@@ -104,6 +112,7 @@ class StressTestController {
             'false_consensus_risk' => $result['false_consensus_risk'] ?? 'low',
             'false_consensus' => $result['false_consensus'] ?? null,
             'reliability_warnings' => $result['reliability_warnings'] ?? [],
+            'guardrails' => $result['guardrails'] ?? null,
             'decision_quality_score' => $result['decision_quality_score'] ?? null,
             'decision_brief' => $result['decision_brief'] ?? null,
             'agent_decision_dynamics' => $agentDecisionDynamics,

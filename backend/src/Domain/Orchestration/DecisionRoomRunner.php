@@ -248,14 +248,16 @@ class DecisionRoomRunner {
                         'created_at'               => date('c'),
                     ]);
                     $roundMessages[] = $msg;
-                    $targetAgentId = $this->resolveTargetAgentId($content, $previousRoundMessages, $agentId, $assignedTarget);
+                    $targetResolution = $this->resolveTargetAgent($content, $previousRoundMessages, $agentId, $assignedTarget);
+                    $targetAgentId = $targetResolution['target_agent_id'];
                     $this->debateMemory->processMessage(
                         $sessionId,
                         $round,
                         $agentId,
                         $content,
                         $targetAgentId,
-                        $state
+                        $state,
+                        $targetResolution['edge_source']
                     );
                     $this->socialDynamics->ingestAgentResponse(
                         $sessionId,
@@ -523,7 +525,8 @@ class DecisionRoomRunner {
                 $reliability['context_quality'] ?? [],
                 $state['positions'] ?? [],
                 $state['edges'] ?? [],
-                $allVotesRetry
+                $allVotesRetry,
+                $reliability['raw_decision'] ?? null
             );
             $newDebateProxy    = (float)(($newFalseConsensus['diversity_score'] ?? 0.5) * 100);
 
@@ -567,6 +570,33 @@ class DecisionRoomRunner {
                 break;
             }
         }
+
+        // Minimal reliability warning when a majority of agents errored.
+        // Avoids changing run status / completion semantics.
+        try {
+            $agentIds = array_values(array_filter($selectedAgents, fn($id) => $id !== 'devil_advocate'));
+            $agentIds = array_values(array_unique(array_map('strval', $agentIds)));
+            $errorAgents = [];
+            foreach ($allMessages as $roundMsgs) {
+                foreach (($roundMsgs ?? []) as $m) {
+                    $aid = (string)($m['agent_id'] ?? '');
+                    $content = (string)($m['content'] ?? '');
+                    if ($aid !== '' && str_starts_with($content, '[Error]')) {
+                        $errorAgents[$aid] = true;
+                    }
+                }
+            }
+            $totalAgents = count($agentIds);
+            $errorCount = count($errorAgents);
+            if ($totalAgents > 0 && $errorCount > ($totalAgents / 2)) {
+                $warn = 'Majority of agents failed during this run; treat conclusions as unreliable.';
+                $guardrails = is_array($guardrails) ? $guardrails : [];
+                $existing = isset($guardrails['warnings']) && is_array($guardrails['warnings']) ? $guardrails['warnings'] : [];
+                $guardrails['warnings'] = array_values(array_unique(array_merge([$warn], $existing)));
+            }
+        } catch (\Throwable) {
+        }
+
         $verdictRow = $this->verdictRepo->findBySession($sessionId);
         $decisionBrief = $this->summaryService->buildDecisionBrief(
             array_merge($reliability, [
@@ -584,7 +614,7 @@ class DecisionRoomRunner {
             $premortemSummary = PremortemSummaryExtractor::fromSynthesizerOutput($synthesizerOutput);
         }
 
-        return [
+        return StructuredRunResult::augment([
             'rounds' => $allMessages,
             'arguments' => $state['arguments'],
             'positions' => $state['positions'],
@@ -595,6 +625,7 @@ class DecisionRoomRunner {
             'automatic_decision' => $automaticDecision,
             'raw_decision' => $reliability['raw_decision'],
             'adjusted_decision' => $reliability['adjusted_decision'],
+            'memory_summary' => $reliability['memory_summary'] ?? null,
             'context_quality' => $reliability['context_quality'],
             'reliability_cap' => $reliability['reliability_cap'],
             'false_consensus_risk' => $reliability['false_consensus_risk'],
@@ -610,28 +641,35 @@ class DecisionRoomRunner {
             'decision_quality_score' => $qualityScore,
             'decision_brief' => $decisionBrief,
             'premortem_summary' => $premortemSummary,
-        ];
+        ]);
     }
 
-    private function resolveTargetAgentId(string $content, array $previousRoundMessages, string $agentId, ?string $assignedTarget = null): ?string {
+    /**
+     * @return array{target_agent_id:?string,edge_source:string}
+     */
+    private function resolveTargetAgent(string $content, array $previousRoundMessages, string $agentId, ?string $assignedTarget = null): array {
         if (!empty($previousRoundMessages)) {
             // 1. Explicit LLM declaration takes priority
             if (preg_match('/##\s*Target Agent\s*\n+\s*([a-z][a-z0-9-]*)/im', $content, $m)) {
                 $parsed = strtolower(trim($m[1]));
                 $valid  = array_map('strtolower', array_column($previousRoundMessages, 'agent_id'));
                 if (in_array($parsed, $valid, true) && $parsed !== strtolower($agentId)) {
-                    return $parsed;
+                    return ['target_agent_id' => $parsed, 'edge_source' => 'explicit_target'];
                 }
             }
             // 2. Fall back to the pre-assigned target when LLM was silent
             if ($assignedTarget !== null) {
                 $valid = array_map('strtolower', array_column($previousRoundMessages, 'agent_id'));
                 if (in_array(strtolower($assignedTarget), $valid, true)) {
-                    return $assignedTarget;
+                    return ['target_agent_id' => $assignedTarget, 'edge_source' => 'assigned_fallback'];
                 }
             }
         }
-        return null;
+        return ['target_agent_id' => null, 'edge_source' => 'unknown'];
+    }
+
+    private function resolveTargetAgentId(string $content, array $previousRoundMessages, string $agentId, ?string $assignedTarget = null): ?string {
+        return $this->resolveTargetAgent($content, $previousRoundMessages, $agentId, $assignedTarget)['target_agent_id'];
     }
 
     /**

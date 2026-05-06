@@ -122,6 +122,7 @@ class ConfrontationRunner {
                 $interactionStyle, $replyPolicy, $language, $forceDisagreement, $contextDoc, $memoryContext, $state,
                 $agentProviders,
                 $contextQuality,
+                $dynamicsPreset,
                 $forceStrongNext
             );
 
@@ -254,7 +255,18 @@ class ConfrontationRunner {
                 error_log('[ConfrontationRunner] Synthesizer constraint build failed: ' . $e->getMessage());
             }
 
-            [$synthesis, $verdict] = $this->runSynthesis($sessionId, $objective, $allMessages, $language, $rounds + 1, $forceDisagreement, $contextDoc, $memoryContext, $synthExtraContent);
+            [$synthesis, $verdict] = $this->runSynthesis(
+                $sessionId,
+                $objective,
+                $allMessages,
+                $language,
+                $rounds + 1,
+                $forceDisagreement,
+                $contextDoc,
+                $memoryContext,
+                $synthExtraContent,
+                $dynamicsPreset
+            );
             if (!empty($synthesis[0]['content'])) {
                 $this->debateMemory->processMessage(
                     $sessionId,
@@ -316,6 +328,37 @@ class ConfrontationRunner {
             sessionOptions:    []
         );
 
+        // Minimal reliability warning when a majority of agents errored.
+        try {
+            $agentIds = array_values(array_filter($selectedAgents, fn($id) => $id !== 'devil_advocate'));
+            $agentIds = array_values(array_unique(array_map('strval', $agentIds)));
+            $errorAgents = [];
+            foreach ($allRounds as $roundMsgs) {
+                foreach (($roundMsgs ?? []) as $m) {
+                    $aid = (string)($m['agent_id'] ?? '');
+                    $content = (string)($m['content'] ?? '');
+                    if ($aid !== '' && str_starts_with($content, '[Error]')) {
+                        $errorAgents[$aid] = true;
+                    }
+                }
+            }
+            foreach ($synthesis as $m) {
+                $aid = (string)($m['agent_id'] ?? '');
+                $content = (string)($m['content'] ?? '');
+                if ($aid !== '' && str_starts_with($content, '[Error]')) {
+                    $errorAgents[$aid] = true;
+                }
+            }
+            $totalAgents = count($agentIds);
+            $errorCount = count($errorAgents);
+            if ($totalAgents > 0 && $errorCount > ($totalAgents / 2)) {
+                $warn = 'Majority of agents failed during execution; decision reliability is degraded.';
+                $existing = isset($guardrails['warnings']) && is_array($guardrails['warnings']) ? $guardrails['warnings'] : [];
+                $guardrails['warnings'] = array_values(array_unique(array_merge([$warn], $existing)));
+            }
+        } catch (\Throwable) {
+        }
+
         if ($guardrails['final_outcome_override'] !== null) {
             $reliability['adjusted_decision']['final_outcome'] = $guardrails['final_outcome_override'];
         }
@@ -336,18 +379,48 @@ class ConfrontationRunner {
         }
 
         $synthesizerOutput = $synthesis[0]['content'] ?? '';
+
+        // Heuristic fallback: confrontation synthesis formatting can vary; ensure the brief has "why" content
+        // even if the synthesizer section parser doesn't match expected headings.
+        $heuristicBrief = [];
+        try {
+            $parsedVerdictBrief = VerdictParser::parse($synthesizerOutput);
+            $heuristicBrief = $this->summaryService->build(
+                ['title' => 'Confrontation'],
+                $parsedVerdictBrief ?: (is_array($verdictRow) ? $verdictRow : null),
+                $automaticDecision,
+                $this->voteRepo->findVotesBySession($sessionId),
+                $state['arguments'] ?? []
+            );
+        } catch (\Throwable) {
+            $heuristicBrief = [];
+        }
+        $keyFactorsForBrief = array_map(
+            fn($t) => ['text' => $t],
+            $heuristicBrief['key_factors'] ?? []
+        );
+        $riskProfileForBrief = $riskProfile;
+        if (
+            (empty($riskProfileForBrief) || empty(($riskProfileForBrief['top_risks'] ?? []))) &&
+            !empty(($heuristicBrief['risks'] ?? []))
+        ) {
+            $riskProfileForBrief = array_merge(is_array($riskProfileForBrief) ? $riskProfileForBrief : [], [
+                'top_risks' => array_map(fn($t) => ['description' => $t], array_slice((array)$heuristicBrief['risks'], 0, 5)),
+            ]);
+        }
         $decisionBrief = $this->summaryService->buildDecisionBrief(
             array_merge($reliability, [
                 'synthesizer_output'     => $synthesizerOutput,
+                'key_factors'            => $keyFactorsForBrief,
                 'guardrails'             => $guardrails,
                 'decision_quality_score' => $qualityScore,
-                'risk_profile'           => $riskProfile,
+                'risk_profile'           => $riskProfileForBrief,
                 'evidence_report'        => $evidenceReport,
                 'verdict'                => $verdictRow,
             ])
         );
 
-        return [
+        return StructuredRunResult::augment([
             'rounds'            => $allRounds,
             'synthesis'         => $synthesis,
             'verdict'           => $verdict,
@@ -363,6 +436,7 @@ class ConfrontationRunner {
             'automatic_decision' => $automaticDecision,
             'raw_decision' => $reliability['raw_decision'],
             'adjusted_decision' => $reliability['adjusted_decision'],
+            'memory_summary' => $reliability['memory_summary'] ?? null,
             'context_quality' => $reliability['context_quality'],
             'reliability_cap' => $reliability['reliability_cap'],
             'false_consensus_risk' => $reliability['false_consensus_risk'],
@@ -377,7 +451,7 @@ class ConfrontationRunner {
             'synthesizer_output' => !empty($synthesis[0]['content']) ? $synthesis[0]['content'] : null,
             'decision_quality_score' => $qualityScore,
             'decision_brief' => $decisionBrief,
-        ];
+        ]);
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -398,6 +472,7 @@ class ConfrontationRunner {
         array  &$state,
         array  $agentProviders,
         array  $contextQuality,
+        ?string $dynamicsPreset,
         bool   &$forceStrongNextFlag
     ): array {
         $roundMessages = [];
@@ -432,10 +507,10 @@ class ConfrontationRunner {
 
                 $routed        = $this->providerRouter->chat($messages, $agent, null, null, $agentProviders[$agentId] ?? null);
                 $content       = $routed['content'];
-                $targetAgentId = ($currentRound > 1)
-                    ? ($this->parseTargetAgent($content) ?? $assignedTarget)
-                    : null;
-                $targetAgentId = $this->validateTargetAgentId($targetAgentId, $prevMessages, $agentId);
+                $targetResolution = ($currentRound > 1)
+                    ? $this->resolveTargetAgent($content, $prevMessages, $agentId, $assignedTarget)
+                    : ['target_agent_id' => null, 'edge_source' => 'unknown'];
+                $targetAgentId = $targetResolution['target_agent_id'];
 
                 $msgType = $this->resolveMessageType($currentRound, $totalRounds, $interactionStyle);
 
@@ -466,7 +541,8 @@ class ConfrontationRunner {
                     $agentId,
                     $content,
                     $targetAgentId,
-                    $state
+                    $state,
+                    $targetResolution['edge_source']
                 );
                 $this->socialDynamics->ingestAgentResponse(
                     $sessionId,
@@ -549,7 +625,8 @@ class ConfrontationRunner {
         bool   $forceDisagreement = false,
         ?array $contextDoc = null,
         ?array $memoryContext = null,
-        ?string $extraUserContent = null
+        ?string $extraUserContent = null,
+        ?string $dynamicsPreset = null
     ): array {
         $agent = $this->assembler->assemble('synthesizer', null, null, $dynamicsPreset);
         if (!$agent) return [[], null];
@@ -641,6 +718,24 @@ class ConfrontationRunner {
             return trim($m[1]);
         }
         return null;
+    }
+
+    /**
+     * @return array{target_agent_id:?string,edge_source:string}
+     */
+    private function resolveTargetAgent(string $content, array $prevMessages, string $authorAgentId, ?string $assignedTarget): array {
+        $parsed = self::parseTargetAgent($content);
+        $validParsed = $this->validateTargetAgentId($parsed, $prevMessages, $authorAgentId);
+        if ($validParsed !== null) {
+            return ['target_agent_id' => $validParsed, 'edge_source' => 'explicit_target'];
+        }
+
+        $validAssigned = $this->validateTargetAgentId($assignedTarget, $prevMessages, $authorAgentId);
+        if ($validAssigned !== null) {
+            return ['target_agent_id' => $validAssigned, 'edge_source' => 'assigned_fallback'];
+        }
+
+        return ['target_agent_id' => null, 'edge_source' => 'unknown'];
     }
 
     private function validateTargetAgentId(?string $targetAgentId, array $prevMessages, string $authorAgentId): ?string {

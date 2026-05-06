@@ -216,10 +216,15 @@ function registerSessionHistoryHandlers() {
             weighted_analysis: full.weighted_analysis || {},
             dominance_indicator: full.dominance_indicator || '',
             votes: full.votes || [],
+            vote_timeline: full.vote_timeline || full.votes || [],
+            final_votes: full.final_votes || null,
+            memory_summary: full.memory_summary || null,
             automatic_decision: full.automatic_decision || null,
             raw_decision: full.raw_decision || null,
             adjusted_decision: full.adjusted_decision || null,
             decision_brief: full.decision_brief || null,
+            guardrails: full.guardrails || null,
+            decision_quality_score: full.decision_quality_score ?? null,
             premortem_summary: full.premortem_summary ?? null,
           };
         } catch (_) {}

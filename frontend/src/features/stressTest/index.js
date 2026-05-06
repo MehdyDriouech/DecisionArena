@@ -86,19 +86,25 @@ function renderStressTest() {
   return `
     <div class="full-height-view">
       <div class="dr-header">
-        <div class="dr-header-info">
-          <div class="dr-title">🔥 ${escHtml(session.title || t('mode.stressTest'))}</div>
-          <div class="dr-objective">${escHtml(session.initial_prompt || '')}</div>
-          ${renderSessionPresetUsedBanner(session, escHtml, t)}
-          ${renderContextDocBadge()}
+        <div class="session-result-toolbar">
+          <div class="session-result-context">
+            <div class="dr-header-info">
+              <div class="dr-title">🔥 ${escHtml(session.title || t('mode.stressTest'))}</div>
+              <div class="dr-objective">${escHtml(session.initial_prompt || '')}</div>
+              ${renderSessionPresetUsedBanner(session, escHtml, t)}
+              ${renderContextDocBadge()}
+            </div>
+          </div>
+          <div class="session-result-actions">
+            ${!state.stRunning ? `
+              <button class="btn btn-danger" data-action="run-stress-test">
+                ${t('st.run')}
+              </button>
+            ` : ''}
+            <div class="export-actions">${renderExportButtons(session.id)}</div>
+            <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
+          </div>
         </div>
-        ${!state.stRunning ? `
-          <button class="btn btn-danger" data-action="run-stress-test">
-            ${t('st.run')}
-          </button>
-        ` : ''}
-        <div class="export-actions">${renderExportButtons(session.id)}</div>
-        <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
       </div>
       ${renderContextDocPanel()}
 

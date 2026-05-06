@@ -992,6 +992,37 @@ function summarizeLatestMessages(messages) {
 
 function buildSessionDecisionBrief(data, messages) {
   const brief = parseHistoryObject(data?.decision_brief) || {};
+  const hasBriefDecision = brief.decision != null && String(brief.decision).trim() !== '';
+
+  if (hasBriefDecision) {
+    const adjusted = parseHistoryObject(data?.adjusted_decision);
+    const confVal = firstNonEmpty(
+      scoreFromDecision(adjusted),
+      brief.quality_score != null ? Number(brief.quality_score) : null,
+      brief.confidence,
+    );
+    return {
+      decision: normalizeDecisionLabel(brief.decision) || String(brief.decision).trim(),
+      confidence: confVal != null && confVal !== '' ? confVal : 'N/A',
+      why: firstNonEmpty(
+        brief.why,
+        brief.summary,
+      ),
+      risks: briefList(
+        brief.risks,
+        brief.primary_warning ? [brief.primary_warning] : [],
+        data?.guardrails?.warnings,
+      ),
+      nextStep: firstNonEmpty(
+        brief.next_step,
+        brief.nextStep,
+        data?.decision_reliability_summary?.recommended_action,
+        data?.guardrails?.recommended_action,
+        'Approfondir l\u2019analyse',
+      ),
+    };
+  }
+
   const adjusted = parseHistoryObject(data?.adjusted_decision);
   const raw = parseHistoryObject(data?.raw_decision);
   const automatic = parseHistoryObject(data?.automatic_decision);
@@ -1064,6 +1095,31 @@ function renderExpertOnly(innerHtml) {
   return `<div data-ui="expert-only">${innerHtml}</div>`;
 }
 
+/** @param {Record<string, unknown>|null|undefined} memorySummary */
+function renderInteractionQaPanel(memorySummary, t, escHtml) {
+  const m = memorySummary;
+  if (!m || typeof m !== 'object') return '';
+  const rate = Number(m.interaction_contract_verification_rate);
+  const ratePct = Number.isFinite(rate) ? `${(rate * 100).toFixed(1)}%` : '—';
+  const row = (label, value) => `
+    <div class="interaction-qa-row">
+      <span class="interaction-qa-k">${escHtml(label)}</span>
+      <span class="interaction-qa-v">${escHtml(String(value))}</span>
+    </div>`;
+  return `
+    <div class="interaction-qa-grid" data-ui="expert-only">
+      ${row(t('session.interactionQa.metric.verified'), m.verified_interaction_count ?? 0)}
+      ${row(t('session.interactionQa.metric.rate'), ratePct)}
+      ${row(t('session.interactionQa.metric.contractTotal'), m.interaction_contract_total ?? 0)}
+      ${row(t('session.interactionQa.metric.claims'), m.claim_challenged_count ?? m.challenged_claim_count ?? 0)}
+      ${row(t('session.interactionQa.metric.objections'), m.objection_count ?? 0)}
+      ${row(t('session.interactionQa.metric.concessions'), m.concession_count ?? 0)}
+      ${row(t('session.interactionQa.metric.positionChanges'), m.position_change_count ?? 0)}
+      ${row(t('session.interactionQa.metric.mismatch'), m.target_mismatch_count ?? 0)}
+      ${row(t('session.interactionQa.metric.density'), m.interaction_density ?? '—')}
+    </div>`;
+}
+
 function renderCollapsiblePanel(key, title, innerHtml, state, opts = {}) {
   if (!innerHtml || innerHtml.trim() === '') return '';
   const toggled  = state?.collapsedPanels instanceof Set
@@ -1112,7 +1168,7 @@ function renderSessionJuryAdversarialCard(ja) {
 
   return `
     <div class="card adversarial-card" style="margin-bottom:16px;border:1px solid var(--border-color);border-radius:8px;overflow:hidden;">
-      <div style="padding:12px 16px;background:var(--surface-2,#f8f9fa);border-bottom:1px solid var(--border-color);
+      <div style="padding:12px 16px;background:var(--surface-2,#f8f9fa);color:var(--text-on-light-surface,#0f172a);border-bottom:1px solid var(--border-color);
                   display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
         <span style="font-size:16px;">⚔️</span>
         <strong>${t('jury.adversarial.qualityTitle')}</strong>
@@ -1339,6 +1395,10 @@ function renderSessionHistory() {
       }), state, { defaultCollapsed: true }) : ''}
       ${mode !== 'chat' ? renderCollapsiblePanel('weighted-vote', 'Vote pond&eacute;r&eacute;', renderWeightedVotePanel({
         votes: data.votes || [],
+        vote_timeline: data.vote_timeline || data.votes || [],
+        final_votes: data.final_votes || null,
+        memory_summary: data.memory_summary || null,
+        guardrails: data.guardrails || null,
         automatic_decision: data.automatic_decision || null,
         raw_decision: data.raw_decision || null,
         adjusted_decision: data.adjusted_decision || null,
@@ -1364,6 +1424,7 @@ function renderSessionHistory() {
 
       ${mode !== 'chat' ? `
       <div class="session-history-analytics-panels">
+        ${renderCollapsiblePanel('interaction-qa', t('session.interactionQa.title'), renderInteractionQaPanel(data.memory_summary, t, escHtml), state, { defaultCollapsed: true, expertOnly: true })}
         ${renderCollapsiblePanel('debate-audit', t('session.section.debateAudit'), (window.DecisionArena.views.shared.renderDebateAuditPanel || (() => ''))(session.id), state, { defaultCollapsed: true, expertOnly: true })}
         ${renderCollapsiblePanel('persona-scores', t('session.section.personaScores'), renderPersonaScorePanel(session.id, personaScores || null), state, { defaultCollapsed: true, expertOnly: true })}
         ${renderCollapsiblePanel('social-dynamics', t('session.section.socialDynamics'), renderSocialDynamicsPanel(session.id, socialDynamics ?? null), state, { defaultCollapsed: true, expertOnly: true })}

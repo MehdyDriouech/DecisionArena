@@ -1,6 +1,8 @@
 <?php
 namespace Domain\Verdict;
 
+use Domain\Orchestration\TradeoffsJsonExtractor;
+
 class VerdictParser {
     private const ALLOWED_LABELS = ['go','no-go','risky','needs-more-info','reduce-scope'];
 
@@ -45,6 +47,7 @@ class VerdictParser {
         }
         // Ne pas persister les blocs ```json collés par le LLM (affichage + exports).
         $action = preg_replace('/```(?:json)?\s*[\s\S]*?```/', '', $action);
+        [$action] = TradeoffsJsonExtractor::stripTradeoffsEnvelopeFromProse($action);
         $action = trim(preg_replace("/\n{3,}/", "\n\n", $action));
 
         return array_merge([

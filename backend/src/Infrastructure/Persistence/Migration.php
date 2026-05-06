@@ -201,6 +201,8 @@ class Migration {
                 source_agent_id TEXT NOT NULL,
                 target_agent_id TEXT NOT NULL,
                 edge_type TEXT NOT NULL DEFAULT 'neutral',
+                edge_source TEXT NOT NULL DEFAULT 'unknown',
+                edge_confidence REAL NOT NULL DEFAULT 0.5,
                 weight INTEGER NOT NULL DEFAULT 1,
                 argument_id TEXT NULL,
                 created_at TEXT NOT NULL,
@@ -390,6 +392,14 @@ class Migration {
         $this->addColumnIfMissing('sessions', 'reliability_cap', 'REAL DEFAULT NULL');
         $this->addColumnIfMissing('sessions', 'result', 'TEXT DEFAULT NULL');
         $this->addColumnIfMissing('sessions', 'decision_brief', 'TEXT DEFAULT NULL');
+        $this->addColumnIfMissing('interaction_edges', 'edge_source', "TEXT DEFAULT 'unknown'");
+        $this->addColumnIfMissing('interaction_edges', 'edge_confidence', 'REAL DEFAULT 0.5');
+        $this->addColumnIfMissing('interaction_edges', 'claim_challenged', 'TEXT DEFAULT NULL');
+        $this->addColumnIfMissing('interaction_edges', 'objection', 'TEXT DEFAULT NULL');
+        $this->addColumnIfMissing('interaction_edges', 'concession', 'TEXT DEFAULT NULL');
+        $this->addColumnIfMissing('interaction_edges', 'position_change', 'TEXT DEFAULT NULL');
+        $this->addColumnIfMissing('interaction_edges', 'verified_interaction', 'INTEGER DEFAULT 0');
+        $this->addColumnIfMissing('interaction_edges', 'target_mismatch', 'INTEGER DEFAULT 0');
 
         // Providers (routing + ordering)
         $this->addColumnIfMissing('providers', 'priority', 'INTEGER DEFAULT 100');

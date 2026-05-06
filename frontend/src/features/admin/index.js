@@ -66,7 +66,7 @@ const ADMIN_TEMPLATES_HUB_CARD = {
   actionKey: 'admin.hub.action.open',
 };
 
-/** Mode simple : 5 accès + CTA session (pas de carte « nouvelle session » dupliquée). */
+/** Mode simple : encart Démarrage (ordre conseillé) + 5 accès (pas de carte « nouvelle session » dupliquée). */
 const ADMIN_SIMPLE_HUB_CARDS = [
   {
     nav: 'providers',
@@ -269,6 +269,13 @@ function renderAdministrationSimple(t, escHtml, pageTitle) {
     </div>
     <div class="admin-home admin-home--simple">
       ${renderSystemStatus()}
+      ${renderAdminIntentBlock(t, escHtml, {
+        blockId: 'setup',
+        titleKey: 'admin.block.setup',
+        icon: '🛠️',
+        innerHtml: renderSetupQuickPath(t, escHtml),
+        expertOnly: false,
+      })}
       ${renderAdminCardGrid(ADMIN_SIMPLE_HUB_CARDS, t, escHtml, ' admin-card-grid--hub-simple')}
     </div>
   `;

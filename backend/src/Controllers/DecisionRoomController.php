@@ -9,6 +9,7 @@ use Infrastructure\Persistence\MessageRepository;
 use Infrastructure\Persistence\ContextDocumentRepository;
 use Domain\Orchestration\DecisionRoomRunner;
 use Domain\Orchestration\PromptBuilder;
+use Domain\Orchestration\StructuredRunResult;
 
 class DecisionRoomController {
     private SessionRepository $sessionRepo;
@@ -82,15 +83,10 @@ class DecisionRoomController {
             'context_quality_level' => (string)($result['context_quality']['level'] ?? 'weak'),
             'context_quality_report' => json_encode($result['context_quality'] ?? [], JSON_UNESCAPED_UNICODE),
             'reliability_cap' => (float)($result['reliability_cap'] ?? 1.0),
-            'result' => json_encode([
-                'guardrails'             => $result['guardrails']             ?? null,
-                'auto_retry'             => $result['auto_retry']             ?? null,
-                'decision_quality_score' => $result['decision_quality_score'] ?? null,
-                'adjusted_decision'      => $result['adjusted_decision']      ?? null,
-                'false_consensus'        => $result['false_consensus']        ?? null,
-                'raw_decision'           => $result['raw_decision']           ?? null,
-                'premortem_summary'      => $result['premortem_summary']    ?? null,
-            ], JSON_UNESCAPED_UNICODE),
+            'result' => json_encode(
+                StructuredRunResult::persistableResultSlice($result),
+                JSON_UNESCAPED_UNICODE
+            ),
             'decision_brief' => json_encode($result['decision_brief'] ?? null, JSON_UNESCAPED_UNICODE),
         ]);
 
@@ -104,6 +100,9 @@ class DecisionRoomController {
             'weighted_analysis' => $result['weighted_analysis'] ?? [],
             'dominance_indicator' => $result['dominance_indicator'] ?? '',
             'votes' => $result['votes'] ?? [],
+            'vote_timeline' => $result['vote_timeline'] ?? ($result['votes'] ?? []),
+            'final_votes' => $result['final_votes'] ?? null,
+            'memory_summary' => $result['memory_summary'] ?? null,
             'automatic_decision' => $result['automatic_decision'] ?? null,
             'raw_decision' => $result['raw_decision'] ?? null,
             'adjusted_decision' => $result['adjusted_decision'] ?? null,
@@ -112,6 +111,8 @@ class DecisionRoomController {
             'false_consensus_risk' => $result['false_consensus_risk'] ?? 'low',
             'false_consensus' => $result['false_consensus'] ?? null,
             'reliability_warnings' => $result['reliability_warnings'] ?? [],
+            'guardrails' => $result['guardrails'] ?? null,
+            'decision_quality_score' => $result['decision_quality_score'] ?? null,
             'agent_decision_dynamics' => $agentDecisionDynamics,
             'decision_brief'       => $result['decision_brief'] ?? null,
             'premortem_summary'  => $result['premortem_summary'] ?? null,

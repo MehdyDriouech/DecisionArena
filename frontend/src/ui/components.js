@@ -80,7 +80,7 @@ function renderByokProviderConnectModal() {
         data-action="provider-key-input" data-provider="" />
     </div>
     <details class="byok-modal-advanced" data-ui="expert-only">
-      <summary class="byok-modal-advanced-summary">Avancé</summary>
+      <summary class="byok-modal-advanced-summary">Détails</summary>
       <div data-ui="expert-only" style="margin-top:10px;">
         <div class="form-group">
           <label for="byok-modal-priority">Priorité</label>
@@ -251,7 +251,7 @@ function cleanDecisionBriefText(value) {
  * Decision-first brief, safe for missing fields.
  * @param {{ decision?: string, confidence?: string|number, why?: string[]|string, risks?: string[]|string, nextStep?: string, next_step?: string }} data
  */
-function renderDecisionBrief(data) {
+function renderDecisionBrief(data, opts = {}) {
   const d = data && typeof data === 'object' ? data : {};
   const escHtml = window.DecisionArena?.utils?.escHtml || ((v) => String(v ?? '')
     .replace(/&/g, '&amp;')
@@ -259,6 +259,8 @@ function renderDecisionBrief(data) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;'));
+  const uiMode = resolveUiMode(opts);
+  const isExpert = uiMode === 'expert';
 
   const decision = d.decision ? cleanDecisionBriefText(d.decision) : 'Non d\u00e9termin\u00e9e';
   const confidence = formatDecisionBriefConfidence(d.confidence);
@@ -273,6 +275,31 @@ function renderDecisionBrief(data) {
   const risksHtml = riskList.length
     ? riskList.map((risk) => `<li>${escHtml(risk)}</li>`).join('')
     : '<li>Aucun risque disponible dans les donn&eacute;es actuelles.</li>';
+
+  const v = d.validation_logic && typeof d.validation_logic === 'object' ? d.validation_logic : null;
+  const successSignal = v?.success_signal ? cleanDecisionBriefText(v.success_signal) : '';
+  const validationThreshold = v?.validation_threshold ? cleanDecisionBriefText(v.validation_threshold) : '';
+  const failureSignal = v?.failure_signal ? cleanDecisionBriefText(v.failure_signal) : '';
+  const killCriteria = v?.kill_criteria ? cleanDecisionBriefText(v.kill_criteria) : '';
+  const contradictions = Array.isArray(v?.contradictions) ? v.contradictions.map(cleanDecisionBriefText).filter(Boolean) : [];
+
+  const hasValidation = !!(successSignal || validationThreshold || failureSignal || killCriteria || contradictions.length);
+  const validationHtml = !hasValidation ? '' : `
+  <div class="decision-validation" style="margin-top:12px;">
+    <strong>Validation :</strong>
+    <div style="margin-top:6px;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;">
+      ${successSignal ? `<div><div style="font-size:12px;color:var(--text-secondary);font-weight:600;margin-bottom:4px;">Success signal</div><div>${escHtml(successSignal)}</div></div>` : ''}
+      ${killCriteria ? `<div><div style="font-size:12px;color:var(--text-secondary);font-weight:600;margin-bottom:4px;">Kill criteria</div><div>${escHtml(killCriteria)}</div></div>` : ''}
+      ${isExpert && validationThreshold ? `<div><div style="font-size:12px;color:var(--text-secondary);font-weight:600;margin-bottom:4px;">Validation threshold</div><div>${escHtml(validationThreshold)}</div></div>` : ''}
+      ${isExpert && failureSignal ? `<div><div style="font-size:12px;color:var(--text-secondary);font-weight:600;margin-bottom:4px;">Failure signal</div><div>${escHtml(failureSignal)}</div></div>` : ''}
+    </div>
+    ${isExpert && contradictions.length ? `
+      <div style="margin-top:10px;">
+        <div style="font-size:12px;color:var(--text-secondary);font-weight:600;margin-bottom:4px;">Contradictions / objections</div>
+        <ul style="margin:0;padding-left:18px;">${contradictions.slice(0, 5).map((x) => `<li>${escHtml(x)}</li>`).join('')}</ul>
+      </div>
+    ` : ''}
+  </div>`;
 
   return `
 <div class="decision-brief">
@@ -294,6 +321,8 @@ function renderDecisionBrief(data) {
     <strong>Risques :</strong>
     <ul>${risksHtml}</ul>
   </div>
+
+  ${validationHtml}
 
   <div class="decision-next">
     <strong>Prochaine &eacute;tape :</strong>
@@ -700,6 +729,92 @@ function renderDecisionDynamicsSummary(agentRows, opts = {}) {
   return wrapDynamicsSection(cards);
 }
 
+function getInteractionSourceLabel(source) {
+  const t = typeof window !== 'undefined' && window.i18n?.t
+    ? window.i18n.t.bind(window.i18n)
+    : (k) => k;
+  switch (source) {
+    case 'explicit_target': return t('interaction.provenance.explicit_target');
+    case 'assigned_fallback': return t('interaction.provenance.assigned_fallback');
+    case 'inferred_mention': return t('interaction.provenance.inferred_mention');
+    default: return t('interaction.provenance.unknown');
+  }
+}
+
+function getInteractionSourceClass(source) {
+  switch (source) {
+    case 'explicit_target':   return 'interaction-explicit';
+    case 'assigned_fallback': return 'interaction-fallback';
+    case 'inferred_mention':  return 'interaction-inferred';
+    default:                  return 'interaction-unknown';
+  }
+}
+
+/**
+ * @param {boolean|null|undefined} verified
+ * @param {(key: string) => string} [t]
+ */
+function getInteractionVerificationLabel(verified, t) {
+  if (verified === null || verified === undefined) return '';
+  const tr = typeof t === 'function'
+    ? t
+    : (typeof window !== 'undefined' && window.i18n?.t ? window.i18n.t.bind(window.i18n) : (k) => k);
+  return verified ? tr('interaction.verification.verified') : tr('interaction.verification.unverified');
+}
+
+/** @param {boolean|null|undefined} verified */
+function getInteractionVerificationClass(verified) {
+  if (verified === null || verified === undefined) return '';
+  return verified ? 'interaction-verified' : 'interaction-unverified';
+}
+
+/** @param {Record<string, unknown>} meta */
+function isInteractionContractVerified(meta) {
+  const v = meta?.verified_interaction;
+  return v === 1 || v === true || v === '1';
+}
+
+/**
+ * Visible in simple and expert UI (honest contract verification).
+ * @param {Record<string, unknown>|null|undefined} meta
+ * @param {(key: string) => string} t
+ */
+function renderInteractionContractVerifiedBadge(meta, t) {
+  if (meta == null || meta.verified_interaction == null) return '';
+  const verified = isInteractionContractVerified(meta);
+  const label = getInteractionVerificationLabel(verified, t);
+  const vClass = getInteractionVerificationClass(verified);
+  return `<span class="interaction-verification-badge ${vClass}">${escapeHtml(label)}</span>`;
+}
+
+/**
+ * Expert-only detail lines for parsed interaction contract fields.
+ * @param {Record<string, unknown>|null|undefined} meta
+ * @param {(key: string) => string} t
+ */
+function renderInteractionContractExpertDetail(meta, t) {
+  if (!meta) return '';
+  /** @type {string[]} */
+  const parts = [];
+  if (meta.claim_challenged) {
+    parts.push(`<div><strong>${escapeHtml(t('interaction.claimChallenged'))}:</strong> ${escapeHtml(String(meta.claim_challenged))}</div>`);
+  }
+  if (meta.objection) {
+    parts.push(`<div><strong>${escapeHtml(t('interaction.objection'))}:</strong> ${escapeHtml(String(meta.objection))}</div>`);
+  }
+  if (meta.concession) {
+    parts.push(`<div><strong>${escapeHtml(t('interaction.concession'))}:</strong> ${escapeHtml(String(meta.concession))}</div>`);
+  }
+  if (meta.position_change) {
+    parts.push(`<div><strong>${escapeHtml(t('interaction.positionChange'))}:</strong> ${escapeHtml(String(meta.position_change))}</div>`);
+  }
+  if (meta.target_mismatch === 1 || meta.target_mismatch === true) {
+    parts.push(`<div class="text-warning"><strong>${escapeHtml(t('interaction.targetMismatch'))}</strong></div>`);
+  }
+  if (!parts.length) return '';
+  return `<div data-ui="expert-only" style="margin-top:4px;font-size:11px;line-height:1.35;color:var(--text-secondary);">${parts.join('')}</div>`;
+}
+
 export {
   escapeHtml,
   attrsToHtml,
@@ -725,4 +840,11 @@ export {
   renderPremortemStructuredCard,
   renderDecisionDynamicsEditor,
   renderDecisionDynamicsSummary,
+  getInteractionSourceLabel,
+  getInteractionSourceClass,
+  getInteractionVerificationLabel,
+  getInteractionVerificationClass,
+  isInteractionContractVerified,
+  renderInteractionContractVerifiedBadge,
+  renderInteractionContractExpertDetail,
 };

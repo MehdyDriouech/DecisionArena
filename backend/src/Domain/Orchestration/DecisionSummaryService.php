@@ -230,6 +230,7 @@ class DecisionSummaryService {
         $why      = $this->parseSynthesizerSection($synthOut, 'Why');
         $risks    = $this->parseSynthesizerSection($synthOut, 'Main Risks');
         $nextStep = $this->parseSynthesizerNextStep($synthOut);
+        $validationLogic = $this->parseSynthesizerValidationLogic($synthOut);
 
         if (empty($why)) {
             $why = array_slice(
@@ -300,6 +301,10 @@ class DecisionSummaryService {
                 'high_importance_challenged_count' => $evidenceReport['high_importance_challenged_count'] ?? null,
             ] : null,
         ];
+
+        if ($validationLogic !== null) {
+            $brief['validation_logic'] = $validationLogic;
+        }
 
         $synthOutRaw = trim((string)($runResult['synthesizer_output'] ?? ''));
 
@@ -646,5 +651,103 @@ class DecisionSummaryService {
         if (empty($output)) return '';
         if (!preg_match('/##\s+Next Step\s*\n(.+?)(?=\n##|\z)/si', $output, $m)) return '';
         return trim($m[1]);
+    }
+
+    /**
+     * Parse a single "## Validation Logic" section from synthesizer output.
+     * Keeps logic minimal + tolerant: accepts variants like "- Success signal: ...".
+     *
+     * @return ?array{success_signal:?string,validation_threshold:?string,failure_signal:?string,kill_criteria:?string,contradictions?:?list<string>}
+     */
+    private function parseSynthesizerValidationLogic(string $output): ?array
+    {
+        if (empty($output)) return null;
+        if (!preg_match('/##\s+Validation Logic\s*\n(.*?)(?=\n##|\z)/si', $output, $m)) {
+            return null;
+        }
+        $block = trim((string)($m[1] ?? ''));
+        if ($block === '') return null;
+
+        $lines = preg_split('/\r?\n/', $block) ?: [];
+        $labels = [
+            'success_signal' => ['success signal', 'success_signal'],
+            'validation_threshold' => ['validation threshold', 'validation_threshold', 'threshold'],
+            'failure_signal' => ['failure signal', 'failure_signal'],
+            'kill_criteria' => ['kill criteria', 'kill_criteria', 'kill criterion', 'stop criteria', 'stop criterion'],
+            'contradictions' => ['contradictions', 'objections', 'disagreements'],
+        ];
+
+        $current = null;
+        $buf = [
+            'success_signal' => [],
+            'validation_threshold' => [],
+            'failure_signal' => [],
+            'kill_criteria' => [],
+            'contradictions' => [],
+        ];
+
+        $matchLabel = function(string $line) use ($labels): ?string {
+            $raw = strtolower(trim($line));
+            $raw = preg_replace('/^\-\s*/', '', $raw); // allow "- Label: ..."
+            $raw = preg_replace('/^#{1,6}\s*/', '', $raw); // allow "### Label"
+            foreach ($labels as $key => $variants) {
+                foreach ($variants as $v) {
+                    if (preg_match('/^' . preg_quote($v, '/') . '\s*:?\s*/', $raw)) {
+                        return $key;
+                    }
+                }
+            }
+            return null;
+        };
+
+        foreach ($lines as $line) {
+            $line = rtrim((string)$line);
+            if (trim($line) === '') {
+                continue;
+            }
+
+            $hit = $matchLabel($line);
+            if ($hit !== null) {
+                $current = $hit;
+                $clean = preg_replace('/^\-\s*/', '', $line);
+                $clean = preg_replace('/^#{1,6}\s*/', '', $clean);
+                $clean = preg_replace('/^[^:]+:\s*/', '', $clean);
+                if (trim((string)$clean) !== '') {
+                    $buf[$current][] = trim((string)$clean);
+                }
+                continue;
+            }
+
+            if ($current !== null) {
+                $buf[$current][] = trim($line);
+            }
+        }
+
+        $join = function(array $arr): ?string {
+            $text = trim(implode(' ', array_values(array_filter(array_map('trim', $arr)))));
+            return $text !== '' ? $text : null;
+        };
+
+        $success = $join($buf['success_signal']);
+        $threshold = $join($buf['validation_threshold']);
+        $failure = $join($buf['failure_signal']);
+        $kill = $join($buf['kill_criteria']);
+        $contr = array_values(array_filter(array_map('trim', $buf['contradictions'])));
+        $contr = array_slice($contr, 0, 5);
+
+        if ($success === null && $threshold === null && $failure === null && $kill === null && $contr === []) {
+            return null;
+        }
+
+        $out = [
+            'success_signal' => $success,
+            'validation_threshold' => $threshold,
+            'failure_signal' => $failure,
+            'kill_criteria' => $kill,
+        ];
+        if ($contr !== []) {
+            $out['contradictions'] = $contr;
+        }
+        return $out;
     }
 }

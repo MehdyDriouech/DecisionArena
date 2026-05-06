@@ -157,16 +157,22 @@ function renderDecisionRoom() {
   return `
     <div class="full-height-view">
       <div class="dr-header">
-        <div class="dr-header-info">
-          <div class="dr-title">🏛️ ${escHtml(session.title || t('dr.title'))}${pmHeaderBadge}</div>
-          <div class="dr-objective">${escHtml(session.initial_prompt || session.idea || session.objective || '')}</div>
-          ${renderSessionPresetUsedBanner(session, escHtml, t)}
-          ${renderContextDocBadge()}
+        <div class="session-result-toolbar">
+          <div class="session-result-context">
+            <div class="dr-header-info">
+              <div class="dr-title">🏛️ ${escHtml(session.title || t('dr.title'))}${pmHeaderBadge}</div>
+              <div class="dr-objective">${escHtml(session.initial_prompt || session.idea || session.objective || '')}</div>
+              ${renderSessionPresetUsedBanner(session, escHtml, t)}
+              ${renderContextDocBadge()}
+            </div>
+          </div>
+          <div class="session-result-actions">
+            ${!state.drRunning ? `<button class="btn btn-primary" data-action="run-decision-room">${t('dr.run')}</button>` : ''}
+            <div class="export-actions">${renderExportButtons(session.id)}</div>
+            <button class="btn btn-secondary btn-sm" data-action="goto-chat" data-session-id="${escHtml(session.id)}">${t('dr.chat')}</button>
+            <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
+          </div>
         </div>
-        ${!state.drRunning ? `<button class="btn btn-primary" data-action="run-decision-room">${t('dr.run')}</button>` : ''}
-        <div class="export-actions">${renderExportButtons(session.id)}</div>
-        <button class="btn btn-secondary btn-sm" data-action="goto-chat" data-session-id="${escHtml(session.id)}">${t('dr.chat')}</button>
-        <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
       </div>
       ${renderContextDocPanel()}
 

@@ -63,6 +63,7 @@ class QuickDecisionRunner {
         ?string $decisionDynamicsPreset = null
     ): array {
         $warning = null;
+        $guardrails = [];
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($decisionThreshold);
         $dynamicsPreset = \Domain\Agents\DecisionDynamicsPreset::normalizeId($decisionDynamicsPreset);
         $this->voteRepo->clearSession($sessionId);
@@ -286,10 +287,35 @@ class QuickDecisionRunner {
         );
         $synthOut = $synthesis[0]['content'] ?? '';
         $verdictRow = is_array($verdict) ? $verdict : $this->verdictRepo->findBySession($sessionId);
+
+        // Minimal reliability warning when a majority of agents errored.
+        try {
+            $agentIds = array_values(array_filter($selectedAgents, fn($id) => $id !== 'devil_advocate'));
+            $agentIds = array_values(array_unique(array_map('strval', $agentIds)));
+            $errorAgents = [];
+            foreach ([$roundMessages, $synthesis] as $bucket) {
+                foreach (($bucket ?? []) as $m) {
+                    $aid = (string)($m['agent_id'] ?? '');
+                    $content = (string)($m['content'] ?? '');
+                    if ($aid !== '' && str_starts_with($content, '[Error]')) {
+                        $errorAgents[$aid] = true;
+                    }
+                }
+            }
+            $totalAgents = count($agentIds);
+            $errorCount = count($errorAgents);
+            if ($totalAgents > 0 && $errorCount > ($totalAgents / 2)) {
+                $warn = 'Majority of agents failed during execution; decision reliability is degraded.';
+                $guardrails['warnings'] = [$warn];
+                $warning = $warning ? ($warn . ' ' . $warning) : $warn;
+            }
+        } catch (\Throwable) {
+        }
+
         $decisionBrief = $this->summaryService->buildDecisionBrief(
             array_merge($reliability, [
                 'synthesizer_output'     => $synthOut,
-                'guardrails'             => [],
+                'guardrails'             => $guardrails,
                 'decision_quality_score' => $qualityScore,
                 'risk_profile'           => $riskProfile,
                 'evidence_report'        => $evidenceReport,

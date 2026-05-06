@@ -77,12 +77,23 @@ class AgentAssembler {
             }
         }
 
+        $personaProvider = isset($personaData['default_provider']) ? trim((string)$personaData['default_provider']) : null;
+        if ($personaProvider !== null && $personaProvider === '') {
+            $personaProvider = null;
+        }
+
+        $personaModel = isset($personaData['default_model']) ? trim((string)$personaData['default_model']) : null;
+        if ($personaModel !== null && $personaModel === '') {
+            // Treat empty string as "unset" so provider defaults can apply.
+            $personaModel = null;
+        }
+
         return new Agent(
             id: $agentId,
             persona: $persona,
             soul: $soul,
-            providerId: $providerId ?? $personaData['default_provider'] ?? null,
-            model: $model ?? $personaData['default_model'] ?? null,
+            providerId: $providerId ?? $personaProvider,
+            model: $model ?? $personaModel,
             decisionDynamics: $decisionDynamics
         );
     }

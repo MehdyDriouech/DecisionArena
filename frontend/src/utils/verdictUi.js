@@ -18,6 +18,80 @@ function normalizeTradeoffsBrief(obj) {
 }
 
 /**
+ * Extrait le premier objet JSON équilibré à partir du premier `{` (guillemets simples dans chaînes gérées partiellement).
+ * @param {string} s
+ * @returns {string | null}
+ */
+function extractBalancedJsonObject(s) {
+  const start = s.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (inString) {
+      if (c === '\\') {
+        escape = true;
+        continue;
+      }
+      if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      continue;
+    }
+    if (c === '{') depth += 1;
+    else if (c === '}') {
+      depth -= 1;
+      if (depth === 0) return s.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * Retire un enveloppe `{ "tradeoffs": … }` non fenceée ou avec fence mal fermée (dernière occurrence).
+ * @param {string} text
+ * @returns {{ prose: string, jsonText: string | null }}
+ */
+function stripUnfencedTradeoffsEnvelope(text) {
+  const re = /\{\s*"tradeoffs"\s*:/g;
+  let last = -1;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    last = m.index;
+  }
+  if (last < 0) return { prose: text, jsonText: null };
+  const tail = text.slice(last);
+  const balanced = extractBalancedJsonObject(tail);
+  if (!balanced) return { prose: text, jsonText: null };
+  let parsed;
+  try {
+    parsed = JSON.parse(balanced);
+  } catch {
+    return { prose: text, jsonText: null };
+  }
+  if (!parsed || typeof parsed !== 'object' || parsed.tradeoffs == null || typeof parsed.tradeoffs !== 'object') {
+    return { prose: text, jsonText: null };
+  }
+  let before = text
+    .slice(0, last)
+    .replace(/[`]{1,3}\s*json\s*$/i, '')
+    .replace(/\bjson\s*$/i, '')
+    .replace(/```(?:json)?\s*$/i, '')
+    .trimEnd();
+  const after = text.slice(last + balanced.length);
+  const prose = `${before}${after}`.replace(/\n{3,}/g, '\n\n').trim();
+  return { prose, jsonText: balanced };
+}
+
+/**
  * @param {string} text
  * @returns {{ prose: string, jsonText: string | null }}
  */
@@ -53,6 +127,16 @@ function parseRecommendedActionForDisplay(raw) {
   if (jsonText) {
     try {
       tradeoffBrief = normalizeTradeoffsBrief(JSON.parse(jsonText));
+    } catch {
+      tradeoffBrief = null;
+    }
+  }
+
+  const { prose: prose2, jsonText: jsonBare } = stripUnfencedTradeoffsEnvelope(prose);
+  prose = prose2;
+  if (jsonBare && !tradeoffBrief) {
+    try {
+      tradeoffBrief = normalizeTradeoffsBrief(JSON.parse(jsonBare));
     } catch {
       tradeoffBrief = null;
     }

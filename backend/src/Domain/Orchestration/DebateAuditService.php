@@ -51,8 +51,8 @@ class DebateAuditService {
         $total = count($agentMsgs);
         if ($total === 0) return 0.0;
 
-        // Each edge represents a cross-agent reference
-        $edgeCount = count($edges);
+        // Only reliable edges represent strong cross-agent interaction.
+        $edgeCount = count(array_filter($edges, fn($edge) => $this->isReliableEdge($edge)));
         $ratio = $edgeCount / $total;
         return (float) round(min(10.0, $ratio * 10), 1);
     }
@@ -76,7 +76,7 @@ class DebateAuditService {
         $challengeTypes = ['challenge', 'contradict', 'counter'];
         $count = 0;
         foreach ($edges as $edge) {
-            if (in_array($edge['edge_type'] ?? '', $challengeTypes, true)) {
+            if ($this->isReliableEdge($edge) && in_array($edge['edge_type'] ?? '', $challengeTypes, true)) {
                 $count++;
             }
         }
@@ -85,6 +85,18 @@ class DebateAuditService {
     }
 
     // ── Metric: detect change in stance or confidence across rounds ──
+
+    private function isReliableEdge(array $edge): bool {
+        $source = strtolower((string)($edge['edge_source'] ?? 'unknown'));
+        $confidence = (float)($edge['edge_confidence'] ?? 0.5);
+        if ($source === 'explicit_target') {
+            return $confidence >= 0.70;
+        }
+        if ($source === 'inferred_mention') {
+            return $confidence >= 0.60;
+        }
+        return false;
+    }
 
     private function computePositionEvolution(array $positions): float {
         if (empty($positions)) return 5.0;

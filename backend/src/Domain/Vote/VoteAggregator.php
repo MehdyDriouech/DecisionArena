@@ -6,6 +6,8 @@ use Infrastructure\Persistence\PersonaDecisionDynamicsRepository;
 use Infrastructure\Persistence\VoteRepository;
 
 class VoteAggregator {
+    private const VALID_VOTES = ['go', 'no-go', 'reduce-scope', 'needs-more-info', 'pivot'];
+
     private VoteRepository $voteRepo;
     private PersonaDecisionDynamicsRepository $dynamicsRepo;
 
@@ -21,7 +23,12 @@ class VoteAggregator {
             return null;
         }
 
-        $agg              = $this->aggregateReputationWeightedVotes($votes, $presetId);
+        $finalVotes = $this->latestValidVotesByAgent($votes);
+        if (empty($finalVotes)) {
+            return null;
+        }
+
+        $agg              = $this->aggregateReputationWeightedVotes($finalVotes, $presetId);
         $voteTotals       = $agg['vote_totals'];
         $totalWeight      = $agg['total_weight'];
         $perVoteWeighting = $agg['per_vote_weighting'];
@@ -41,7 +48,7 @@ class VoteAggregator {
         $decisionLabel = $winningScore >= $threshold ? $winningLabel : 'no-consensus';
         $notes = [];
 
-        if ($winningLabel === 'go' && $this->hasHighWeightNoGo($votes)) {
+        if ($winningLabel === 'go' && $this->hasHighWeightNoGo($finalVotes)) {
             $decisionLabel = 'reduce-scope';
             $notes[] = 'Go was downgraded because a high-weight no-go objection exists.';
         }
@@ -73,6 +80,11 @@ class VoteAggregator {
                 'winning_label' => $winningLabel,
                 'notes' => $notes,
                 'per_vote_weighting' => $perVoteWeighting,
+                'aggregation_strategy' => 'latest_valid_vote_per_agent',
+                'timeline_vote_count' => count($votes),
+                'final_vote_count' => count($finalVotes),
+                'ignored_timeline_vote_count' => max(0, count($votes) - count($finalVotes)),
+                'final_votes' => $this->formatVotesForSummary($finalVotes),
             ],
             'created_at' => date('c'),
         ];
@@ -117,6 +129,17 @@ class VoteAggregator {
     }
 
     /**
+     * Keep the full vote table as the timeline, but only use the latest valid vote
+     * for each agent when computing the final decision.
+     *
+     * @param array<int,array<string,mixed>> $votes
+     * @return array<int,array<string,mixed>>
+     */
+    public function latestValidVotesByAgent(array $votes): array {
+        return VoteTimelineReducer::latestValidVotesByAgent($votes);
+    }
+
+    /**
      * Build a human-readable explanation of the automatic decision.
      */
     public function getDecisionExplanation(string $sessionId, float $threshold = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD, ?string $presetId = null): array {
@@ -136,7 +159,22 @@ class VoteAggregator {
             ];
         }
 
-        $agg         = $this->aggregateReputationWeightedVotes($votes, $presetId);
+        $finalVotes = $this->latestValidVotesByAgent($votes);
+        if (empty($finalVotes)) {
+            return [
+                'decision'         => 'no-data',
+                'score'            => 0.0,
+                'confidence_level' => 'none',
+                'threshold'        => $threshold,
+                'votes'            => [],
+                'effective_votes'  => [],
+                'aggregation_strategy' => 'latest_valid_vote_per_agent',
+                'overrides'        => [],
+                'explanation'      => 'No valid agent votes found for this session.',
+            ];
+        }
+
+        $agg         = $this->aggregateReputationWeightedVotes($finalVotes, $presetId);
         $voteTotals  = $agg['vote_totals'];
         $totalWeight = $agg['total_weight'];
 
@@ -152,7 +190,7 @@ class VoteAggregator {
             ?? ($winningScore >= $threshold ? $winningLabel : 'no-consensus');
 
         $overrides = [];
-        if ($this->hasHighWeightNoGo($votes)) {
+        if ($this->hasHighWeightNoGo($finalVotes)) {
             $overrides[] = 'high_weight_no_go';
         }
         $needsMoreInfoScore = (float)($scores['needs-more-info'] ?? 0.0);
@@ -161,7 +199,7 @@ class VoteAggregator {
         }
 
         $explanation = $this->buildExplanation(
-            $winningLabel, $winningScore, $decisionLabel, $scores, $overrides, $votes, $threshold, $agg['per_vote_weighting']
+            $winningLabel, $winningScore, $decisionLabel, $scores, $overrides, $finalVotes, $threshold, $agg['per_vote_weighting']
         );
 
         $formattedVotes = array_map(fn($v) => [
@@ -181,6 +219,8 @@ class VoteAggregator {
             'confidence_level' => $decision['confidence_level'] ?? 'low',
             'threshold'        => $threshold,
             'votes'            => $formattedVotes,
+            'effective_votes'  => $this->formatVotesForSummary($finalVotes),
+            'aggregation_strategy' => 'latest_valid_vote_per_agent',
             'overrides'        => $overrides,
             'explanation'      => $explanation,
         ];
@@ -247,6 +287,25 @@ class VoteAggregator {
             }
         }
         return false;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $votes
+     * @return array<int,array<string,mixed>>
+     */
+    private function formatVotesForSummary(array $votes): array {
+        return array_map(fn($v) => [
+            'id' => $v['id'] ?? null,
+            'agent_id' => $v['agent_id'] ?? '',
+            'round' => $v['round'] ?? null,
+            'vote' => $v['vote'] ?? '',
+            'confidence' => isset($v['confidence']) ? (int)$v['confidence'] : null,
+            'impact' => isset($v['impact']) ? (int)$v['impact'] : null,
+            'domain_weight' => isset($v['domain_weight']) ? (int)$v['domain_weight'] : null,
+            'weight_score' => isset($v['weight_score']) ? round((float)$v['weight_score'], 4) : null,
+            'rationale' => $v['rationale'] ?? '',
+            'created_at' => $v['created_at'] ?? null,
+        ], $votes);
     }
 
     private function uuid(): string {

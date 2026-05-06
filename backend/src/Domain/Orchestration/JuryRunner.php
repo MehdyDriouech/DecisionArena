@@ -175,9 +175,10 @@ class JuryRunner {
                         }
                     }
 
-                    $targetAgentId = ($phase !== 'jury-opening')
-                        ? ($this->parseJuryTargetAgent($content, $contextMessages, $agentId) ?? $assignedTarget)
-                        : null;
+                    $targetResolution = ($phase !== 'jury-opening')
+                        ? $this->resolveJuryTargetAgent($content, $contextMessages, $agentId, $assignedTarget)
+                        : ['target_agent_id' => null, 'edge_source' => 'unknown'];
+                    $targetAgentId = $targetResolution['target_agent_id'];
 
                     $msg = $this->messageRepo->create([
                         'id'                       => $this->uuid(),
@@ -202,7 +203,7 @@ class JuryRunner {
                     $roundMessages[] = $msg;
 
                     $this->debateMemory->processMessage(
-                        $sessionId, $round, $agentId, $content, $targetAgentId, $state
+                        $sessionId, $round, $agentId, $content, $targetAgentId, $state, $targetResolution['edge_source']
                     );
                     $this->socialDynamics->ingestAgentResponse(
                         $sessionId,
@@ -558,6 +559,37 @@ class JuryRunner {
             sessionOptions:    ['auto_retry_on_weak_debate' => $adversarialCfg['auto_retry_on_weak_debate']]
         );
 
+        // Minimal reliability warning when a majority of agents errored.
+        try {
+            $agentIds = array_values(array_filter($selectedAgents, fn($id) => $id !== 'devil_advocate'));
+            $agentIds = array_values(array_unique(array_map('strval', $agentIds)));
+            $errorAgents = [];
+            foreach ($allRounds as $roundMsgs) {
+                foreach (($roundMsgs ?? []) as $m) {
+                    $aid = (string)($m['agent_id'] ?? '');
+                    $content = (string)($m['content'] ?? '');
+                    if ($aid !== '' && str_starts_with($content, '[Error]')) {
+                        $errorAgents[$aid] = true;
+                    }
+                }
+            }
+            foreach ($verdictMessages as $m) {
+                $aid = (string)($m['agent_id'] ?? '');
+                $content = (string)($m['content'] ?? '');
+                if ($aid !== '' && str_starts_with($content, '[Error]')) {
+                    $errorAgents[$aid] = true;
+                }
+            }
+            $totalAgents = count($agentIds);
+            $errorCount = count($errorAgents);
+            if ($totalAgents > 0 && $errorCount > ($totalAgents / 2)) {
+                $warn = 'Majority of agents failed during execution; decision reliability is degraded.';
+                $existing = isset($guardrails['warnings']) && is_array($guardrails['warnings']) ? $guardrails['warnings'] : [];
+                $guardrails['warnings'] = array_values(array_unique(array_merge([$warn], $existing)));
+            }
+        } catch (\Throwable) {
+        }
+
         if ($guardrails['final_outcome_override'] !== null) {
             $adjustedDecision['final_outcome'] = $guardrails['final_outcome_override'];
             $reliability['adjusted_decision']  = $adjustedDecision;
@@ -651,9 +683,24 @@ class JuryRunner {
         $synthesizerOutput = $verdictMessages[0]['content'] ?? '';
         $parsedVerdictBrief = VerdictParser::parse($synthesizerOutput);
 
+        // Heuristic fallback fields used by DecisionSummaryService::buildDecisionBrief when
+        // the synthesizer output sections are missing or differently formatted (jury often is).
+        $heuristicBrief = $this->summaryService->build(
+            ['title' => 'Jury'],
+            $parsedVerdictBrief ?: null,
+            $automaticDecision,
+            $allVotes,
+            $state['arguments'] ?? []
+        );
+        $keyFactorsForBrief = array_map(
+            fn($t) => ['text' => $t],
+            $heuristicBrief['key_factors'] ?? []
+        );
+
         $decisionBrief = $this->summaryService->buildDecisionBrief(
             array_merge($reliability, [
                 'synthesizer_output'     => $synthesizerOutput,
+                'key_factors'            => $keyFactorsForBrief,
                 'guardrails'             => $guardrails,
                 'decision_quality_score' => $qualityScore,
                 'risk_profile'           => $riskProfile,
@@ -686,7 +733,7 @@ class JuryRunner {
             error_log('[JuryRunner] Failed to persist jury_adversarial: ' . $e->getMessage());
         }
 
-        return [
+        return StructuredRunResult::augment([
             'session_id'                  => $sessionId,
             'rounds'                      => $allRounds,
             'synthesis'                   => $verdictMessages,
@@ -700,6 +747,7 @@ class JuryRunner {
             'threshold'                   => $threshold,
             'raw_decision'                => $reliability['raw_decision'],
             'adjusted_decision'           => $reliability['adjusted_decision'],
+            'memory_summary'              => $reliability['memory_summary'] ?? null,
             'context_quality'             => $reliability['context_quality'],
             'reliability_cap'             => $reliability['reliability_cap'],
             'false_consensus_risk'        => $reliability['false_consensus_risk'],
@@ -715,7 +763,7 @@ class JuryRunner {
             'auto_retry'                  => $autoRetryResult,
             'decision_quality_score'      => $qualityScore,
             'decision_brief'              => $decisionBrief,
-        ];
+        ]);
     }
 
     // ── Config ────────────────────────────────────────────────────────────────
@@ -946,6 +994,7 @@ class JuryRunner {
                     $agent
                 );
                 $content = $routed['content'];
+                $targetResolution = $this->resolveJuryTargetAgent($content, $prevMessages, $agentId, $assignedTarget);
 
                 $msg = $this->messageRepo->create([
                     'id'                       => $this->uuid(),
@@ -961,7 +1010,7 @@ class JuryRunner {
                     'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
                     'round'                    => $miniChallengeRound,
                     'phase'                    => 'jury-mini-challenge',
-                    'target_agent_id'          => $assignedTarget,
+                    'target_agent_id'          => $targetResolution['target_agent_id'],
                     'mode_context'             => 'jury',
                     'message_type'             => 'jury-mini-challenge',
                     'content'                  => $content,
@@ -970,7 +1019,13 @@ class JuryRunner {
                 $miniMessages[] = $msg;
 
                 $this->debateMemory->processMessage(
-                    $sessionId, $miniChallengeRound, $agentId, $content, $assignedTarget, $state
+                    $sessionId,
+                    $miniChallengeRound,
+                    $agentId,
+                    $content,
+                    $targetResolution['target_agent_id'],
+                    $state,
+                    $targetResolution['edge_source']
                 );
 
                 $parsedVote = $this->voteParser->parse($content);
@@ -1524,6 +1579,12 @@ class JuryRunner {
 
         $userContent .= "**Your task:** $instruction\n\n";
 
+        $interactiveJuryPhases = ['jury-cross-examination', 'jury-defense', 'jury-deliberation', 'jury-mini-challenge'];
+        if (in_array($phase, $interactiveJuryPhases, true)) {
+            $userContent .= $this->promptBuilder->buildInteractionContractBlock(true);
+            $userContent .= $this->promptBuilder->buildWeightedOpinionInstructionBlock();
+        }
+
         if ($forceDisagreement && $agentId !== 'synthesizer') {
             $userContent .= "\n> Challenge assumptions and defend an independent position. Do not simply agree with the majority.\n";
         }
@@ -1535,7 +1596,7 @@ class JuryRunner {
             $userContent .= "## Confidence\n0-10\n\n";
             $userContent .= "## Impact\n0-10\n\n";
             $userContent .= "## Domain Weight\n0-10\n\n";
-            $userContent .= "## Rationale\n...\n";
+            $userContent .= "## Rationale\n- Main objection considered: ...\n- Main concession accepted: ...\n- Reason for final vote: ...\n";
         }
 
         return [
@@ -1567,6 +1628,29 @@ class JuryRunner {
             return null;
         }
         return $parsed;
+    }
+
+    /**
+     * @return array{target_agent_id:?string,edge_source:string}
+     */
+    private function resolveJuryTargetAgent(string $content, array $prevMessages, string $authorId, ?string $assignedTarget): array {
+        $parsed = $this->parseJuryTargetAgent($content, $prevMessages, $authorId);
+        if ($parsed !== null) {
+            return ['target_agent_id' => $parsed, 'edge_source' => 'explicit_target'];
+        }
+
+        if ($assignedTarget !== null) {
+            $valid = array_map('strtolower', array_filter(
+                array_column($prevMessages, 'agent_id'),
+                fn($id) => !empty($id)
+            ));
+            $normalized = strtolower($assignedTarget);
+            if (in_array($normalized, $valid, true) && $normalized !== strtolower($authorId)) {
+                return ['target_agent_id' => $assignedTarget, 'edge_source' => 'assigned_fallback'];
+            }
+        }
+
+        return ['target_agent_id' => null, 'edge_source' => 'unknown'];
     }
 
     private function uuid(): string {

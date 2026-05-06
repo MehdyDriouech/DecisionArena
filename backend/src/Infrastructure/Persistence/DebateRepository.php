@@ -77,9 +77,11 @@ class DebateRepository {
     public function createEdge(array $data): array {
         $stmt = $this->pdo->prepare('
             INSERT INTO interaction_edges
-                (id, session_id, round, source_agent_id, target_agent_id, edge_type, weight, argument_id, created_at)
+                (id, session_id, round, source_agent_id, target_agent_id, edge_type, edge_source, edge_confidence, weight, argument_id,
+                 claim_challenged, objection, concession, position_change, verified_interaction, target_mismatch, created_at)
             VALUES
-                (:id, :session_id, :round, :source_agent_id, :target_agent_id, :edge_type, :weight, :argument_id, :created_at)
+                (:id, :session_id, :round, :source_agent_id, :target_agent_id, :edge_type, :edge_source, :edge_confidence, :weight, :argument_id,
+                 :claim_challenged, :objection, :concession, :position_change, :verified_interaction, :target_mismatch, :created_at)
         ');
         $stmt->execute([
             ':id'              => $data['id'],
@@ -88,8 +90,16 @@ class DebateRepository {
             ':source_agent_id' => $data['source_agent_id'],
             ':target_agent_id' => $data['target_agent_id'],
             ':edge_type'       => $data['edge_type'] ?? 'neutral',
+            ':edge_source'     => $data['edge_source'] ?? 'unknown',
+            ':edge_confidence' => (float)($data['edge_confidence'] ?? 0.5),
             ':weight'          => $data['weight'] ?? 1,
             ':argument_id'     => $data['argument_id'] ?? null,
+            ':claim_challenged' => $data['claim_challenged'] ?? null,
+            ':objection'        => $data['objection'] ?? null,
+            ':concession'       => $data['concession'] ?? null,
+            ':position_change'  => $data['position_change'] ?? null,
+            ':verified_interaction' => (int)($data['verified_interaction'] ?? 0),
+            ':target_mismatch'      => (int)($data['target_mismatch'] ?? 0),
             ':created_at'      => $data['created_at'],
         ]);
         return $this->findEdgeById($data['id']) ?? $data;

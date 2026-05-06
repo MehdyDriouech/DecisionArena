@@ -109,11 +109,13 @@ function registerLaunchAssistantHandlers() {
       custom: 'decision-room',
     };
     const DA = window.DecisionArena;
+    const resolvedMode = modeByIntent[intent] || 'quick-decision';
     DA.store.state.newSession = {
       ...DA.store.state.newSession,
       intent,
-      mode: modeByIntent[intent] || 'quick-decision',
+      mode: resolvedMode,
       fastDecisionEnabled: intent !== 'custom',
+      ...(resolvedMode === 'quick-decision' ? { rounds: 1 } : {}),
     };
     if (intent === 'facilitation') applySixThinkingHatsPreset(DA.store.state);
     const laDesc = DA.store.state.launchAssistant?.description?.trim();

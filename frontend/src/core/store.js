@@ -207,6 +207,7 @@ function maskProviderKey(apiKey) {
 
 const createInitialState = () => {
   const initialUiMode = readInitialUiMode();
+  const initialExpertUi = initialUiMode === 'expert';
   const providerSettingsHydrated = readStoredProviderSettings();
   return ({
   view: 'dashboard',
@@ -292,8 +293,12 @@ const createInitialState = () => {
     newSession: {
     title: '',
     idea: '',
-    mode: 'chat',
-    simpleIntent: 'decide',
+    mode: initialExpertUi ? 'chat' : 'stress-test',
+    productFamily: initialExpertUi ? null : 'validate',
+    productPreset: null,
+    founderInterrogation: null,
+    simpleIntent: initialExpertUi ? 'decide' : 'test',
+    selectedIntent: initialExpertUi ? 'decide' : 'validate',
     selectedAgents: [],
     rounds: 3,
     language: 'fr',
@@ -303,7 +308,7 @@ const createInitialState = () => {
     cfRounds: 3,
     cfStyle: 'sequential',
     cfReplyPolicy: 'all-agents-reply',
-    forceDisagreement: false,
+    forceDisagreement: initialExpertUi ? false : true,
     juryThreshold: 0.55,
     selectedScenarioId: null,
     ctxDocEnabled: false,
@@ -312,9 +317,10 @@ const createInitialState = () => {
     ctxDocContent: '',
     ctxDocDraftSaved: false,
     ctxDocDraftSummary: null,
-    fastDecisionEnabled: true,
+    fastDecisionEnabled: initialExpertUi,
     customizing: false,
     selectedTemplateId: null,
+    presetRationale: null,
     /** Modèle de départ choisi sur Nouvelle session ({ type, id } | null) */
     selectedStarter: null,
     /** Replie la grille « Démarrer avec un modèle » sur Nouvelle session */

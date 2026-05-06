@@ -4,6 +4,7 @@ namespace Controllers;
 use Domain\DecisionReliability\DecisionReliabilityService;
 use Domain\DecisionReliability\ReliabilityConfig;
 use Domain\Agents\DecisionDynamicsPreset;
+use Domain\DecisionReliability\MemorySummaryBuilder;
 use Domain\Orchestration\DebateMemoryService;
 use Http\Request;
 use Http\Response;
@@ -19,6 +20,7 @@ use Infrastructure\Persistence\DebateRepository;
 use Infrastructure\Persistence\JuryAdversarialReportRepository;
 use Infrastructure\Persistence\PersonaDecisionDynamicsRepository;
 use Domain\Orchestration\PromptBuilder;
+use Domain\Vote\VoteAggregator;
 use Infrastructure\Persistence\VoteRepository;
 
 class SessionController {
@@ -105,6 +107,36 @@ class SessionController {
         $autoRetry        = $persisted['auto_retry']          ?? null;
         $qualityScore     = $persisted['decision_quality_score'] ?? null;
 
+        $memorySummary = null;
+        if (is_array($persisted) && isset($persisted['memory_summary']) && is_array($persisted['memory_summary'])) {
+            $memorySummary = $persisted['memory_summary'];
+        }
+        $freshMemorySummary = MemorySummaryBuilder::buildMemorySummary($edges, $positions);
+        if (!is_array($memorySummary)) {
+            $memorySummary = $freshMemorySummary;
+        } else {
+            // Prefer live graph for memory_summary metrics; merge preserves any legacy extra keys from persisted.
+            $memorySummary = array_merge($memorySummary, $freshMemorySummary);
+        }
+
+        $voteTimeline = (is_array($persisted) && isset($persisted['vote_timeline']) && is_array($persisted['vote_timeline']))
+            ? $persisted['vote_timeline']
+            : $votes;
+
+        $finalVotes = null;
+        if (is_array($persisted) && isset($persisted['final_votes']) && is_array($persisted['final_votes'])) {
+            $finalVotes = $persisted['final_votes'];
+        }
+        if (!is_array($finalVotes) && is_array($decision)) {
+            $vs = $decision['vote_summary'] ?? null;
+            if (is_array($vs) && isset($vs['final_votes']) && is_array($vs['final_votes'])) {
+                $finalVotes = $vs['final_votes'];
+            }
+        }
+        if (!is_array($finalVotes)) {
+            $finalVotes = (new VoteAggregator())->latestValidVotesByAgent($votes);
+        }
+
         $decisionBriefRaw = $session['decision_brief'] ?? null;
         $decisionBrief = $decisionBriefRaw
             ? (is_array($decisionBriefRaw) ? $decisionBriefRaw : json_decode($decisionBriefRaw, true))
@@ -127,7 +159,10 @@ class SessionController {
             'interaction_edges' => $edges,
             'weighted_analysis' => $this->debateMemory->buildWeightedAnalysis($state),
             'dominance_indicator' => $this->debateMemory->buildDominanceIndicator($state),
-            'votes' => $votes,
+            'votes' => $voteTimeline,
+            'vote_timeline' => $voteTimeline,
+            'final_votes' => $finalVotes,
+            'memory_summary' => $memorySummary,
             'automatic_decision' => $decision,
             'raw_decision' => $rawDecision,
             'adjusted_decision' => $adjustedDecision,
@@ -227,6 +262,14 @@ class SessionController {
         if (is_string($ff) && $ff !== '' && preg_match('/^[a-z0-9_-]+$/', $ff)) {
             try {
                 $this->sessionRepo->update($id, ['facilitation_framework' => $ff]);
+            } catch (\Throwable $e) {
+            }
+        }
+
+        $sessionVariant = $data['session_variant'] ?? null;
+        if (is_string($sessionVariant) && $sessionVariant !== '' && preg_match('/^[a-z0-9_-]+$/', $sessionVariant)) {
+            try {
+                $this->sessionRepo->update($id, ['session_variant' => $sessionVariant]);
             } catch (\Throwable $e) {
             }
         }

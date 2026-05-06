@@ -209,6 +209,7 @@ TEXT;
         $userContent .= "**Your Task:** $roundInstruction\n\n";
         if ($round > 1 && $agent->id !== 'synthesizer') {
             $userContent .= $this->buildTargetAgentHint($agent->id, $previousRoundMessages, $assignedTarget);
+            $userContent .= $this->buildInteractionContractBlock($assignedTarget !== null);
         }
         $userContent .= "Use your default response format.";
         $userContent .= $this->buildWeightedOpinionInstruction();
@@ -359,6 +360,9 @@ TEXT;
         }
 
         $userContent .= "**Your task:** $instruction";
+        if ($currentRound > 1 && ($assignedTarget !== null || $interactionStyle === 'agent-to-agent')) {
+            $userContent .= $this->buildInteractionContractBlock(true);
+        }
         $userContent .= $this->buildWeightedOpinionInstruction();
         if ($agent->id !== 'synthesizer' && $currentRound === $totalRounds) {
             $userContent .= $this->buildFinalVoteInstruction();
@@ -622,6 +626,7 @@ TEXT;
             $userContent .= "- De-risking actions that could be done before committing fully\n\n";
             $userContent .= "Be practical. Every action must be executable. Prefer small next steps.";
             $userContent .= $this->buildTargetAgentHint($agent->id, $previousRoundMessages, $assignedTarget);
+            $userContent .= $this->buildInteractionContractBlock($assignedTarget !== null);
         }
 
         if (!$isSynthesizer && $totalRounds > 1) {
@@ -959,6 +964,15 @@ TEXT;
             . "## Change Since Last Round\n...\n";
     }
 
+    /**
+     * Public wrapper for runners that need the weighted opinion block.
+     * Keeps the underlying instruction private to avoid leaking too much surface area.
+     */
+    public function buildWeightedOpinionInstructionBlock(): string
+    {
+        return $this->buildWeightedOpinionInstruction();
+    }
+
     private function buildFinalVoteInstruction(): string {
         return "\n\n---\n\nAt the end of your response, you MUST include this exact section:\n\n"
             . "# Final Vote\n\n"
@@ -966,7 +980,7 @@ TEXT;
             . "## Confidence\n0-10\n\n"
             . "## Impact\n0-10\n\n"
             . "## Domain Weight\n0-10\n\n"
-            . "## Rationale\nshort explanation\n\n"
+            . "## Rationale\n- Main objection considered: ...\n- Main concession accepted: ...\n- Reason for final vote: ...\n\n"
             . "Rules:\n"
             . "- Do not vote go if major unresolved risks remain.\n"
             . "- Use reduce-scope when idea is promising but too broad.\n"
@@ -1278,6 +1292,17 @@ LOW | MEDIUM | HIGH
 ## Main Risks
 - (max 3 bullet points)
 
+The final synthesis MUST include the exact heading `## Validation Logic`.
+Do not omit this section.
+If some information is missing, infer a measurable first validation hypothesis instead of omitting the section.
+Avoid vanity metrics. Prefer measurable, observable, time-bounded criteria when possible.
+
+## Validation Logic
+Success signal: ...
+Validation threshold: ...
+Failure signal: ...
+Kill criteria: ...
+
 ## Reliability Warning
 (one sentence — omit this section only if the decision is strong and reliable)
 
@@ -1386,5 +1411,24 @@ You MUST directly challenge one concrete claim made by another agent.
 Reference the target agent explicitly by name (e.g. "I disagree with [Agent]'s claim that...").
 Generic agreement or restating your own position is not allowed.
 TEXT;
+    }
+
+    /**
+     * Contrat d'interaction minimal pour les réponses agent-à-agent.
+     * Compatible avec les parsers existants : ## Target Agent reste en première position.
+     */
+    public function buildInteractionContractBlock(bool $isRequired = true): string
+    {
+        $obligation = $isRequired
+            ? 'you MUST include these sections before any other content'
+            : 'you are encouraged to include these sections before any other content';
+
+        return "\n\n---\n\n## Interaction Contract\n\n"
+            . "When responding to another agent, {$obligation}:\n\n"
+            . "## Target Agent\n<exact agent id>\n\n"
+            . "## Claim Challenged\n<short quote from the target agent's argument, or None>\n\n"
+            . "## Objection\n<your precise objection to that specific claim, or None>\n\n"
+            . "## Concession\n<a valid point you accept from the target agent, or None>\n\n"
+            . "## Position Change\nunchanged | weakened | strengthened | changed\n";
     }
 }

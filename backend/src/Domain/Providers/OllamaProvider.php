@@ -8,7 +8,10 @@ class OllamaProvider implements LlmProviderInterface {
     ) {}
 
     public function chat(array $messages, string $model = ''): string {
-        $model = $model ?: $this->defaultModel;
+        $model = trim((string)($model ?: $this->defaultModel));
+        if ($model === '') {
+            throw new \RuntimeException('No model configured for Ollama call.');
+        }
         $url = rtrim($this->baseUrl, '/') . '/api/chat';
         $payload = json_encode([
             'model'    => $model,

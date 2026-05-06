@@ -47,6 +47,7 @@ class DecisionReliabilityService {
     ): array {
         $threshold = ReliabilityConfig::normalizeThreshold($decisionThreshold);
         $contextQuality = $this->contextAnalyzer->analyze($objective, $contextDoc);
+        $memorySummary = MemorySummaryBuilder::buildMemorySummary($edges, $positions);
         $falseConsensus = $this->falseConsensusDetector->detect(
             $contextQuality,
             $positions,
@@ -86,6 +87,7 @@ class DecisionReliabilityService {
             'adjusted_decision' => $adjustedDecision,
             'context_quality' => $contextQuality,
             'reliability_cap' => (float)$contextQuality['reliability_cap'],
+            'memory_summary' => $memorySummary,
             'false_consensus_risk' => $falseConsensus['false_consensus_risk'],
             'false_consensus' => $falseConsensus,
             'reliability_warnings' => $warnings,

@@ -12,6 +12,7 @@ use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\MessageRepository;
 use Infrastructure\Persistence\DebateRepository;
 use Infrastructure\Persistence\VoteRepository;
+use Domain\Vote\VoteAggregator;
 use Infrastructure\Persistence\VerdictRepository;
 use Infrastructure\Persistence\RiskProfileRepository;
 use Infrastructure\Persistence\ContextDocumentRepository;
@@ -64,6 +65,7 @@ class DecisionSummaryController {
         $positions = $this->debateRepo->findPositionsBySession($id);
         $arguments = $this->debateRepo->findArgumentsBySession($id);
         $votes     = $this->voteRepo->findVotesBySession($id);
+        $finalVotes = (new VoteAggregator())->latestValidVotesByAgent($votes);
         $decision  = $this->voteRepo->findDecisionBySession($id);
         $verdict   = $this->verdictRepo->findBySession($id);
         $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt(
@@ -101,7 +103,7 @@ class DecisionSummaryController {
             $session,
             $verdict,
             $reliability['adjusted_decision'] ?? $decision,
-            $votes,
+            $finalVotes,
             $arguments,
             $highlights
         );

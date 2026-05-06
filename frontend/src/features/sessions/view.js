@@ -169,30 +169,46 @@ function renderSessionCard(session, fullActions = false) {
 function renderDashboard() {
   const { state, t } = getCtx();
   const recent = state.sessions.slice(0, 5);
+  const isExpert = state.uiMode === 'expert';
 
-  return `
+  const heroSimple = `
     <div class="hero-block">
-      <h1 class="hero-title">
-        Que voulez-vous d&eacute;cider aujourd&rsquo;hui ?
-      </h1>
-      <p class="hero-copy">
-        Simulez plusieurs experts IA pour prendre une d&eacute;cision plus robuste.
-      </p>
-      <div class="intent-grid">
-        <button class="btn btn-secondary" data-action="dashboard-intent-explore">
-          Explorer une id&eacute;e
+      <h1 class="hero-title">${t('dashboard.simple.heroTitle')}</h1>
+      <p class="hero-copy">${t('dashboard.simple.heroSubtitle')}</p>
+      <div class="dashboard-simple-ctas" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
+        <button type="button" class="btn btn-primary btn-lg" data-action="dashboard-select-family" data-family="validate">
+          ${t('dashboard.simple.primaryCta')}
         </button>
-        <button class="btn btn-secondary" data-action="dashboard-intent-decide">
-          Prendre une d&eacute;cision
-        </button>
-        <button class="btn btn-secondary" data-action="dashboard-intent-test">
-          Tester une id&eacute;e
-        </button>
-        <button type="button" class="btn btn-secondary" data-action="goto-new-session" role="button" tabindex="0">
+        <button type="button" class="btn btn-secondary" data-action="goto-new-session">
           ${t('dashboard.configureAnalysis')}
         </button>
       </div>
     </div>
+  `;
+
+  const heroExpert = `
+    <div class="hero-block">
+      <h1 class="hero-title">${t('dashboard.heroTitle')}</h1>
+      <p class="hero-copy">${t('dashboard.heroSubtitle')}</p>
+      <div class="intent-grid">
+        <button type="button" class="btn btn-secondary" data-action="dashboard-intent-explore">
+          ${t('newSession.intent.explore')}
+        </button>
+        <button type="button" class="btn btn-secondary" data-action="dashboard-intent-decide">
+          ${t('newSession.intent.decide')}
+        </button>
+        <button type="button" class="btn btn-secondary" data-action="dashboard-intent-test">
+          ${t('newSession.intent.test')}
+        </button>
+        <button type="button" class="btn btn-secondary" data-action="goto-new-session">
+          ${t('dashboard.configureAnalysis')}
+        </button>
+      </div>
+    </div>
+  `;
+
+  return `
+    ${isExpert ? heroExpert : heroSimple}
 
     <div class="sessions-list">
       <div class="section-header">
@@ -201,29 +217,41 @@ function renderDashboard() {
       </div>
       ${recent.length === 0 ? `
         <div class="empty-state">
-          <p>Vous n&rsquo;avez pas encore lanc&eacute; d&rsquo;analyse.</p>
+          <p>${t('dashboard.simple.emptyHint')}</p>
           <button class="btn btn-primary btn-sm" data-action="launch-quick-analysis">
-            Commencer maintenant
+            ${t('dashboard.simple.emptyCta')}
           </button>
         </div>
       ` : recent.map((s) => renderSessionCard(s, false)).join('')}
     </div>
 
     <div class="dashboard-technical-shortcuts" data-ui="expert-only">
-      <button class="btn btn-secondary btn-sm" data-action="goto-new-session">
-        Nouvelle session
+      <button type="button" class="btn btn-secondary btn-sm" data-action="goto-new-session">
+        ${t('nav.newSession')}
       </button>
-      <button class="btn btn-secondary btn-sm" data-action="goto-compare-sessions">
-        Comparer des sessions
+      <button type="button" class="btn btn-secondary btn-sm" data-action="goto-compare-sessions">
+        ${t('dashboard.compareSessions')}
       </button>
-      <button class="btn btn-secondary btn-sm" data-nav="chat">
-        Chat
+      <button type="button" class="btn btn-secondary btn-sm" data-nav="launch-assistant">
+        ${t('dashboard.launchAssistant')}
       </button>
-      <button class="btn btn-secondary btn-sm" data-nav="decision-room">
-        Decision Room
+      <button type="button" class="btn btn-secondary btn-sm" data-nav="chat">
+        ${t('mode.chat')}
       </button>
-      <button class="btn btn-secondary btn-sm" data-nav="confrontation">
-        Confrontation
+      <button type="button" class="btn btn-secondary btn-sm" data-nav="decision-room">
+        ${t('mode.decisionRoom')}
+      </button>
+      <button type="button" class="btn btn-secondary btn-sm" data-action="goto-new-session" data-mode="confrontation">
+        ${t('mode.confrontation')}
+      </button>
+      <button type="button" class="btn btn-secondary btn-sm" data-action="goto-new-session" data-mode="quick-decision">
+        ${t('mode.quickDecision')}
+      </button>
+      <button type="button" class="btn btn-secondary btn-sm" data-action="goto-new-session" data-mode="stress-test">
+        ${t('mode.stressTest')}
+      </button>
+      <button type="button" class="btn btn-secondary btn-sm" data-action="goto-new-session" data-mode="jury">
+        ${t('jury.title')}
       </button>
     </div>
   `;

@@ -17,6 +17,8 @@
   --text-primary: #e2e8f0;
   --text-secondary: #94a3b8;
   --text-muted: #64748b;
+  /* Titres / texte sur bandeaux clairs (#f8f9fa) dans l’UI sombre */
+  --text-on-light-surface: #0f172a;
   --success: #10b981;
   --warning: #f59e0b;
   --error: #ef4444;
@@ -773,7 +775,7 @@ a {
   border-bottom: 1px solid var(--border);
   background: var(--bg-secondary);
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 12px;
   flex-wrap: wrap;
   flex-shrink: 0;
@@ -923,7 +925,7 @@ a {
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 12px;
   flex-wrap: wrap;
   flex-shrink: 0;
@@ -947,6 +949,38 @@ a {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ===== SESSION RESULT TOOLBAR (header alignment) ===== */
+.session-result-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+  width: 100%;
+  align-self: stretch;
+}
+
+.session-result-context {
+  min-width: 0;
+}
+
+.session-result-actions {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 900px) {
+  .session-result-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .session-result-actions {
+    justify-content: flex-start;
+  }
 }
 
 .dr-content {

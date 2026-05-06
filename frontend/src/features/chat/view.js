@@ -437,23 +437,29 @@ function renderChat() {
   return `
     <div class="full-height-view">
       <div class="chat-header">
-        <div style="flex:1;min-width:0;">
-          <div class="chat-header-title">${escHtml(session.title || 'Untitled')}</div>
-          ${renderSessionPresetUsedBanner(session, escHtml, t)}
-          <div class="chat-agents-badges" style="margin-top:6px;">
-            ${agentIds.map((id) => `
-              <span class="agent-badge">${agentIcon(id)} ${escHtml(agentName(id))}</span>
-            `).join('')}
-            ${renderContextDocBadge()}
+        <div class="session-result-toolbar">
+          <div class="session-result-context">
+            <div style="min-width:0;">
+              <div class="chat-header-title">${escHtml(session.title || 'Untitled')}</div>
+              ${renderSessionPresetUsedBanner(session, escHtml, t)}
+              <div class="chat-agents-badges" style="margin-top:6px;">
+                ${agentIds.map((id) => `
+                  <span class="agent-badge">${agentIcon(id)} ${escHtml(agentName(id))}</span>
+                `).join('')}
+                ${renderContextDocBadge()}
+              </div>
+            </div>
+          </div>
+          <div class="session-result-actions">
+            <div class="export-actions">
+              ${renderExportButtons(session.id)}
+            </div>
+            <button class="btn btn-secondary btn-sm" data-action="open-decision-room" data-session-id="${escHtml(session.id)}">
+              ${t('chat.decisionRoom')}
+            </button>
+            <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
           </div>
         </div>
-        <div class="export-actions">
-          ${renderExportButtons(session.id)}
-        </div>
-        <button class="btn btn-secondary btn-sm" data-action="open-decision-room" data-session-id="${escHtml(session.id)}">
-          ${t('chat.decisionRoom')}
-        </button>
-        <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
       </div>
       ${renderContextDocPanel()}
 

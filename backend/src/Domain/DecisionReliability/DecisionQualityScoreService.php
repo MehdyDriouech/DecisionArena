@@ -65,6 +65,19 @@ class DecisionQualityScoreService
             $explanation[] = "False consensus penalty: {$fcPen} ({$fcRisk} risk)";
         }
 
+        $interactionPen = 0.0;
+        if (array_key_exists('interaction_density', $falseConsensus)) {
+            $interactionDensity = (float)$falseConsensus['interaction_density'];
+            if ($interactionDensity < 0.15) {
+                $interactionPen = -10.0;
+            } elseif ($interactionDensity < 0.30) {
+                $interactionPen = -5.0;
+            }
+            if ($interactionPen < 0) {
+                $explanation[] = "Reliable interaction density penalty: {$interactionPen} (density: " . round($interactionDensity * 100, 1) . "%)";
+            }
+        }
+
         // Missing critical info penalty: -5 per item, max -20
         $missing     = $contextQuality['critical_missing'] ?? [];
         $missingCount= count($missing);
@@ -73,7 +86,7 @@ class DecisionQualityScoreService
             $explanation[] = "{$missingCount} critical info missing: {$missingPen}";
         }
 
-        $raw   = $ctxPts + $debPts + $evPts + $riskPts + $fcPen + $missingPen;
+        $raw   = $ctxPts + $debPts + $evPts + $riskPts + $fcPen + $missingPen + $interactionPen;
 
         $challengePen = 0.0;
         if ($evidenceReport !== null) {
@@ -105,6 +118,7 @@ class DecisionQualityScoreService
                 'evidence'                 => $evPts,
                 'risk_alignment'           => $riskPts,
                 'false_consensus_penalty'  => $fcPen,
+                'interaction_density_penalty' => $interactionPen,
                 'missing_info_penalty'     => $missingPen,
                 'user_challenge_penalty'   => $challengePen > 0 ? -$challengePen : 0,
             ],

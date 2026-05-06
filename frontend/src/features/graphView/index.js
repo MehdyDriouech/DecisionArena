@@ -10,7 +10,7 @@
  *   state.graphLoading — boolean
  */
 
-import { renderPanelRecommendBadge, renderTooltip } from '../../ui/components.js';
+import { renderPanelRecommendBadge, renderTooltip, getInteractionSourceLabel, getInteractionSourceClass, renderInteractionContractVerifiedBadge, renderInteractionContractExpertDetail } from '../../ui/components.js';
 
 function panelHl(state) {
   return state.sessionHistory?.panelHighlights || state.auditData?.highlights || [];
@@ -44,15 +44,26 @@ function renderEdgeList(edges) {
   }, {});
 
   const rows = Object.keys(byRound).sort((a, b) => Number(a) - Number(b)).map((round) => {
-    const items = byRound[round].map((e) => `
-      <div class="graph-edge-item">
-        <span class="graph-edge-agents">${escHtml(e.source_agent_id)} → ${escHtml(e.target_agent_id)}</span>
-        <span class="badge ${e.edge_type === 'challenge' || e.edge_type === 'contradict' ? 'badge-danger' : 'badge-info'}">
-          ${escHtml(e.edge_type || 'neutral')}
-        </span>
-        ${e.weight ? `<span class="badge badge-muted">w=${Number(e.weight)}</span>` : ''}
-      </div>
-    `).join('');
+    const items = byRound[round].map((e) => {
+      const srcLabel = getInteractionSourceLabel(e.edge_source);
+      const srcClass = getInteractionSourceClass(e.edge_source);
+      const t = (key) => window.i18n?.t(key) ?? key;
+      const verifiedBadge = renderInteractionContractVerifiedBadge(e, t);
+      const expertContract = renderInteractionContractExpertDetail(e, t);
+      return `
+        <div class="graph-edge-item">
+          <span class="graph-edge-agents">${escHtml(e.source_agent_id)} → ${escHtml(e.target_agent_id)}</span>
+          <span class="interaction-source-badge ${srcClass}">${srcLabel}</span>
+          ${verifiedBadge ? `<span style="display:inline-flex;margin-left:4px;">${verifiedBadge}</span>` : ''}
+          <span data-ui="expert-only" style="display:inline-flex;gap:4px;align-items:center;flex-wrap:wrap;">
+            <span class="badge badge-muted">${escHtml(e.edge_type || 'neutral')}</span>
+            ${e.edge_confidence != null ? `<span class="badge badge-muted">conf=${Number(e.edge_confidence).toFixed(2)}</span>` : ''}
+            ${e.weight ? `<span class="badge badge-muted">w=${Number(e.weight)}</span>` : ''}
+          </span>
+          ${expertContract}
+        </div>
+      `;
+    }).join('');
     return `
       <div class="graph-round-group">
         <div class="graph-round-label">Round ${escHtml(String(round))}</div>
@@ -181,6 +192,15 @@ function renderAgentPositions(positions) {
 
 // ── Lightweight visual graph (SVG flex layout) ────────────────────────────
 
+function edgeStyleFromSource(source) {
+  switch (source) {
+    case 'explicit_target':   return { stroke: 'var(--color-success, #10b981)', dasharray: '',    opacity: '0.85' };
+    case 'assigned_fallback': return { stroke: 'var(--color-warning, #f59e0b)', dasharray: '5 3', opacity: '0.75' };
+    case 'inferred_mention':  return { stroke: 'var(--color-info, #3b82f6)',    dasharray: '2 3', opacity: '0.65' };
+    default:                  return { stroke: 'var(--text-muted, #64748b)',    dasharray: '1 4', opacity: '0.4'  };
+  }
+}
+
 function renderVisualGraph(nodes, edges) {
   if (!nodes || nodes.length === 0) return '';
 
@@ -205,8 +225,9 @@ function renderVisualGraph(nodes, edges) {
     if (si === undefined || ti === undefined) return '';
     const sc = coords[si];
     const tc = coords[ti];
-    const color = (e.edge_type === 'challenge' || e.edge_type === 'contradict') ? '#f87171' : '#60a5fa';
-    return `<line x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}" stroke="${color}" stroke-width="1.5" stroke-opacity="0.6" marker-end="url(#arrow)"/>`;
+    const style = edgeStyleFromSource(e.edge_source);
+    const dashAttr = style.dasharray ? ` stroke-dasharray="${style.dasharray}"` : '';
+    return `<line x1="${sc.x}" y1="${sc.y}" x2="${tc.x}" y2="${tc.y}" stroke="${style.stroke}" stroke-width="1.5" stroke-opacity="${style.opacity}"${dashAttr} marker-end="url(#arrow)"/>`;
   }).join('');
 
   const nodeCircles = nodes.map((n, i) => {
@@ -219,16 +240,22 @@ function renderVisualGraph(nodes, edges) {
   }).join('');
 
   return `
-    <div class="graph-visual-wrap" style="overflow:auto;text-align:center;margin-bottom:12px;">
+    <div class="graph-visual-wrap" style="overflow:auto;text-align:center;margin-bottom:4px;">
       <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="max-width:100%;">
         <defs>
           <marker id="arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L6,3 z" fill="#60a5fa"/>
+            <path d="M0,0 L0,6 L6,3 z" fill="var(--text-muted,#64748b)"/>
           </marker>
         </defs>
         ${edgeLines}
         ${nodeCircles}
       </svg>
+    </div>
+    <div class="graph-legend">
+      <span class="interaction-source-badge interaction-explicit">Cible explicite</span>
+      <span class="interaction-source-badge interaction-fallback">Cible assignée</span>
+      <span class="interaction-source-badge interaction-inferred">Mention inférée</span>
+      <span class="interaction-source-badge interaction-unknown">Interaction non vérifiée</span>
     </div>
   `;
 }

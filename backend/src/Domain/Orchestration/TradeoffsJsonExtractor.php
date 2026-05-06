@@ -38,6 +38,39 @@ class TradeoffsJsonExtractor
         return null;
     }
 
+    /**
+     * Remove an outer `{ "tradeoffs": { ... } }` blob from prose (e.g. LLM used `json` / one backtick, or no closing ``` fence).
+     * Uses the **last** occurrence so an appendix at the end of "Recommended Action" wins.
+     *
+     * @return array{0: string, 1: ?array<string,mixed>} [cleanedText, innerTradeoffsOrNull]
+     */
+    public static function stripTradeoffsEnvelopeFromProse(string $text): array
+    {
+        $lastStart = null;
+        $p = 0;
+        while (preg_match('/\{\s*"tradeoffs"\s*:/s', $text, $m, PREG_OFFSET_CAPTURE, $p)) {
+            $lastStart = (int)$m[0][1];
+            $p = $lastStart + 1;
+        }
+        if ($lastStart === null) {
+            return [$text, null];
+        }
+        $fromBrace = substr($text, $lastStart);
+        $jsonStr = self::truncateBalancedJson($fromBrace);
+        $decoded = json_decode($jsonStr, true);
+        if (!is_array($decoded) || empty($decoded['tradeoffs']) || !is_array($decoded['tradeoffs'])) {
+            return [$text, null];
+        }
+        $inner = self::sanitizeShape($decoded['tradeoffs']);
+        $before = substr($text, 0, $lastStart);
+        $before = preg_replace('/[`]{1,3}\s*json\s*$/i', '', rtrim($before));
+        $before = preg_replace('/\bjson\s*$/i', '', rtrim($before));
+        $before = preg_replace('/```(?:json)?\s*$/i', '', rtrim($before));
+        $after = substr($text, $lastStart + strlen($jsonStr));
+        $cleaned = trim(preg_replace("/\n{3,}/", "\n\n", rtrim($before) . $after));
+        return [$cleaned, $inner];
+    }
+
     private static function decodeTradeoffsFromJsonString(string $jsonish): ?array
     {
         $d = json_decode($jsonish, true);

@@ -4,6 +4,7 @@ import * as htmlUtils from './utils/html.js';
 import * as markdownUtils from './utils/markdown.js';
 import * as dateUtils from './utils/date.js';
 import * as agentsUtils from './utils/agents.js';
+import * as intentPresetUtils from './utils/intentPresets.js';
 import * as messageLookup from './utils/messageLookup.js';
 import { renderSidebarShell } from './core/shell.js';
 
@@ -62,6 +63,7 @@ function bootstrapModuleArchitecture() {
       ...markdownUtils,
       ...dateUtils,
       ...agentsUtils,
+      ...intentPresetUtils,
       ...messageLookup,
     },
     router: {

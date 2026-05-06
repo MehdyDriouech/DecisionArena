@@ -101,7 +101,7 @@ function renderAdversarialCard(juryAdversarial) {
 
   return `
     <div class="adversarial-card" style="margin:16px 0;border:1px solid var(--border-color);border-radius:8px;overflow:hidden;">
-      <div class="adversarial-card-header" style="padding:12px 16px;background:var(--surface-2,#f8f9fa);border-bottom:1px solid var(--border-color);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div class="adversarial-card-header" style="padding:12px 16px;background:var(--surface-2,#f8f9fa);color:var(--text-on-light-surface,#0f172a);border-bottom:1px solid var(--border-color);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
         <span style="font-size:16px;">⚔️</span>
         <strong>${t('jury.adversarial.qualityTitle')}</strong>
         <span style="margin-left:auto;font-size:22px;font-weight:700;color:${scoreColor};">${score}<span style="font-size:13px;font-weight:400;color:var(--text-muted);">/100</span></span>
@@ -189,11 +189,11 @@ function renderAdversarialOptionsPanel() {
 
   return `
     <div class="collapsible-panel" data-ui="expert-only" style="margin:12px 0;border:1px solid var(--border-color);border-radius:8px;overflow:hidden;">
-      <div class="collapsible-panel-header" style="padding:10px 16px;background:var(--surface-2,#f8f9fa);cursor:pointer;display:flex;align-items:center;gap:8px;"
+      <div class="collapsible-panel-header" style="padding:10px 16px;background:var(--surface-2,#f8f9fa);color:var(--text-on-light-surface,#0f172a);cursor:pointer;display:flex;align-items:center;gap:8px;"
            data-action="toggle-panel-collapse" data-panel-key="jury-adversarial-options">
         <span>⚔️</span>
         <strong>${t('jury.adversarial.title')}</strong>
-        <span style="margin-left:auto;font-size:11px;color:var(--text-muted);">${t('jury.adversarial.desc')}</span>
+        <span style="margin-left:auto;font-size:11px;color:#475569;">${t('jury.adversarial.desc')}</span>
       </div>
       <div class="collapsible-panel-body" style="padding:14px 16px;">
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">
@@ -370,15 +370,21 @@ function renderJury() {
   return `
     <div class="full-height-view">
       <div class="dr-header">
-        <div class="dr-header-info">
-          <div class="dr-title">⚖️ ${escHtml(session.title || t('jury.title'))}</div>
-          <div class="dr-objective">${escHtml(session.initial_prompt || session.idea || '')}</div>
-          ${renderSessionPresetUsedBanner(session, escHtml, t)}
-          ${renderContextDocBadge()}
+        <div class="session-result-toolbar">
+          <div class="session-result-context">
+            <div class="dr-header-info">
+              <div class="dr-title">⚖️ ${escHtml(session.title || t('jury.title'))}</div>
+              <div class="dr-objective">${escHtml(session.initial_prompt || session.idea || '')}</div>
+              ${renderSessionPresetUsedBanner(session, escHtml, t)}
+              ${renderContextDocBadge()}
+            </div>
+          </div>
+          <div class="session-result-actions">
+            ${!state.juryRunning ? `<button class="btn btn-primary" data-action="run-jury">${t('jury.run')}</button>` : ''}
+            <div class="export-actions">${renderExportButtons(session.id)}</div>
+            <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
+          </div>
         </div>
-        ${!state.juryRunning ? `<button class="btn btn-primary" data-action="run-jury">${t('jury.run')}</button>` : ''}
-        <div class="export-actions">${renderExportButtons(session.id)}</div>
-        <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
       </div>
       ${renderContextDocPanel()}
 

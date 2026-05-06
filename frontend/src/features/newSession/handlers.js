@@ -2,26 +2,14 @@
 import { registerAction, registerChangeListener, registerInputListener, dispatchAction } from '../../core/events.js';
 import { API_BASE } from '../../services/apiClient.js';
 import { getAvailableProviders } from '../../core/providerRouting.js';
-
-const SIMPLE_INTENT_PRESETS = {
-  explore: {
-    label: 'Explorer',
-    mode: 'chat',
-    rounds: 1,
-  },
-  decide: {
-    label: 'Décider',
-    mode: 'quick-decision',
-    rounds: 2,
-  },
-  test: {
-    label: 'Tester',
-    mode: 'stress-test',
-    rounds: 3,
-  },
-};
-
-const SIMPLE_DEFAULT_AGENTS = ['pm', 'architect', 'ux-expert', 'critic'];
+import {
+  applyIntentPreset,
+  getAvailablePersonaIdsForMode,
+  resolveDefaultPresetPersonas,
+  resolvePresetPersonas,
+} from '../../utils/intentPresets.js';
+import { ANALYSIS_CATALOG, applyAnalysisFamily } from './analysisCatalog.js';
+import { applyProductPreset } from './productPresets.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -35,22 +23,79 @@ function getCtx() {
   };
 }
 
+function _starterLocksConfig(ns) {
+  return Boolean(
+    ns.selectedScenarioId
+    || (ns.selectedStarter && (ns.selectedStarter.type === 'template' || ns.selectedStarter.type === 'scenario')),
+  );
+}
+
+/** Aligne titre + idée avec le texte réellement envoyé comme objectif (prompt initial). */
+function _composeSessionObjectivePrompt(ns) {
+  const q = String(ns.title || '').trim();
+  const ctx = String(ns.idea || '').trim();
+  if (q && ctx) return `Question:\n${q}\n\nContext:\n${ctx}`;
+  if (ctx) return ctx;
+  if (q) return `Question:\n${q}`;
+  return '';
+}
+
+function _defaultRoundsForMode(mode) {
+  if (mode === 'quick-decision' || mode === 'chat') return 1;
+  return 3;
+}
+
+/** Réinitialise agents / tours pour le mode courant (sans template ou pack verrouillé). */
+function _applyCoherentDefaultsForMode(ns) {
+  const mode = ns.mode;
+  const available = getAvailablePersonaIdsForMode(mode);
+  const defaultAgents = resolveDefaultPresetPersonas(available);
+
+  ns.selectedStarter = null;
+  ns.selectedScenarioId = null;
+  ns.selectedTemplateId = null;
+  ns.facilitationFramework = null;
+
+  if (mode === 'confrontation') {
+    const stress = ANALYSIS_CATALOG.stress || {};
+    const blue = Array.isArray(stress.blueTeam) ? stress.blueTeam : ['pm', 'architect', 'po', 'ux-expert'];
+    const red = Array.isArray(stress.redTeam) ? stress.redTeam : ['analyst', 'critic'];
+    ns.blueTeam = [...blue];
+    ns.redTeam = [...red];
+    ns.selectedAgents = Array.from(new Set([...ns.blueTeam, ...ns.redTeam]));
+  } else {
+    ns.selectedAgents = defaultAgents;
+  }
+  ns.rounds = _defaultRoundsForMode(mode);
+}
+
 function resetNewSessionState() {
+  const expert = window.DecisionArena?.store?.state?.uiMode === 'expert';
   return {
-    title: '', idea: '', mode: 'chat', simpleIntent: 'decide', selectedAgents: [], rounds: 3,
+    title: '',
+    idea: '',
+    mode: expert ? 'chat' : 'stress-test',
+    productFamily: expert ? null : 'validate',
+    productPreset: null,
+    founderInterrogation: null,
+    simpleIntent: expert ? 'decide' : 'test',
+    selectedIntent: expert ? 'decide' : 'validate',
+    selectedAgents: [],
+    rounds: 3,
     language: 'fr',
     blueTeam: ['pm', 'architect', 'po', 'ux-expert'],
     redTeam: ['analyst', 'critic'],
     includeSynthesis: true,
     cfRounds: 3, cfStyle: 'sequential', cfReplyPolicy: 'all-agents-reply',
-    forceDisagreement: false,
+    forceDisagreement: expert ? false : true,
     ctxDocEnabled: false, ctxDocTab: 'manual', ctxDocTitle: '', ctxDocContent: '',
     ctxDocDraftSaved: false, ctxDocDraftSummary: null,
     devilAdvocateEnabled: false,
     devilAdvocateThreshold: 0.65,
     agentProviders: {},
-    fastDecisionEnabled: true,
+    fastDecisionEnabled: expert,
     facilitationFramework: null,
+    presetRationale: null,
     // LLM Assignment
     llmAssignmentMode: 'global',
     teamProviderAssignments: { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } },
@@ -65,44 +110,19 @@ function resetNewSessionState() {
 
 let _contextCheckTimer = null;
 
-function _availableSimpleAgents(state) {
-  const existing = new Set((state.personas || []).map((p) => p.id));
-  const preferred = SIMPLE_DEFAULT_AGENTS.filter((id) => existing.size === 0 || existing.has(id));
-  if (preferred.length > 0) return preferred;
-  return (state.personas || []).slice(0, 4).map((p) => p.id).filter(Boolean);
+function _availableSimpleAgents(mode) {
+  return resolveDefaultPresetPersonas(getAvailablePersonaIdsForMode(mode));
 }
 
-function _applySimpleIntentPreset(state, intent) {
-  const preset = SIMPLE_INTENT_PRESETS[intent];
-  if (!preset) return false;
-  state.newSession = {
-    ...state.newSession,
-    simpleIntent: intent,
-    mode: preset.mode,
-    rounds: preset.rounds,
-    fastDecisionEnabled: false,
-    selectedStarter: null,
-    selectedScenarioId: null,
-    selectedTemplateId: null,
-    selectedAgents: _availableSimpleAgents(state),
-    forceDisagreement: intent !== 'explore',
-  };
-  return true;
-}
-
-function _applySimpleLaunchDefaults(state, ns) {
-  const intent = SIMPLE_INTENT_PRESETS[ns.simpleIntent] ? ns.simpleIntent : 'decide';
-  const preset = SIMPLE_INTENT_PRESETS[intent];
-  ns.simpleIntent = intent;
-  ns.mode = preset.mode;
-  ns.rounds = preset.rounds;
-  ns.fastDecisionEnabled = false;
-  ns.llmAssignmentMode = 'global';
-  ns.agentProviders = {};
-  ns.teamProviderAssignments = { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } };
-  ns.selectedAgents = ns.selectedAgents?.length ? ns.selectedAgents : _availableSimpleAgents(state);
-  if (ns.mode === 'stress-test') ns.forceDisagreement = true;
-  if (ns.mode === 'quick-decision') ns.forceDisagreement = true;
+function _applySimpleLaunchDefaults(ns) {
+  if (ns.productPreset) {
+    applyProductPreset(ns.productPreset);
+    return;
+  }
+  const family = ns.productFamily && ANALYSIS_CATALOG[ns.productFamily]
+    ? ns.productFamily
+    : 'validate';
+  applyAnalysisFamily(family);
 }
 
 function _debouncedContextCheck(text, state) {
@@ -156,15 +176,40 @@ function registerNewSessionHandlers() {
     const intent = event?.target?.closest('[data-intent]')?.dataset?.intent || element?.dataset?.intent;
     if (!intent) return;
     const DA = window.DecisionArena;
-    _applySimpleIntentPreset(DA.store.state, intent);
+    applyIntentPreset(intent);
+    DA.store.state.newSession.founderInterrogation = null;
     DA.render?.();
+  });
+
+  registerAction('set-analysis-family', ({ event, element }) => {
+    const family = event?.target?.closest('[data-family]')?.dataset?.family || element?.dataset?.family;
+    if (!family || !ANALYSIS_CATALOG[family]) return;
+    applyAnalysisFamily(family);
+    window.DecisionArena.store.state.newSession.founderInterrogation = null;
+    window.DecisionArena.render?.();
+  });
+
+  registerAction('apply-product-preset', ({ event, element }) => {
+    const presetId = event?.target?.closest('[data-product-preset]')?.dataset?.productPreset
+      || element?.dataset?.productPreset;
+    if (!presetId) return;
+    applyProductPreset(presetId);
+    window.DecisionArena.render?.();
+  });
+
+  registerAction('toggle-founder-interrogation', () => {
+    const { state, render } = getCtx();
+    const fi = state.newSession.founderInterrogation;
+    if (!fi || typeof fi !== 'object') return;
+    fi.open = !fi.open;
+    render();
   });
 
   // Backward-compatible aliases for already-rendered templates.
   registerAction('select-session-intent', ({ event, element }) => {
     const intent = event?.target?.closest('[data-intent]')?.dataset?.intent || element?.dataset?.intent;
     if (!intent) return;
-    _applySimpleIntentPreset(window.DecisionArena.store.state, intent);
+    applyIntentPreset(intent);
     window.DecisionArena.render?.();
   });
 
@@ -172,10 +217,37 @@ function registerNewSessionHandlers() {
     const { state, navigate, render } = getCtx();
     const mode = element?.dataset?.mode;
     if (mode) {
+      const available = getAvailablePersonaIdsForMode(mode);
+      const defaultAgents = resolveDefaultPresetPersonas(available);
+      const setIfEmpty = (arr, fallback) => (Array.isArray(arr) && arr.length > 0 ? arr : fallback);
+
       state.newSession = {
         ...(state.newSession || {}),
         mode,
+        productFamily: null,
+        productPreset: null,
+        founderInterrogation: null,
+        selectedStarter: null,
+        selectedScenarioId: null,
+        selectedTemplateId: null,
+        // Ensure shortcuts are runnable (avoid "0 agent selected" dead-end)
+        selectedAgents: setIfEmpty(state.newSession?.selectedAgents, defaultAgents),
       };
+
+      if (mode === 'confrontation') {
+        const stress = ANALYSIS_CATALOG.stress || {};
+        const blue = Array.isArray(stress.blueTeam) ? stress.blueTeam : ['pm', 'architect', 'po', 'ux-expert'];
+        const red = Array.isArray(stress.redTeam) ? stress.redTeam : ['analyst', 'critic'];
+        state.newSession.blueTeam = setIfEmpty(state.newSession.blueTeam, blue);
+        state.newSession.redTeam = setIfEmpty(state.newSession.redTeam, red);
+        state.newSession.selectedAgents = Array.from(new Set([...(state.newSession.blueTeam || []), ...(state.newSession.redTeam || [])]));
+      }
+      if (mode === 'quick-decision') {
+        state.newSession.rounds = 1;
+      }
+    } else {
+      // Expert dashboard "Nouvelle session" should start clean (no leaked scenario/template/preset UI state).
+      state.newSession = resetNewSessionState();
     }
     navigate('new-session');
     render();
@@ -230,7 +302,7 @@ function registerNewSessionHandlers() {
 
   registerAction('launch-session', async () => {
     const { state, render, navigate, SessionService, ContextDocService, t } = getCtx();
-    const ns = state.newSession;
+    let ns = state.newSession;
 
     /** Variante (rerun) : session déjà créée côté API — ouvrir sans dupliquer */
     if (ns.forkDraftSessionId) {
@@ -260,9 +332,10 @@ function registerNewSessionHandlers() {
       || (ns.selectedStarter && (ns.selectedStarter.type === 'template' || ns.selectedStarter.type === 'scenario')),
     );
     if (isSimpleDisplay && !starterLocksConfig) {
-      _applySimpleLaunchDefaults(state, ns);
+      _applySimpleLaunchDefaults(ns);
+      ns = state.newSession;
     } else if (isSimpleDisplay && ns.selectedAgents.length === 0 && ns.mode !== 'confrontation') {
-      ns.selectedAgents = _availableSimpleAgents(state);
+      ns.selectedAgents = _availableSimpleAgents(ns.mode);
     }
 
     const isFastMode = ns.mode === 'decision-room' && ns.fastDecisionEnabled !== false;
@@ -292,21 +365,63 @@ function registerNewSessionHandlers() {
       state.followUpMessages = [];
       render();
 
+      const fastModeAgents = isFastMode
+        ? resolvePresetPersonas(['pm', 'architect', 'ux-expert', 'critic'], getAvailablePersonaIdsForMode('decision-room'))
+        : [];
       const allAgents = ns.mode === 'confrontation'
         ? [...new Set([...ns.blueTeam, ...ns.redTeam])]
-        : isFastMode ? ['pm', 'architect', 'ux-expert', 'critic']
+        : isFastMode ? fastModeAgents
         : ns.selectedAgents;
+
+      let initialPrompt = _composeSessionObjectivePrompt(ns);
+      if (ns.productPreset === 'founder-sprint') {
+        const fi = ns.founderInterrogation && typeof ns.founderInterrogation === 'object' ? ns.founderInterrogation : null;
+        const filled = fi ? [
+          fi.pain,
+          fi.icp,
+          fi.statusQuo,
+          fi.criticalAssumption,
+          fi.wedge,
+          fi.validationSignal,
+        ].some((v) => String(v || '').trim() !== '') : false;
+
+        if (filled) {
+          const lines = [];
+          lines.push('## Founder Interrogation Context');
+          const pushIf = (labelKey, val) => {
+            const v = String(val || '').trim();
+            if (!v) return;
+            lines.push(`${t(labelKey)}: ${v}`);
+          };
+          pushIf('founderInterrogation.q1.label', fi.pain);
+          pushIf('founderInterrogation.q2.label', fi.icp);
+          pushIf('founderInterrogation.q3.label', fi.statusQuo);
+          pushIf('founderInterrogation.q4.label', fi.criticalAssumption);
+          pushIf('founderInterrogation.q5.label', fi.wedge);
+          pushIf('founderInterrogation.q6.label', fi.validationSignal);
+          initialPrompt = `${initialPrompt}\n\n---\n\n${lines.join('\n')}`;
+        }
+
+        const overlay = t('productPreset.founderSprint.promptOverlay');
+        if (overlay && !String(overlay).startsWith('productPreset.')) {
+          initialPrompt = `${initialPrompt}\n\n---\n\n${overlay}`;
+        }
+      }
+      if (ns.productPreset === 'ceo-challenge') {
+        const overlay = t('productPreset.ceoChallenge.promptOverlay');
+        if (overlay && !String(overlay).startsWith('productPreset.')) {
+          initialPrompt = `${initialPrompt}\n\n---\n\n${overlay}`;
+        }
+      }
 
       const body = {
         title:           ns.title.trim(),
-        initial_prompt:  ns.idea.trim(),
+        initial_prompt:  initialPrompt,
         mode:            ns.mode,
         selected_agents: allAgents,
-        rounds: ns.mode === 'decision-room' ? ns.rounds
-              : ns.mode === 'quick-decision' ? (isSimpleDisplay ? ns.rounds : 1)
-              : ns.mode === 'stress-test'    ? ns.rounds
-              : ns.mode === 'jury'           ? ns.rounds
-              : undefined,
+        rounds: ns.mode === 'quick-decision'
+          ? 1
+          : (Number.isFinite(Number(ns.rounds)) ? Number(ns.rounds) : 2),
         language:              ns.language,
         cf_rounds:             ns.mode === 'confrontation' ? ns.cfRounds      : undefined,
         cf_interaction_style:  ns.mode === 'confrontation' ? ns.cfStyle       : undefined,
@@ -325,6 +440,9 @@ function registerNewSessionHandlers() {
         decision_dynamics_preset: ns.decisionDynamicsPreset || 'balanced',
         ...(ns.facilitationFramework || (ns.selectedStarter?.type === 'template' && ns.selectedStarter?.id === 'six-thinking-hats')
           ? { facilitation_framework: ns.facilitationFramework || 'six-thinking-hats' }
+          : {}),
+        ...(ns.selectedStarter?.type === 'template' && ns.selectedStarter?.id === 'pre-mortem'
+          ? { session_variant: 'premortem' }
           : {}),
         ...(isFastMode ? {
           rounds: 2, force_disagreement: 1,
@@ -456,7 +574,15 @@ function registerNewSessionHandlers() {
     const field = e.target.dataset.field;
     if (!field) return false;
     if (field === 'mode') {
-      state.newSession.mode = e.target.value;
+      const ns = state.newSession;
+      const locks = _starterLocksConfig(ns);
+      ns.mode = e.target.value;
+      ns.productFamily = null;
+      ns.productPreset = null;
+      ns.founderInterrogation = null;
+      if (!locks) {
+        _applyCoherentDefaultsForMode(ns);
+      }
       render();
     } else if (field === 'rounds') {
       state.newSession.rounds = parseInt(e.target.value, 10);
@@ -502,6 +628,15 @@ function registerNewSessionHandlers() {
 
   /* data-field input (title/idea/rounds slider in new-session) */
   registerInputListener((e) => {
+    const fiField = e.target.dataset.fiField;
+    if (fiField) {
+      const { state } = getCtx();
+      if (!state.newSession.founderInterrogation || typeof state.newSession.founderInterrogation !== 'object') {
+        state.newSession.founderInterrogation = { open: true };
+      }
+      state.newSession.founderInterrogation[fiField] = e.target.value;
+      return true;
+    }
     const field = e.target.dataset.field;
     if (!field) return false;
     const { state, render } = getCtx();
@@ -538,6 +673,9 @@ function registerNewSessionHandlers() {
 
 function _applyTemplate(state, template) {
   const ns = state.newSession;
+  ns.productFamily = null;
+  ns.productPreset = null;
+  ns.founderInterrogation = null;
   ns.mode             = template.mode || 'decision-room';
   ns.selectedAgents   = [...(template.selected_agents || [])];
   ns.rounds           = template.rounds || 2;
@@ -562,6 +700,9 @@ function _applyTemplate(state, template) {
 /** Apply a scenario pack's prefill to newSession state — does NOT create a session. */
 function _applyScenarioPack(state, pack) {
   const ns = state.newSession;
+  ns.productFamily = null;
+  ns.productPreset = null;
+  ns.founderInterrogation = null;
   ns.mode              = pack.recommended_mode || 'decision-room';
   ns.selectedAgents    = [...(pack.persona_ids || [])];
   ns.rounds            = pack.rounds || 2;

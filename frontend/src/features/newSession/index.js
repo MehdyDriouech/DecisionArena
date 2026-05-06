@@ -3,20 +3,7 @@
  */
 
 import { decisionDynamicsPresetOptionsHtml } from '../../utils/sessionDynamicsPresetUi.js';
-
-const FAST_DECISION_PRESET = {
-  mode: 'decision-room', rounds: 2,
-  agents: ['pm', 'architect', 'ux-expert', 'critic'],
-  devil_advocate_enabled: true, force_disagreement: true,
-  auto_retry_on_weak_debate: true, auto_block_low_quality: true,
-  debate_intensity: 'high', include_final_synthesis: true,
-};
-
-const SIMPLE_INTENT_PRESETS = {
-  explore: { mode: 'chat', rounds: 1 },
-  decide: { mode: 'quick-decision', rounds: 2 },
-  test: { mode: 'stress-test', rounds: 3 },
-};
+import { ANALYSIS_CATALOG, ANALYSIS_FAMILY_ORDER } from './analysisCatalog.js';
 
 function renderFastDecisionBadge() {
   const t = (key) => window.i18n?.t(key) ?? key;
@@ -192,6 +179,148 @@ function renderStarterCard(card, ns, { escHtml, t, agentIcon, isSimple }) {
     </div>`;
 }
 
+function renderAnalysisFamiliesSection(ns, { escHtml, t, isExpert }) {
+  const activeId = ns.productFamily || null;
+  const buttons = ANALYSIS_FAMILY_ORDER.map((id) => {
+    const fam = ANALYSIS_CATALOG[id];
+    const active = activeId === id;
+    const reco = (fam.recommendedFor || []).map((k) => t(k)).join(' · ');
+    return `
+      <button type="button" class="simple-intent-card analysis-family-card ${active ? 'active' : ''}"
+        data-action="set-analysis-family"
+        data-family="${escHtml(id)}"
+        aria-pressed="${active}">
+        <span class="simple-intent-title">${escHtml(t(`analysisFamily.${id}.label`))}</span>
+        <span class="simple-intent-desc">${escHtml(t(`analysisFamily.${id}.shortDescription`))}</span>
+        ${reco ? `<span class="analysis-family-reco" style="display:block;margin-top:6px;font-size:11px;color:var(--text-muted);">${escHtml(reco)}</span>` : ''}
+      </button>
+    `;
+  }).join('');
+  return `
+    <div class="section analysis-family-section" style="margin-bottom:${isExpert ? '20px' : '24px'};max-width:1100px;width:100%;">
+      <div class="section-header" style="margin-bottom:10px;">
+        <span class="section-label">${escHtml(t('analysisFamily.sectionTitle'))}</span>
+      </div>
+      ${isExpert ? `<p class="card-description" style="margin-bottom:12px;">${escHtml(t('analysisFamily.expertHint'))}</p>` : ''}
+      <div class="simple-intent-grid analysis-family-grid">
+        ${buttons}
+      </div>
+    </div>
+  `;
+}
+
+function renderValidateProductPresets(ns, { escHtml, t }) {
+  if (ns.productFamily !== 'validate') return '';
+  const founderActive = ns.productPreset === 'founder-sprint';
+  const badge = `<span class="badge badge-info" style="font-size:10px;text-transform:none;margin-left:8px;">${escHtml(t('highlight.recommended'))}</span>`;
+
+  const isExpertUi = window.DecisionArena?.store?.state?.uiMode === 'expert';
+  const fi = ns.founderInterrogation && typeof ns.founderInterrogation === 'object' ? ns.founderInterrogation : null;
+
+  const fiField = (key, labelKey, placeholderKey) => `
+    <div class="form-group" style="margin:0;">
+      <label for="fi-${escHtml(key)}" style="font-size:12px;">${escHtml(t(labelKey))}</label>
+      <textarea class="textarea" id="fi-${escHtml(key)}" data-fi-field="${escHtml(key)}"
+        placeholder="${escHtml(t(placeholderKey))}" style="min-height:64px;resize:vertical;">${escHtml((fi && fi[key]) || '')}</textarea>
+    </div>
+  `;
+
+  const fiBody = `
+    <div class="card-description" style="margin-bottom:12px;">${escHtml(t('founderInterrogation.subtitle'))}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">
+      ${fiField('pain', 'founderInterrogation.q1.label', 'founderInterrogation.q1.placeholder')}
+      ${fiField('icp', 'founderInterrogation.q2.label', 'founderInterrogation.q2.placeholder')}
+      ${fiField('statusQuo', 'founderInterrogation.q3.label', 'founderInterrogation.q3.placeholder')}
+      ${fiField('criticalAssumption', 'founderInterrogation.q4.label', 'founderInterrogation.q4.placeholder')}
+      ${fiField('wedge', 'founderInterrogation.q5.label', 'founderInterrogation.q5.placeholder')}
+      ${fiField('validationSignal', 'founderInterrogation.q6.label', 'founderInterrogation.q6.placeholder')}
+    </div>
+  `;
+
+  return `
+    <div class="section validate-product-presets" style="margin-bottom:22px;max-width:1100px;width:100%;">
+      <div class="section-header" style="margin-bottom:10px;display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
+        <span class="section-label">${escHtml(t('productPreset.validate.sectionTitle'))}</span>
+      </div>
+      <div class="starter-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;">
+        <div class="template-card starter-card validate-preset-card ${founderActive ? 'selected' : ''}"
+             data-action="apply-product-preset"
+             data-product-preset="founder-sprint"
+             role="button"
+             tabindex="0"
+             aria-pressed="${founderActive}">
+          <div class="template-card-header starter-card-header">
+            <span class="template-card-icon starter-icon">🚀</span>
+            <div style="flex:1;min-width:0;">
+              <div class="template-card-name starter-title">${escHtml(t('productPreset.founderSprint.title'))}${badge}</div>
+              <div class="template-card-desc starter-description" style="margin-top:6px;font-weight:600;">${escHtml(t('productPreset.founderSprint.subtitle'))}</div>
+              <div class="template-card-desc starter-description" style="margin-top:6px;">${escHtml(t('productPreset.founderSprint.description'))}</div>
+            </div>
+          </div>
+          <div class="template-card-meta starter-meta">
+            <span class="badge badge-default">${escHtml(t('mode.decisionRoom').replace(/^🏛️\s*/, ''))}</span>
+            <span class="starter-meta-rounds">${escHtml(t('template.rounds'))}: 3</span>
+            <span class="badge badge-warning" style="font-size:10px;">${escHtml(t('dynamicsPreset.critical'))}</span>
+          </div>
+          <div class="template-card-hint starter-use-hint" aria-hidden="true">${escHtml(t('starter.use'))}</div>
+        </div>
+      </div>
+      ${founderActive ? `
+        <div class="card" style="margin-top:14px;padding:16px;border:1px solid var(--border);background:var(--bg-secondary);">
+          ${isExpertUi ? `
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+              <div style="font-weight:700;">${escHtml(t('founderInterrogation.title'))}</div>
+              <button type="button" class="btn btn-secondary btn-sm" data-action="toggle-founder-interrogation" aria-expanded="${!!fi?.open}">
+                ${fi?.open ? escHtml(t('founderInterrogation.hide')) : escHtml(t('founderInterrogation.show'))}
+              </button>
+            </div>
+            ${fi?.open ? `<div style="margin-top:12px;">${fiBody}</div>` : `<div class="card-description" style="margin-top:10px;">${escHtml(t('founderInterrogation.expertHint'))}</div>`}
+          ` : `
+            <div style="font-weight:700;margin-bottom:10px;">${escHtml(t('founderInterrogation.title'))}</div>
+            ${fiBody}
+          `}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderDecideProductPresets(ns, { escHtml, t }) {
+  if (ns.productFamily !== 'decide') return '';
+  const active = ns.productPreset === 'ceo-challenge';
+  const badge = `<span class="badge badge-info" style="font-size:10px;text-transform:none;margin-left:8px;">${escHtml(t('highlight.recommended'))}</span>`;
+  return `
+    <div class="section decide-product-presets" style="margin-bottom:22px;max-width:1100px;width:100%;">
+      <div class="section-header" style="margin-bottom:10px;display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
+        <span class="section-label">${escHtml(t('productPreset.decide.sectionTitle'))}</span>
+      </div>
+      <div class="starter-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;">
+        <div class="template-card starter-card decide-preset-card ${active ? 'selected' : ''}"
+             data-action="apply-product-preset"
+             data-product-preset="ceo-challenge"
+             role="button"
+             tabindex="0"
+             aria-pressed="${active}">
+          <div class="template-card-header starter-card-header">
+            <span class="template-card-icon starter-icon">🧠</span>
+            <div style="flex:1;min-width:0;">
+              <div class="template-card-name starter-title">${escHtml(t('productPreset.ceoChallenge.title'))}${badge}</div>
+              <div class="template-card-desc starter-description" style="margin-top:6px;font-weight:600;">${escHtml(t('productPreset.ceoChallenge.subtitle'))}</div>
+              <div class="template-card-desc starter-description" style="margin-top:6px;">${escHtml(t('productPreset.ceoChallenge.description'))}</div>
+            </div>
+          </div>
+          <div class="template-card-meta starter-meta">
+            <span class="badge badge-default">${escHtml(t('mode.decisionRoom').replace(/^🏛️\s*/, ''))}</span>
+            <span class="starter-meta-rounds">${escHtml(t('template.rounds'))}: 3</span>
+            <span class="badge badge-warning" style="font-size:10px;">${escHtml(t('dynamicsPreset.critical'))}</span>
+          </div>
+          <div class="template-card-hint starter-use-hint" aria-hidden="true">${escHtml(t('starter.use'))}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderStarterModelsSection() {
   const { state, escHtml, t } = getCtx();
   const ns = state.newSession;
@@ -200,7 +329,7 @@ function renderStarterModelsSection() {
   const agentIcon = (id) => window.DecisionArena.utils.agentIcon(state.personas, id);
   const cards = buildStarterCards(state);
   const visibleCards = isSimple
-    ? cards.filter((c) => ['chat', 'quick-decision', 'stress-test', 'decision-room'].includes(c.mode || ''))
+    ? cards.filter((c) => ['chat', 'quick-decision', 'stress-test', 'decision-room', 'confrontation'].includes(c.mode || ''))
     : cards;
   const html = visibleCards.map((c) => renderStarterCard(c, ns, { escHtml, t, agentIcon, isSimple })).join('');
   const appliedHint = (ns.selectedStarter || ns.selectedScenarioId) ? `
@@ -388,20 +517,6 @@ function renderNewSession() {
 
   const isFastDecision = ns.mode === 'decision-room' && ns.fastDecisionEnabled !== false;
   if (isSimpleDisplay) {
-    const simpleIntent = ns.simpleIntent || (
-      (ns.mode === 'quick-decision' || ns.mode === 'decision-room')
-        ? 'decide'
-        : (ns.mode === 'stress-test' || ns.mode === 'confrontation')
-          ? 'test'
-          : 'explore'
-    );
-    const intentButton = (intent) => `
-      <button type="button" class="simple-intent-card ${simpleIntent === intent ? 'active' : ''}" data-action="set-simple-intent" data-intent="${intent}" aria-pressed="${simpleIntent === intent}">
-        <span class="simple-intent-title">${escHtml(t(`newSession.intent.${intent}`))}</span>
-        <span class="simple-intent-desc">${escHtml(t(`newSession.intent.${intent}.desc`))}</span>
-      </button>
-    `;
-
     return `
       <section class="simple-new-session">
         <header class="simple-new-session-header">
@@ -410,6 +525,12 @@ function renderNewSession() {
         </header>
 
         ${forkBannerHtml}
+
+        ${renderAnalysisFamiliesSection(ns, { escHtml, t, isExpert: false })}
+
+        ${renderDecideProductPresets(ns, { escHtml, t })}
+
+        ${renderValidateProductPresets(ns, { escHtml, t })}
 
         ${renderStarterModelsSection()}
 
@@ -424,13 +545,6 @@ function renderNewSession() {
               <label for="ns-idea-simple">${escHtml(t('newSession.context.label'))}</label>
               <textarea class="textarea" id="ns-idea-simple" placeholder="${escHtml(t('newSession.context.placeholder'))}" data-field="idea">${escHtml(ns.idea)}</textarea>
               <div id="context-hint-banner-container">${renderContextHintBanner(ns.contextHintQuestions || null)}</div>
-            </div>
-
-            <div class="form-group">
-              <label>${escHtml(t('newSession.intent.label'))}</label>
-              <div class="simple-intent-grid">
-                ${Object.keys(SIMPLE_INTENT_PRESETS).map(intentButton).join('')}
-              </div>
             </div>
 
             <div class="form-group">
@@ -460,6 +574,12 @@ function renderNewSession() {
     </div>
 
     ${forkBannerHtml}
+
+    ${renderAnalysisFamiliesSection(ns, { escHtml, t, isExpert: true })}
+
+    ${renderDecideProductPresets(ns, { escHtml, t })}
+
+    ${renderValidateProductPresets(ns, { escHtml, t })}
 
     ${renderStarterModelsSection()}
 
@@ -510,7 +630,7 @@ function renderNewSession() {
       <div ${isFastDecision ? 'style="display:none"' : ''}>
       ${agentSectionHtml}
 
-      ${['decision-room', 'stress-test', 'jury'].includes(ns.mode) ? `
+      ${['chat', 'decision-room', 'quick-decision', 'stress-test', 'jury'].includes(ns.mode) ? `
         <div class="form-group" id="rounds-field">
           <label for="ns-rounds">${ns.mode === 'jury' ? t('jury.rounds') : t('newSession.rounds')} (${ns.rounds}) ${tip(t('tooltip.rounds'))}</label>
           <input class="input" id="ns-rounds" type="range" min="1" max="5" value="${ns.rounds}" data-field="rounds" style="padding:6px 0;">
@@ -638,4 +758,4 @@ function registerNewSessionFeature() {
   window.DecisionArena.views['new-session'] = renderNewSession;
 }
 
-export { registerNewSessionFeature, renderNewSession, renderContextDocumentSection, FAST_DECISION_PRESET };
+export { registerNewSessionFeature, renderNewSession, renderContextDocumentSection };
