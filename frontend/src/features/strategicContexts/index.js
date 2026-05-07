@@ -2,6 +2,11 @@
  * Strategic Contexts feature – lightweight organization layer.
  */
 
+import {
+  renderPerspectiveSnapshot,
+  renderPerspectiveSegmentedControl,
+} from '../../utils/perspectiveSnapshotRenderer.js';
+
 function getCtx() {
   const arena = window.DecisionArena;
   const state = arena.store.state;
@@ -310,19 +315,44 @@ function renderStrategicContexts() {
 
     return `
       ${expressCard}
-      ${ui.memoryMdOpen ? `
-        <div class="card" style="padding:14px 16px;margin-bottom:14px;">
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
-            <div style="font-weight:800;">${escHtml(t('snapshots.memoryMdTitle'))}</div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      ${ui.memoryMdOpen ? (() => {
+        const activePerspective = String(ui.memoryMdPerspective || 'default');
+        const isExpertUi = (state.uiComplexity === 'expert');
+        const segmented = renderPerspectiveSegmentedControl({
+          action: 'set-context-memory-perspective',
+          selected: activePerspective,
+          escHtml,
+          t,
+          ariaLabel: t('snapshots.perspective'),
+        });
+        const md = String(ui.memoryMdContent || '');
+        const docHtml = md
+          ? renderPerspectiveSnapshot(md, {
+              escHtml,
+              t,
+              isExpert: isExpertUi,
+              perspective: activePerspective,
+              raw: isExpertUi ? md : '',
+            })
+          : `<div class="ps-empty">${escHtml(t('snapshots.loading'))}</div>`;
+        return `
+        <div class="card ps-panel" data-snapshot-panel="strategic-context" style="padding:14px 16px;margin-bottom:14px;">
+          <div class="ps-panel-toolbar">
+            <div class="ps-panel-toolbar-title">${escHtml(t('snapshots.memoryMdTitle'))}
+              ${ui.memoryMdLoading ? `<span class="ps-panel-status">${escHtml(t('snapshots.loading'))}</span>` : ''}
+            </div>
+            <div class="ps-panel-toolbar-actions">
+              ${segmented}
               <button type="button" class="btn btn-secondary btn-sm" data-action="copy-context-memory-md">${escHtml(t('snapshots.copy'))}</button>
               <button type="button" class="btn btn-secondary btn-sm" data-action="close-context-memory-md">${escHtml(t('snapshots.close'))}</button>
             </div>
           </div>
-          ${ui.memoryMdError ? `<div class="error-banner" style="margin-top:10px;">⚠️ ${escHtml(ui.memoryMdError)}</div>` : ''}
-          <pre style="margin:10px 0 0;white-space:pre-wrap;font-size:12px;line-height:1.5;color:var(--text-secondary);">${escHtml(String(ui.memoryMdContent || ''))}</pre>
+          ${ui.memoryMdError ? `<div class="error-banner" style="margin-top:6px;">⚠️ ${escHtml(ui.memoryMdError)}</div>` : ''}
+          <div class="ps-scroll" data-snapshot-scroll="strategic-context" tabindex="0">
+            ${docHtml}
+          </div>
         </div>
-      ` : ''}
+      `; })() : ''}
       <div class="card" style="padding:16px 18px;">
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;">
           <div style="flex:1;min-width:240px;">

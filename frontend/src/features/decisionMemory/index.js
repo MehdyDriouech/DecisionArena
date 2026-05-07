@@ -5,6 +5,10 @@
 import { deriveChains, deriveEventsForChain, summarizeChainChange, groupTimeline, toDateKey } from './timeline.js';
 import { getPlaybookById } from '../../core/playbooks.js';
 import { renderPendingConfirmation } from '../../ui/components.js';
+import {
+  renderPerspectiveSnapshot,
+  renderPerspectiveSegmentedControl,
+} from '../../utils/perspectiveSnapshotRenderer.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -230,20 +234,44 @@ function renderMemoryExplorerBar(state, { escHtml, formatDate, t }) {
         </div>
       </div>
       ${chainRow}
-      ${(ui.roomMemoryMdOpen && selRoom) ? `
-        <div class="card" style="margin-top:12px;padding:12px 12px;background:rgba(0,0,0,0.02);">
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
-            <div style="font-weight:800;">${escHtml(t('snapshots.memoryMdTitle'))}</div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      ${(ui.roomMemoryMdOpen && selRoom) ? (() => {
+        const activePerspective = String(ui.roomMemoryMdPerspective || 'default');
+        const isExpertUi = (state.uiComplexity === 'expert');
+        const segmented = renderPerspectiveSegmentedControl({
+          action: 'set-room-memory-perspective',
+          selected: activePerspective,
+          escHtml,
+          t,
+          ariaLabel: t('snapshots.perspective'),
+        });
+        const md = String(ui.roomMemoryMdContent || '');
+        const docHtml = md
+          ? renderPerspectiveSnapshot(md, {
+              escHtml,
+              t,
+              isExpert: isExpertUi,
+              perspective: activePerspective,
+              raw: isExpertUi ? md : '',
+            })
+          : `<div class="ps-empty">${escHtml(t('snapshots.loading'))}</div>`;
+        return `
+        <div class="card ps-panel" data-snapshot-panel="decision-room" style="margin-top:12px;padding:12px;">
+          <div class="ps-panel-toolbar">
+            <div class="ps-panel-toolbar-title">${escHtml(t('snapshots.memoryMdTitle'))}
+              ${ui.roomMemoryMdLoading ? `<span class="ps-panel-status">${escHtml(t('snapshots.loading'))}</span>` : ''}
+            </div>
+            <div class="ps-panel-toolbar-actions">
+              ${segmented}
               <button type="button" class="btn btn-secondary btn-sm" data-action="copy-room-memory-md">${escHtml(t('snapshots.copy'))}</button>
               <button type="button" class="btn btn-secondary btn-sm" data-action="close-room-memory-md">${escHtml(t('snapshots.close'))}</button>
             </div>
           </div>
-          ${ui.roomMemoryMdLoading ? `<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">${escHtml(t('snapshots.loading'))}</div>` : ''}
-          ${ui.roomMemoryMdError ? `<div class="error-banner" style="margin-top:10px;">⚠️ ${escHtml(ui.roomMemoryMdError)}</div>` : ''}
-          <pre style="margin:10px 0 0;white-space:pre-wrap;font-size:12px;line-height:1.5;color:var(--text-secondary);">${escHtml(String(ui.roomMemoryMdContent || ''))}</pre>
+          ${ui.roomMemoryMdError ? `<div class="error-banner" style="margin-top:6px;">⚠️ ${escHtml(ui.roomMemoryMdError)}</div>` : ''}
+          <div class="ps-scroll" data-snapshot-scroll="decision-room" tabindex="0">
+            ${docHtml}
+          </div>
         </div>
-      ` : ''}
+      `; })() : ''}
     </div>
   `;
 }

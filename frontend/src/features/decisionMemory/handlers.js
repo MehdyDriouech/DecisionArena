@@ -209,8 +209,12 @@ function registerDecisionMemoryHandlers() {
     state.decisionMemoryUi.roomMemoryMdError = '';
     window.DecisionArena.render?.();
     try {
+      const perspective = window.DecisionArena.services.MemorySnapshotService.normalizePerspective(
+        state.decisionMemoryUi.roomMemoryMdPerspective || 'default'
+      );
       const md = await window.DecisionArena.services.MemorySnapshotService.getRoomMarkdown(roomId, {
         expert: state.uiMode === 'expert' ? '1' : '',
+        perspective,
       });
       state.decisionMemoryUi.roomMemoryMdContent = md;
     } catch (err) {
@@ -228,10 +232,51 @@ function registerDecisionMemoryHandlers() {
     state.decisionMemoryUi = state.decisionMemoryUi || {};
     state.decisionMemoryUi.roomMemoryMdOpen = !state.decisionMemoryUi.roomMemoryMdOpen;
     state.decisionMemoryUi.roomMemoryMdError = '';
+    state.decisionMemoryUi.roomMemoryMdRoomId = roomId;
     if (state.decisionMemoryUi.roomMemoryMdOpen && !state.decisionMemoryUi.roomMemoryMdContent) {
       await loadRoomMemoryMd(state, roomId);
     }
     window.DecisionArena.render?.();
+  });
+
+  registerAction('set-room-memory-perspective', async ({ element }) => {
+    const state = window.DecisionArena.store.state;
+    state.decisionMemoryUi = state.decisionMemoryUi || {};
+    const requested = String(
+      element?.dataset?.perspective
+        ?? element?.value
+        ?? ''
+    ).trim();
+    const perspective = window.DecisionArena.services.MemorySnapshotService.normalizePerspective(requested) || 'default';
+    if (state.decisionMemoryUi.roomMemoryMdPerspective === perspective) return;
+
+    let preservedScroll = 0;
+    try {
+      const sc = document.querySelector('[data-snapshot-scroll="decision-room"]');
+      if (sc) preservedScroll = sc.scrollTop || 0;
+    } catch (_) { preservedScroll = 0; }
+
+    state.decisionMemoryUi.roomMemoryMdPerspective = perspective;
+    state.decisionMemoryUi.roomMemoryMdContent = '';
+    state.decisionMemoryUi.roomMemoryMdError = '';
+    if (state.decisionMemoryUi.roomMemoryMdOpen) {
+      const roomId = String(
+        state.decisionMemoryUi.roomMemoryMdRoomId
+        || state.decisionMemoryUi.navDecisionChainId
+        || ''
+      );
+      if (roomId) await loadRoomMemoryMd(state, roomId);
+    }
+    window.DecisionArena.render?.();
+
+    if (preservedScroll > 0) {
+      try {
+        requestAnimationFrame(() => {
+          const sc2 = document.querySelector('[data-snapshot-scroll="decision-room"]');
+          if (sc2) sc2.scrollTop = preservedScroll;
+        });
+      } catch (_) { /* noop */ }
+    }
   });
 
   registerAction('close-room-memory-md', () => {

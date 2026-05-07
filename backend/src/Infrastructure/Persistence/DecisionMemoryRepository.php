@@ -267,33 +267,30 @@ final class DecisionMemoryRepository
         $memoryId = trim($memoryId);
         if ($memoryId === '') return false;
         if (!$this->findById($memoryId)) return false;
-
+    
+        $this->pdo->beginTransaction();
+    
         try {
-            // Remove joins first (FK enforcement in SQLite).
             $this->pdo->prepare('DELETE FROM strategic_context_memories WHERE memory_id = ?')->execute([$memoryId]);
             $this->pdo->prepare('DELETE FROM decision_room_memories WHERE memory_id = ?')->execute([$memoryId]);
-
-            // Remove links & audit trail.
+    
             $this->pdo->prepare('DELETE FROM decision_memory_links WHERE from_memory_id = ? OR to_memory_id = ?')->execute([$memoryId, $memoryId]);
             $this->pdo->prepare('DELETE FROM decision_memory_audit_events WHERE memory_id = ?')->execute([$memoryId]);
-
-            // Optional semantic index.
             $this->pdo->prepare('DELETE FROM decision_memory_embeddings WHERE memory_id = ?')->execute([$memoryId]);
-
-            // Best-effort: if any memories pointed to this as superseded_by, detach.
+    
             $this->pdo->prepare('UPDATE decision_memories SET superseded_by = NULL WHERE superseded_by = ?')->execute([$memoryId]);
-
-            // Finally remove the memory row.
+    
+            // Supprimer explicitement l’index FTS.
+            $this->pdo->prepare('DELETE FROM decision_memories_fts WHERE memory_id = ?')->execute([$memoryId]);
+    
             $this->pdo->prepare('DELETE FROM decision_memories WHERE memory_id = ?')->execute([$memoryId]);
+    
+            $this->pdo->commit();
+            return true;
         } catch (\Throwable $e) {
-            // Let caller map to 500; returning false would be misleading (it existed).
+            $this->pdo->rollBack();
             throw $e;
-        } finally {
-            // Ensure search index is kept consistent (delete row if needed).
-            $this->refreshFtsForMemoryId($memoryId);
         }
-
-        return true;
     }
 
     /**

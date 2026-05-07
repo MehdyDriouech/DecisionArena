@@ -204,8 +204,12 @@ function registerStrategicContextsHandlers() {
     ui.memoryMdError = '';
     window.DecisionArena.render?.();
     try {
+      const perspective = window.DecisionArena.services.MemorySnapshotService.normalizePerspective(
+        ui.memoryMdPerspective || 'default'
+      );
       const md = await window.DecisionArena.services.MemorySnapshotService.getContextMarkdown(contextId, {
         expert: state.uiMode === 'expert' ? '1' : '',
+        perspective,
       });
       ui.memoryMdContent = md;
     } catch (err) {
@@ -223,10 +227,50 @@ function registerStrategicContextsHandlers() {
     const ui = state.strategicContextUi || (state.strategicContextUi = {});
     ui.memoryMdOpen = !ui.memoryMdOpen;
     ui.memoryMdError = '';
+    // Track the context the panel was opened for so a perspective change
+    // can refresh the preview without depending on selectedContextId, which
+    // can stay null when the user has not explicitly clicked a card yet.
+    ui.memoryMdContextId = cid;
     if (ui.memoryMdOpen && !ui.memoryMdContent) {
       await loadContextMemoryMd(state, cid);
     }
     window.DecisionArena.render?.();
+  });
+
+  registerAction('set-context-memory-perspective', async ({ element }) => {
+    const state = window.DecisionArena.store.state;
+    const ui = state.strategicContextUi || (state.strategicContextUi = {});
+    const requested = String(
+      element?.dataset?.perspective
+        ?? element?.value
+        ?? ''
+    ).trim();
+    const perspective = window.DecisionArena.services.MemorySnapshotService.normalizePerspective(requested) || 'default';
+    if (ui.memoryMdPerspective === perspective) return;
+
+    let preservedScroll = 0;
+    try {
+      const sc = document.querySelector('[data-snapshot-scroll="strategic-context"]');
+      if (sc) preservedScroll = sc.scrollTop || 0;
+    } catch (_) { preservedScroll = 0; }
+
+    ui.memoryMdPerspective = perspective;
+    ui.memoryMdContent = '';
+    ui.memoryMdError = '';
+    if (ui.memoryMdOpen) {
+      const cid = String(ui.memoryMdContextId || ui.selectedContextId || '');
+      if (cid) await loadContextMemoryMd(state, cid);
+    }
+    window.DecisionArena.render?.();
+
+    if (preservedScroll > 0) {
+      try {
+        requestAnimationFrame(() => {
+          const sc2 = document.querySelector('[data-snapshot-scroll="strategic-context"]');
+          if (sc2) sc2.scrollTop = preservedScroll;
+        });
+      } catch (_) { /* noop */ }
+    }
   });
 
   registerAction('close-context-memory-md', () => {
