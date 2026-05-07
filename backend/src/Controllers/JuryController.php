@@ -6,6 +6,8 @@ use Http\Request;
 use Http\Response;
 use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\ContextDocumentRepository;
+use Infrastructure\Persistence\DecisionMemoryRepository;
+use Domain\DecisionMemory\DecisionMemoryContextBuilder;
 use Domain\Orchestration\JuryRunner;
 use Domain\Orchestration\PromptBuilder;
 use Domain\Orchestration\StructuredRunResult;
@@ -13,10 +15,12 @@ use Domain\Orchestration\StructuredRunResult;
 class JuryController {
     private SessionRepository $sessionRepo;
     private JuryRunner        $runner;
+    private DecisionMemoryRepository $memoryRepo;
 
     public function __construct() {
         $this->sessionRepo = new SessionRepository();
         $this->runner      = new JuryRunner();
+        $this->memoryRepo  = new DecisionMemoryRepository();
     }
 
     public function run(Request $req): array {
@@ -39,14 +43,29 @@ class JuryController {
         $forceDisagreement = (bool)($data['force_disagreement'] ?? true);
         $threshold         = ReliabilityConfig::normalizeThreshold($data['decision_threshold'] ?? $session['decision_threshold'] ?? null);
         $language = $session['language'] ?? 'en';
-        $contextDoc = null;
-        try {
-            $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt(
-                (new ContextDocumentRepository())->findBySession($sessionId)
-            );
-        } catch (\Throwable $e) {
-            $contextDoc = null;
+
+        // Controlled Decision Memory reuse (manual, compact, auditable)
+        $selectedMemoryIds = json_decode((string)($session['selected_memory_ids'] ?? '[]'), true);
+        $selectedMemoryIds = is_array($selectedMemoryIds) ? $selectedMemoryIds : [];
+        $reuse = $this->memoryRepo->compactReusableForIds(array_map('strval', $selectedMemoryIds));
+        $injectInfo = null;
+        $rawDoc = (new ContextDocumentRepository())->findBySession($sessionId);
+        if (!empty($reuse['allowed'])) {
+            $built = DecisionMemoryContextBuilder::buildInjectionBlock($reuse['allowed'], (string)$language);
+            $injectInfo = $built;
+            if (!is_array($rawDoc)) {
+                $rawDoc = [
+                    'id' => 'memory-only',
+                    'session_id' => $sessionId,
+                    'title' => 'Memory context',
+                    'source_type' => 'memory',
+                    'content' => '',
+                    'character_count' => 0,
+                ];
+            }
+            $rawDoc['content'] = $built['block'] . "\n\n" . (string)($rawDoc['content'] ?? '');
         }
+        $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt($rawDoc);
 
         // Adversarial jury configuration
         $adversarialCfg = array_filter([
@@ -84,6 +103,25 @@ class JuryController {
             $session['decision_dynamics_preset'] ?? null
         );
 
+        $memoryReuse = [
+            'reuse_mode' => $injectInfo ? 'manual' : null,
+            'selected_memory_ids' => array_values(array_map('strval', $selectedMemoryIds)),
+            'injected_memory_ids' => $injectInfo ? (array)($injectInfo['injected_ids'] ?? []) : [],
+            'blocked' => (array)($reuse['blocked'] ?? []),
+            'truncated' => $injectInfo ? (bool)($injectInfo['truncated'] ?? false) : false,
+            'injected_chars' => $injectInfo ? (int)($injectInfo['chars'] ?? 0) : 0,
+        ];
+        $result['memory_reuse'] = $memoryReuse;
+        if ($injectInfo) {
+            try {
+                $this->sessionRepo->update($sessionId, [
+                    'injected_memory_context' => (string)($injectInfo['block'] ?? ''),
+                    'memory_reuse_mode' => 'manual',
+                    'memory_used_at' => date('c'),
+                ]);
+            } catch (\Throwable $e) {}
+        }
+
         $this->sessionRepo->update($sessionId, [
             'status' => 'completed',
             'context_quality_score' => (float)($result['context_quality']['score'] ?? 0.0),
@@ -96,6 +134,9 @@ class JuryController {
             ),
             'decision_brief' => json_encode($result['decision_brief'] ?? null, JSON_UNESCAPED_UNICODE),
         ]);
+
+        // Decision Memory v1 — persist only if memory-safe.
+        try { $this->memoryRepo->persistIfSafe($result, $sessionId); } catch (\Throwable $e) {}
 
         $dynamicsRepo = new \Infrastructure\Persistence\PersonaDecisionDynamicsRepository();
         $out = array_merge(['session_id' => $sessionId], $result);

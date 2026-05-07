@@ -3,7 +3,12 @@
  */
 
 import { decisionDynamicsPresetOptionsHtml } from '../../utils/sessionDynamicsPresetUi.js';
-import { ANALYSIS_CATALOG, ANALYSIS_FAMILY_ORDER } from './analysisCatalog.js';
+import { getPlaybookById, getPlaybookIntentGroups, resolvePlaybookForNewSession } from '../../core/playbooks.js';
+import {
+  renderPlaybookCard,
+  renderPlaybookDecisionGuide,
+  renderPlaybookOutputContract,
+} from '../../ui/components.js';
 
 function renderFastDecisionBadge() {
   const t = (key) => window.i18n?.t(key) ?? key;
@@ -179,44 +184,80 @@ function renderStarterCard(card, ns, { escHtml, t, agentIcon, isSimple }) {
     </div>`;
 }
 
-function renderAnalysisFamiliesSection(ns, { escHtml, t, isExpert }) {
-  const activeId = ns.productFamily || null;
-  const buttons = ANALYSIS_FAMILY_ORDER.map((id) => {
-    const fam = ANALYSIS_CATALOG[id];
-    const active = activeId === id;
-    const reco = (fam.recommendedFor || []).map((k) => t(k)).join(' · ');
-    return `
-      <button type="button" class="simple-intent-card analysis-family-card ${active ? 'active' : ''}"
-        data-action="set-analysis-family"
-        data-family="${escHtml(id)}"
-        aria-pressed="${active}">
-        <span class="simple-intent-title">${escHtml(t(`analysisFamily.${id}.label`))}</span>
-        <span class="simple-intent-desc">${escHtml(t(`analysisFamily.${id}.shortDescription`))}</span>
-        ${reco ? `<span class="analysis-family-reco" style="display:block;margin-top:6px;font-size:11px;color:var(--text-muted);">${escHtml(reco)}</span>` : ''}
-      </button>
-    `;
-  }).join('');
-  return `
-    <div class="section analysis-family-section" style="margin-bottom:${isExpert ? '20px' : '24px'};max-width:1100px;width:100%;">
-      <div class="section-header" style="margin-bottom:10px;">
-        <span class="section-label">${escHtml(t('analysisFamily.sectionTitle'))}</span>
+function renderPlaybookSelectionSection(ns, { escHtml }) {
+  const lang = window.i18n?.getLanguage?.() || ns.language || 'fr';
+  const current = resolvePlaybookForNewSession(ns, lang);
+  const groups = getPlaybookIntentGroups(lang).map((group) => `
+    <section class="playbook-intent-group">
+      <div class="playbook-intent-group-head">
+        <div class="playbook-intent-label">${escHtml(group.label)}</div>
+        <div class="playbook-intent-question">${escHtml(group.question)}</div>
+        <div class="playbook-intent-description">${escHtml(group.description)}</div>
       </div>
-      ${isExpert ? `<p class="card-description" style="margin-bottom:12px;">${escHtml(t('analysisFamily.expertHint'))}</p>` : ''}
-      <div class="simple-intent-grid analysis-family-grid">
-        ${buttons}
+      <div class="playbook-intent-cards">
+        ${group.playbooks.map((playbook) => renderPlaybookCard(playbook, {
+          escHtml,
+          active: current?.id === playbook.id,
+          language: lang,
+          compact: true,
+        })).join('')}
+      </div>
+    </section>
+  `).join('');
+
+  return `
+    <div class="section playbook-selection-section" style="margin-bottom:22px;max-width:1100px;width:100%;">
+      <div class="section-header" style="margin-bottom:10px;">
+        <span class="section-label">${escHtml(lang === 'en' ? 'Choose by decision intent' : 'Choisir par intention de decision')}</span>
+      </div>
+      <p class="card-description" style="margin-bottom:12px;">${escHtml(lang === 'en'
+        ? 'Start from the decision you need, then pick the playbook that produces the right outcome.'
+        : 'Partez de la decision a prendre, puis choisissez le playbook qui produit le bon outcome.')}</p>
+      <div class="playbook-intent-groups">
+        ${groups}
       </div>
     </div>
   `;
 }
 
-function renderValidateProductPresets(ns, { escHtml, t }) {
-  if (ns.productFamily !== 'validate') return '';
-  const founderActive = ns.productPreset === 'founder-sprint';
-  const badge = `<span class="badge badge-info" style="font-size:10px;text-transform:none;margin-left:8px;">${escHtml(t('highlight.recommended'))}</span>`;
+function renderSelectedPlaybookBlocks(ns, { escHtml }) {
+  const lang = window.i18n?.getLanguage?.() || ns.language || 'fr';
+  const playbook = resolvePlaybookForNewSession(ns, lang);
+  if (!playbook) return '';
+  const outputs = Array.isArray(playbook.output_contract) ? playbook.output_contract : [];
+  const outputsPreview = outputs.slice(0, 4);
+  const youWillGetLabel = lang === 'en' ? 'You will get' : 'Vous allez obtenir';
+  const whyLabel = lang === 'en' ? 'Why this playbook?' : 'Pourquoi ce playbook ?';
+  const whyHint = lang === 'en'
+    ? 'Details, decision guide, and full output contract.'
+    : 'Détails, guide de décision, et contrat de sortie complet.';
+  return `
+    <div class="card" style="padding:14px 16px;">
+      <div style="font-weight:800;font-size:13px;color:var(--text-primary);margin-bottom:8px;">${escHtml(youWillGetLabel)}</div>
+      ${outputsPreview.length ? `
+        <ul style="margin:0;padding-left:18px;color:var(--text-secondary);font-size:12px;line-height:1.5;">
+          ${outputsPreview.map((x) => `<li style="margin:0 0 6px;">${escHtml(x)}</li>`).join('')}
+        </ul>
+      ` : `<div style="font-size:12px;color:var(--text-muted);">${escHtml(lang === 'en' ? 'Structured decision outcome.' : 'Un outcome décisionnel structuré.')}</div>`}
+    </div>
 
+    <details class="ns-collapsible" data-ui="expert-only" style="margin-top:12px;">
+      <summary class="ns-collapsible-summary">
+        <span>${escHtml(whyLabel)}</span>
+        <span class="ns-collapsible-hint">${escHtml(whyHint)}</span>
+      </summary>
+      <div class="ns-collapsible-body">
+        ${renderPlaybookDecisionGuide(playbook, { escHtml, language: lang, uiMode: window.DecisionArena?.store?.state?.uiMode })}
+        ${renderPlaybookOutputContract(playbook, { escHtml, language: lang })}
+      </div>
+    </details>
+  `;
+}
+
+function renderFounderInterrogationPanel(ns, { escHtml, t }) {
+  if (ns.productPreset !== 'founder-sprint') return '';
   const isExpertUi = window.DecisionArena?.store?.state?.uiMode === 'expert';
   const fi = ns.founderInterrogation && typeof ns.founderInterrogation === 'object' ? ns.founderInterrogation : null;
-
   const fiField = (key, labelKey, placeholderKey) => `
     <div class="form-group" style="margin:0;">
       <label for="fi-${escHtml(key)}" style="font-size:12px;">${escHtml(t(labelKey))}</label>
@@ -224,7 +265,6 @@ function renderValidateProductPresets(ns, { escHtml, t }) {
         placeholder="${escHtml(t(placeholderKey))}" style="min-height:64px;resize:vertical;">${escHtml((fi && fi[key]) || '')}</textarea>
     </div>
   `;
-
   const fiBody = `
     <div class="card-description" style="margin-bottom:12px;">${escHtml(t('founderInterrogation.subtitle'))}</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;">
@@ -236,87 +276,20 @@ function renderValidateProductPresets(ns, { escHtml, t }) {
       ${fiField('validationSignal', 'founderInterrogation.q6.label', 'founderInterrogation.q6.placeholder')}
     </div>
   `;
-
   return `
-    <div class="section validate-product-presets" style="margin-bottom:22px;max-width:1100px;width:100%;">
-      <div class="section-header" style="margin-bottom:10px;display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
-        <span class="section-label">${escHtml(t('productPreset.validate.sectionTitle'))}</span>
-      </div>
-      <div class="starter-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;">
-        <div class="template-card starter-card validate-preset-card ${founderActive ? 'selected' : ''}"
-             data-action="apply-product-preset"
-             data-product-preset="founder-sprint"
-             role="button"
-             tabindex="0"
-             aria-pressed="${founderActive}">
-          <div class="template-card-header starter-card-header">
-            <span class="template-card-icon starter-icon">🚀</span>
-            <div style="flex:1;min-width:0;">
-              <div class="template-card-name starter-title">${escHtml(t('productPreset.founderSprint.title'))}${badge}</div>
-              <div class="template-card-desc starter-description" style="margin-top:6px;font-weight:600;">${escHtml(t('productPreset.founderSprint.subtitle'))}</div>
-              <div class="template-card-desc starter-description" style="margin-top:6px;">${escHtml(t('productPreset.founderSprint.description'))}</div>
-            </div>
-          </div>
-          <div class="template-card-meta starter-meta">
-            <span class="badge badge-default">${escHtml(t('mode.decisionRoom').replace(/^🏛️\s*/, ''))}</span>
-            <span class="starter-meta-rounds">${escHtml(t('template.rounds'))}: 3</span>
-            <span class="badge badge-warning" style="font-size:10px;">${escHtml(t('dynamicsPreset.critical'))}</span>
-          </div>
-          <div class="template-card-hint starter-use-hint" aria-hidden="true">${escHtml(t('starter.use'))}</div>
+    <div class="card" style="max-width:1100px;width:100%;margin:0 0 18px;padding:16px;border:1px solid var(--border);background:var(--bg-secondary);">
+      ${isExpertUi ? `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+          <div style="font-weight:700;">${escHtml(t('founderInterrogation.title'))}</div>
+          <button type="button" class="btn btn-secondary btn-sm" data-action="toggle-founder-interrogation" aria-expanded="${!!fi?.open}">
+            ${fi?.open ? escHtml(t('founderInterrogation.hide')) : escHtml(t('founderInterrogation.show'))}
+          </button>
         </div>
-      </div>
-      ${founderActive ? `
-        <div class="card" style="margin-top:14px;padding:16px;border:1px solid var(--border);background:var(--bg-secondary);">
-          ${isExpertUi ? `
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-              <div style="font-weight:700;">${escHtml(t('founderInterrogation.title'))}</div>
-              <button type="button" class="btn btn-secondary btn-sm" data-action="toggle-founder-interrogation" aria-expanded="${!!fi?.open}">
-                ${fi?.open ? escHtml(t('founderInterrogation.hide')) : escHtml(t('founderInterrogation.show'))}
-              </button>
-            </div>
-            ${fi?.open ? `<div style="margin-top:12px;">${fiBody}</div>` : `<div class="card-description" style="margin-top:10px;">${escHtml(t('founderInterrogation.expertHint'))}</div>`}
-          ` : `
-            <div style="font-weight:700;margin-bottom:10px;">${escHtml(t('founderInterrogation.title'))}</div>
-            ${fiBody}
-          `}
-        </div>
-      ` : ''}
-    </div>
-  `;
-}
-
-function renderDecideProductPresets(ns, { escHtml, t }) {
-  if (ns.productFamily !== 'decide') return '';
-  const active = ns.productPreset === 'ceo-challenge';
-  const badge = `<span class="badge badge-info" style="font-size:10px;text-transform:none;margin-left:8px;">${escHtml(t('highlight.recommended'))}</span>`;
-  return `
-    <div class="section decide-product-presets" style="margin-bottom:22px;max-width:1100px;width:100%;">
-      <div class="section-header" style="margin-bottom:10px;display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
-        <span class="section-label">${escHtml(t('productPreset.decide.sectionTitle'))}</span>
-      </div>
-      <div class="starter-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;">
-        <div class="template-card starter-card decide-preset-card ${active ? 'selected' : ''}"
-             data-action="apply-product-preset"
-             data-product-preset="ceo-challenge"
-             role="button"
-             tabindex="0"
-             aria-pressed="${active}">
-          <div class="template-card-header starter-card-header">
-            <span class="template-card-icon starter-icon">🧠</span>
-            <div style="flex:1;min-width:0;">
-              <div class="template-card-name starter-title">${escHtml(t('productPreset.ceoChallenge.title'))}${badge}</div>
-              <div class="template-card-desc starter-description" style="margin-top:6px;font-weight:600;">${escHtml(t('productPreset.ceoChallenge.subtitle'))}</div>
-              <div class="template-card-desc starter-description" style="margin-top:6px;">${escHtml(t('productPreset.ceoChallenge.description'))}</div>
-            </div>
-          </div>
-          <div class="template-card-meta starter-meta">
-            <span class="badge badge-default">${escHtml(t('mode.decisionRoom').replace(/^🏛️\s*/, ''))}</span>
-            <span class="starter-meta-rounds">${escHtml(t('template.rounds'))}: 3</span>
-            <span class="badge badge-warning" style="font-size:10px;">${escHtml(t('dynamicsPreset.critical'))}</span>
-          </div>
-          <div class="template-card-hint starter-use-hint" aria-hidden="true">${escHtml(t('starter.use'))}</div>
-        </div>
-      </div>
+        ${fi?.open ? `<div style="margin-top:12px;">${fiBody}</div>` : `<div class="card-description" style="margin-top:10px;">${escHtml(t('founderInterrogation.expertHint'))}</div>`}
+      ` : `
+        <div style="font-weight:700;margin-bottom:10px;">${escHtml(t('founderInterrogation.title'))}</div>
+        ${fiBody}
+      `}
     </div>
   `;
 }
@@ -324,8 +297,7 @@ function renderDecideProductPresets(ns, { escHtml, t }) {
 function renderStarterModelsSection() {
   const { state, escHtml, t } = getCtx();
   const ns = state.newSession;
-  const isSimple = state.uiMode !== 'expert';
-  const collapsed = !isSimple && !!ns.starterModelsCollapsed;
+  const isSimple = state.uiMode === 'basic';
   const agentIcon = (id) => window.DecisionArena.utils.agentIcon(state.personas, id);
   const cards = buildStarterCards(state);
   const visibleCards = isSimple
@@ -341,23 +313,18 @@ function renderStarterModelsSection() {
       </div>
     ` : '';
   return `
-    <div class="section starter-models-section" style="margin-bottom:24px;max-width:1100px;width:100%;">
-      <div class="starter-section-head">
-        <div class="starter-section-head-text">
-          <div class="section-header" style="margin-bottom:4px;">
-            <span class="section-label">${t('starter.section.title')}</span>
-          </div>
-          ${collapsed ? '' : `<div class="card-description starter-section-subtitle">${t('starter.section.subtitle')}</div>`}
+    <details class="ns-collapsible starter-models-section" style="margin-bottom:18px;max-width:1100px;width:100%;">
+      <summary class="ns-collapsible-summary">
+        <span>${t('starter.section.title')}</span>
+        <span class="ns-collapsible-hint">${t('starter.section.subtitle')}</span>
+      </summary>
+      <div class="ns-collapsible-body">
+        <div class="starter-models-body">
+          <div class="starter-grid">${html}</div>
         </div>
-        ${isSimple ? '' : `
-          <button type="button" class="btn btn-secondary btn-sm starter-toggle-models-btn" data-action="toggle-starter-models" aria-expanded="${!collapsed}">
-            ${collapsed ? t('starter.toggle.show') : t('starter.toggle.hide')}
-          </button>
-        `}
+        ${appliedHint}
       </div>
-      ${collapsed ? '' : `<div class="starter-models-body"><div class="starter-grid">${html}</div></div>`}
-      ${appliedHint}
-    </div>
+    </details>
   `;
 }
 
@@ -429,11 +396,160 @@ function renderContextDocumentSection() {
   `;
 }
 
+function renderDecisionMemoryReuseSection(ns, { state, escHtml, t }) {
+  const mp = ns.memoryPicker || { open: false, loading: false, error: null, filters: {}, memories: null, compactPreview: null };
+  const selected = Array.isArray(ns.selectedMemoryIds) ? ns.selectedMemoryIds : [];
+  const preview = mp.compactPreview || null;
+  const allowed = Array.isArray(preview?.allowed) ? preview.allowed : [];
+  const blocked = Array.isArray(preview?.blocked) ? preview.blocked : [];
+  const isExpert = state.uiMode === 'expert';
+
+  const blockedById = (() => {
+    const m = new Map();
+    blocked.forEach((b) => {
+      if (b && b.memory_id) m.set(String(b.memory_id), b);
+    });
+    return m;
+  })();
+
+  const warning = (() => {
+    const weak = allowed.some((m) => String(m.confidence || '') === 'weak');
+    const hasRisks = allowed.some((m) => Array.isArray(m.unresolved_risks) && m.unresolved_risks.length > 0);
+    const hasStaleBlocked = blocked.some((b) => String(b.reason || '') === 'stale_requires_confirmation');
+    if (!weak && !hasRisks && !hasStaleBlocked) return '';
+    return `<div class="ctx-doc-warning" style="margin-top:10px;">
+      ⚠️ ${escHtml(hasStaleBlocked ? t('memoryReuse.warningStale') : t('memoryReuse.warningWeak'))}
+    </div>`;
+  })();
+
+  const staleConfirmCta = (() => {
+    const hasStaleBlocked = blocked.some((b) => String(b.reason || '') === 'stale_requires_confirmation');
+    if (!hasStaleBlocked) return '';
+    return `
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <span class="badge badge-warning">${escHtml(t('memoryReuse.staleNeedsConfirm'))}</span>
+        <button type="button" class="btn btn-secondary btn-sm" data-action="confirm-allow-stale-memories">
+          ${escHtml(t('memoryReuse.allowStale'))}
+        </button>
+      </div>
+    `;
+  })();
+
+  const expertOverrideToggle = isExpert ? `
+    <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <label style="display:flex;gap:8px;align-items:center;cursor:pointer;font-size:12px;color:var(--text-secondary);">
+        <input type="checkbox" ${mp.expertOverride ? 'checked' : ''} data-action="toggle-expert-memory-override" style="accent-color:var(--accent);">
+        ${escHtml(t('memoryReuse.expertOverride'))}
+      </label>
+    </div>
+  ` : '';
+
+  const filters = mp.filters || {};
+  const filterRow = (key, label, placeholder = '') => `
+    <div class="form-group" style="margin:0;">
+      <label style="font-size:12px;">${escHtml(label)}</label>
+      <input class="input" type="text" value="${escHtml(filters[key] || '')}" placeholder="${escHtml(placeholder)}"
+        data-action="set-memory-filter" data-filter-key="${escHtml(key)}" style="padding:6px 8px;font-size:12px;">
+    </div>`;
+
+  const list = Array.isArray(mp.memories) ? mp.memories : [];
+  const listHtml = list.length === 0
+    ? `<div style="font-size:12px;color:var(--text-muted);">${escHtml(t('memoryReuse.emptySearch'))}</div>`
+    : list.slice(0, 80).map((m) => {
+      const id = String(m.memory_id || '');
+      const checked = selected.includes(id) ? 'checked' : '';
+      const confirmed = m.user_confirmed === 1 || m.user_confirmed === true;
+      const canReuse = confirmed && String(m.contract_version || '') === 'decision_outcome.v1' && String(m.taxonomy_version || '') === 'taxonomy.v1';
+      const badge = canReuse ? `<span class="badge badge-success">${escHtml(t('memoryReuse.reusable'))}</span>` : `<span class="badge badge-warning">${escHtml(t('memoryReuse.notReusable'))}</span>`;
+      const decay = m.decay && typeof m.decay === 'object' ? m.decay : null;
+      const staleness = decay ? String(decay.staleness_level || '') : '';
+      const stateBadge = decay ? String(decay.memory_state || '') : String(m.memory_state || 'active');
+      const staleBadge = staleness ? `<span class="badge ${staleness === 'stale' ? 'badge-danger' : staleness === 'aging' ? 'badge-warning' : 'badge-muted'}">${escHtml(staleness)}</span>` : '';
+      const lifecycleBadge = stateBadge ? `<span class="badge ${stateBadge === 'invalidated' ? 'badge-danger' : stateBadge === 'archived' ? 'badge-muted' : stateBadge === 'superseded' ? 'badge-warning' : 'badge-success'}">${escHtml(stateBadge)}</span>` : '';
+      const blockedInfo = blockedById.get(id);
+      const disablePick = !isExpert && blockedInfo && ['invalidated', 'archived'].includes(String(blockedInfo.reason || ''));
+      return `
+        <label style="display:flex;gap:10px;align-items:flex-start;padding:10px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;cursor:pointer;background:var(--bg-secondary);">
+          <input type="checkbox" ${checked} ${disablePick ? 'disabled' : ''} data-action="toggle-select-memory-for-new-session" data-memory-id="${escHtml(id)}" style="margin-top:3px;accent-color:var(--accent);">
+          <div style="flex:1;min-width:0;">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <span class="badge badge-muted">#${escHtml(id.slice(0, 8))}</span>
+              <span class="badge badge-info">${escHtml(String(m.playbook_id || ''))}</span>
+              <span class="badge badge-muted">${escHtml(String(m.decision_status || ''))}</span>
+              <span class="badge badge-muted">${escHtml(String(m.confidence || ''))}</span>
+              ${lifecycleBadge}
+              ${staleBadge}
+              ${badge}
+            </div>
+            <div style="margin-top:6px;font-size:12px;color:var(--text-secondary);line-height:1.45;">
+              ${escHtml(String(m.decision_summary || ''))}
+            </div>
+            ${blockedInfo ? `<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">⚠ ${escHtml(t('memoryReuse.blocked'))}: <code>${escHtml(String(blockedInfo.reason || ''))}</code></div>` : ''}
+          </div>
+        </label>
+      `;
+    }).join('');
+
+  const previewJson = preview ? escHtml(JSON.stringify({ allowed, blocked }, null, 2)) : '';
+
+  return `
+    <details class="ns-collapsible" style="max-width:1100px;width:100%;margin-top:14px;">
+      <summary class="ns-collapsible-summary">
+        <span>＋ ${escHtml(t('memoryReuse.title'))}</span>
+        <span class="ns-collapsible-hint">${escHtml(t('memoryReuse.subtitle'))}</span>
+      </summary>
+      <div class="ns-collapsible-body">
+        <div class="card" style="max-width:1100px;width:100%;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+            <div style="font-weight:600;font-size:14px;color:var(--text-primary);">🗂️ ${escHtml(t('memoryReuse.title'))}</div>
+            <button class="btn btn-secondary btn-sm" type="button" data-action="toggle-memory-picker">
+              ${mp.open ? escHtml(t('memoryReuse.hide')) : escHtml(t('memoryReuse.browse'))}
+            </button>
+          </div>
+          ${selected.length ? `
+            <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <span class="badge badge-info">${escHtml(t('memoryReuse.selected'))}: ${selected.length}/5</span>
+              <button class="btn btn-secondary btn-sm" type="button" data-action="clear-selected-memories-new-session">${escHtml(t('memoryReuse.clear'))}</button>
+            </div>
+          ` : ''}
+          ${warning}
+          ${staleConfirmCta}
+          ${expertOverrideToggle}
+          ${mp.open ? `
+            <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
+              <div data-ui="expert-only" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:10px;">
+                ${filterRow('playbook_id', t('memoryReuse.filter.playbook'), 'founder-sprint')}
+                ${filterRow('decision_status', t('memoryReuse.filter.status'), 'proceed')}
+                ${filterRow('confidence', t('memoryReuse.filter.confidence'), 'moderate')}
+                ${filterRow('from', t('memoryReuse.filter.from'), '2026-01-01')}
+                ${filterRow('to', t('memoryReuse.filter.to'), '2026-12-31')}
+                ${filterRow('link_type', t('memoryReuse.filter.linkType'), 'pivot')}
+                ${filterRow('q', t('memoryReuse.filter.search'), t('memoryReuse.filter.searchHint'))}
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+                <button class="btn btn-secondary btn-sm" type="button" data-action="load-memory-picker" ${mp.loading ? 'disabled' : ''}>
+                  ${mp.loading ? '<span class="spinner"></span>' : '↺'} ${escHtml(t('memoryReuse.search'))}
+                </button>
+                ${mp.error ? `<span style="font-size:12px;color:var(--danger);">⚠️ ${escHtml(mp.error)}</span>` : ''}
+              </div>
+              ${listHtml}
+              <details data-ui="expert-only" style="margin-top:12px;">
+                <summary style="cursor:pointer;color:var(--text-muted);">${escHtml(t('memoryReuse.previewInjected'))}</summary>
+                <pre style="margin:10px 0 0;white-space:pre-wrap;font-size:11px;color:var(--text-secondary);">${previewJson}</pre>
+              </details>
+            </div>
+          ` : ''}
+        </div>
+      </div>
+    </details>
+  `;
+}
+
 function renderNewSession() {
   const { state, escHtml, t, tip } = getCtx();
   const ns = state.newSession;
   /** Simple vs Expert (sidebar AFFICHAGE) */
-  const isSimpleDisplay = state.uiMode !== 'expert';
+  const isSimpleDisplay = state.uiMode === 'basic';
   const personas = state.personas.filter((p) => {
     const modes = Array.isArray(p.available_modes) ? p.available_modes : ['chat', 'decision-room', 'confrontation'];
     return modes.includes(ns.mode) || ns.mode === 'quick-decision' || ns.mode === 'stress-test' || ns.mode === 'jury';
@@ -516,7 +632,14 @@ function renderNewSession() {
   const continueLabel = ns.isFork ? t('hitl.forkContinue') : submitLabel;
 
   const isFastDecision = ns.mode === 'decision-room' && ns.fastDecisionEnabled !== false;
+  const uiLang = window.i18n?.getLanguage?.() || ns.language || 'fr';
+  const modePlaybook = (id) => getPlaybookById(id, uiLang);
+  const confrontationPlaybook = modePlaybook('confrontation');
+  const quickPlaybook = modePlaybook('quick-decision');
+  const stressPlaybook = modePlaybook('stress-test');
+  const juryPlaybook = modePlaybook('jury');
   if (isSimpleDisplay) {
+    const playbook = resolvePlaybookForNewSession(ns, uiLang);
     return `
       <section class="simple-new-session">
         <header class="simple-new-session-header">
@@ -526,13 +649,15 @@ function renderNewSession() {
 
         ${forkBannerHtml}
 
-        ${renderAnalysisFamiliesSection(ns, { escHtml, t, isExpert: false })}
+        ${renderPlaybookSelectionSection(ns, { escHtml })}
 
-        ${renderDecideProductPresets(ns, { escHtml, t })}
-
-        ${renderValidateProductPresets(ns, { escHtml, t })}
-
-        ${renderStarterModelsSection()}
+        ${playbook ? `
+          <div class="card" style="max-width:1100px;width:100%;margin:0 0 14px;padding:14px 16px;">
+            <div style="font-size:11px;color:var(--text-muted);font-weight:800;text-transform:uppercase;letter-spacing:.04em;">${escHtml(playbook.intention)}</div>
+            <div style="font-weight:800;font-size:16px;color:var(--text-primary);margin-top:2px;">${escHtml(playbook.name)}</div>
+            <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;line-height:1.45;">${escHtml(playbook.tagline)}</div>
+          </div>
+        ` : ''}
 
         <div class="card simple-new-session-card" id="new-session-form-card">
           <div class="simple-form-grid">
@@ -546,6 +671,8 @@ function renderNewSession() {
               <textarea class="textarea" id="ns-idea-simple" placeholder="${escHtml(t('newSession.context.placeholder'))}" data-field="idea">${escHtml(ns.idea)}</textarea>
               <div id="context-hint-banner-container">${renderContextHintBanner(ns.contextHintQuestions || null)}</div>
             </div>
+
+            ${renderSelectedPlaybookBlocks(ns, { escHtml })}
 
             <div class="form-group">
               <label>${t('newSession.responseLanguage')}</label>
@@ -563,6 +690,10 @@ function renderNewSession() {
             </div>
           </div>
         </div>
+
+        ${renderFounderInterrogationPanel(ns, { escHtml, t })}
+        ${renderStarterModelsSection()}
+        ${renderDecisionMemoryReuseSection(ns, { state, escHtml, t })}
       </section>
     `;
   }
@@ -575,13 +706,13 @@ function renderNewSession() {
 
     ${forkBannerHtml}
 
-    ${renderAnalysisFamiliesSection(ns, { escHtml, t, isExpert: true })}
+    ${renderPlaybookSelectionSection(ns, { escHtml })}
 
-    ${renderDecideProductPresets(ns, { escHtml, t })}
-
-    ${renderValidateProductPresets(ns, { escHtml, t })}
+    ${renderFounderInterrogationPanel(ns, { escHtml, t })}
 
     ${renderStarterModelsSection()}
+
+    ${renderDecisionMemoryReuseSection(ns, { state, escHtml, t })}
 
     <div class="card" id="new-session-form-card" style="max-width:1100px;width:100%;">
       <div class="form-group">
@@ -593,6 +724,7 @@ function renderNewSession() {
         <textarea class="textarea" id="ns-idea" placeholder="${t('newSession.ideaPlaceholder')}" style="min-height:120px;" data-field="idea">${escHtml(ns.idea)}</textarea>
         <div id="context-hint-banner-container">${renderContextHintBanner(ns.contextHintQuestions || null)}</div>
       </div>
+      ${renderSelectedPlaybookBlocks(ns, { escHtml })}
       <div class="form-group">
         <label>${t('newSession.responseLanguage')}</label>
         <div class="language-selector">
@@ -606,25 +738,21 @@ function renderNewSession() {
         <div class="mode-selector">
           <label class="mode-option ${ns.mode === 'chat' ? 'selected' : ''}"><input type="radio" name="ns-mode" value="chat" ${ns.mode === 'chat' ? 'checked' : ''} data-field="mode"><div><div class="mode-option-label">${t('mode.chat')}</div><div class="mode-option-desc">${t('mode.chatDesc')}</div></div></label>
           <label class="mode-option ${ns.mode === 'decision-room' ? 'selected' : ''}"><input type="radio" name="ns-mode" value="decision-room" ${ns.mode === 'decision-room' ? 'checked' : ''} data-field="mode"><div><div class="mode-option-label">${t('mode.decisionRoom')}</div><div class="mode-option-desc">${t('mode.decisionRoomDesc')}</div></div></label>
-          <label class="mode-option ${ns.mode === 'confrontation' ? 'selected' : ''}"><input type="radio" name="ns-mode" value="confrontation" ${ns.mode === 'confrontation' ? 'checked' : ''} data-field="mode"><div><div class="mode-option-label">${t('mode.confrontation')}</div><div class="mode-option-desc">${t('mode.confrontationDesc')}</div></div></label>
-          <label class="mode-option ${ns.mode === 'quick-decision' ? 'selected' : ''}"><input type="radio" name="ns-mode" value="quick-decision" ${ns.mode === 'quick-decision' ? 'checked' : ''} data-field="mode"><div><div class="mode-option-label">${t('mode.quickDecision')}</div><div class="mode-option-desc">${t('mode.quickDecisionDesc')}</div></div></label>
-          <label class="mode-option ${ns.mode === 'stress-test' ? 'selected' : ''}"><input type="radio" name="ns-mode" value="stress-test" ${ns.mode === 'stress-test' ? 'checked' : ''} data-field="mode"><div><div class="mode-option-label">${t('mode.stressTest')}</div><div class="mode-option-desc">${t('mode.stressTestDesc')}</div></div></label>
-          <label class="mode-option ${ns.mode === 'jury' ? 'selected' : ''}"><input type="radio" name="ns-mode" value="jury" ${ns.mode === 'jury' ? 'checked' : ''} data-field="mode"><div><div class="mode-option-label">${t('jury.title')}</div><div class="mode-option-desc">${t('jury.desc')}</div></div></label>
+          <label class="mode-option ${ns.mode === 'confrontation' ? 'selected' : ''}"><input type="radio" name="ns-mode" value="confrontation" ${ns.mode === 'confrontation' ? 'checked' : ''} data-field="mode"><div><div class="mode-option-label">${escHtml(confrontationPlaybook?.name || 'confrontation')}</div><div class="mode-option-desc">${escHtml(confrontationPlaybook?.intention || '')}</div></div></label>
+          <label class="mode-option ${ns.mode === 'quick-decision' ? 'selected' : ''}"><input type="radio" name="ns-mode" value="quick-decision" ${ns.mode === 'quick-decision' ? 'checked' : ''} data-field="mode"><div><div class="mode-option-label">${escHtml(quickPlaybook?.name || 'quick-decision')}</div><div class="mode-option-desc">${escHtml(quickPlaybook?.intention || '')}</div></div></label>
+          <label class="mode-option ${ns.mode === 'stress-test' ? 'selected' : ''}"><input type="radio" name="ns-mode" value="stress-test" ${ns.mode === 'stress-test' ? 'checked' : ''} data-field="mode"><div><div class="mode-option-label">${escHtml(stressPlaybook?.name || 'stress-test')}</div><div class="mode-option-desc">${escHtml(stressPlaybook?.intention || '')}</div></div></label>
+          <label class="mode-option ${ns.mode === 'jury' ? 'selected' : ''}"><input type="radio" name="ns-mode" value="jury" ${ns.mode === 'jury' ? 'checked' : ''} data-field="mode"><div><div class="mode-option-label">${escHtml(juryPlaybook?.name || 'jury')}</div><div class="mode-option-desc">${escHtml(juryPlaybook?.intention || '')}</div></div></label>
         </div>
       </div>
 
       ${(() => {
-        const usageKey = { chat: 'mode.chatUsage', 'decision-room': 'mode.decisionRoomUsage', confrontation: 'mode.confrontationUsage', 'quick-decision': 'mode.quickDecisionUsage', 'stress-test': 'mode.stressTestUsage', jury: 'mode.juryUsage' }[ns.mode];
-        return usageKey ? `<div class="card-usage" style="margin-bottom:14px;font-size:12px;">👉 ${t(usageKey)}</div>` : '';
+        const currentPlaybook = resolvePlaybookForNewSession(ns, uiLang);
+        if (currentPlaybook?.tagline) {
+          return `<div class="card-usage" style="margin-bottom:14px;font-size:12px;">👉 ${escHtml(currentPlaybook.tagline)}</div>`;
+        }
+        const usageKey = { chat: 'mode.chatUsage', 'decision-room': 'mode.decisionRoomUsage' }[ns.mode];
+        return usageKey ? `<div class="card-usage" style="margin-bottom:14px;font-size:12px;">👉 ${escHtml(t(usageKey))}</div>` : '';
       })()}
-
-      ${ns.mode === 'stress-test' ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;padding:8px 12px;background:rgba(239,68,68,0.07);border-radius:6px;border:1px solid rgba(239,68,68,0.2);">🔥 ${t('mode.stressTestHint')}</div>` : ''}
-
-      ${ns.mode === 'jury' ? `
-        <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;padding:8px 12px;background:rgba(99,102,241,0.07);border-radius:6px;border:1px solid rgba(99,102,241,0.2);">
-          ⚖️ ${t('jury.desc')}
-        </div>
-      ` : ''}
 
       ${isFastDecision ? renderFastDecisionBadge() : ''}
       <div ${isFastDecision ? 'style="display:none"' : ''}>

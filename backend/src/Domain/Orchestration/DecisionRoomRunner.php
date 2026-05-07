@@ -40,6 +40,7 @@ class DecisionRoomRunner {
     private \Domain\DecisionReliability\DecisionGuardrailService $guardrailService;
     private \Domain\DecisionReliability\DecisionQualityScoreService $qualityScoreService;
     private DecisionSummaryService $summaryService;
+    private PlaybookRuntime $playbookRuntime;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -61,6 +62,7 @@ class DecisionRoomRunner {
         $this->guardrailService = new \Domain\DecisionReliability\DecisionGuardrailService();
         $this->qualityScoreService = new \Domain\DecisionReliability\DecisionQualityScoreService();
         $this->summaryService = new DecisionSummaryService();
+        $this->playbookRuntime = new PlaybookRuntime();
         // Ensure run_status column exists for auto-retry progress signaling
         try {
             $pdo = \Infrastructure\Persistence\Database::getConnection();
@@ -98,6 +100,7 @@ class DecisionRoomRunner {
         $rounds              = min(max($rounds, 1), RoundPolicy::MAX_ROUNDS);
         $decisionThreshold   = ReliabilityConfig::normalizeThreshold($decisionThreshold);
         $dynamicsPreset      = \Domain\Agents\DecisionDynamicsPreset::normalizeId($sessionOptions['decision_dynamics_preset'] ?? null);
+        $playbookId          = $this->playbookRuntime->resolvePlaybookId('decision-room', $sessionOptions, $objective);
         $allMessages         = [];
         $previousRoundMessages = [];
         $state               = $this->debateMemory->loadState($sessionId);
@@ -209,7 +212,7 @@ class DecisionRoomRunner {
                                     'evidence_report'      => $preEvidence,
                                 ])
                             );
-                            $formatInstruction = $this->promptBuilder->buildSynthesizerOutputFormatInstruction();
+                            $formatInstruction = $this->promptBuilder->buildSynthesizerOutputFormatInstruction($playbookId, $language);
                             if (($sessionOptions['session_variant'] ?? '') === 'premortem') {
                                 $formatInstruction .= $this->promptBuilder->buildPremortemSynthesizerJsonAddendum();
                             }
@@ -292,7 +295,7 @@ class DecisionRoomRunner {
 
                     // Parse verdict from synthesizer in final round
                     if ($agentId === 'synthesizer' && $round === $rounds) {
-                        $parsed = VerdictParser::parse($content);
+                        $parsed = VerdictParser::parse($content, $playbookId);
                         if ($parsed) {
                             $verdictData = array_merge($parsed, [
                                 'id'         => $this->uuid(),
@@ -598,6 +601,18 @@ class DecisionRoomRunner {
         }
 
         $verdictRow = $this->verdictRepo->findBySession($sessionId);
+        $canonicalSynthesis = CanonicalSynthesisExtractor::extract($synthesizerOutput, $playbookId);
+        $playbookDiagnostics = $this->playbookRuntime->extractDiagnostics($synthesizerOutput, $playbookId);
+        if (!empty($playbookDiagnostics['warnings'])) {
+            $guardrails = is_array($guardrails) ? $guardrails : [];
+            $existing = isset($guardrails['warnings']) && is_array($guardrails['warnings']) ? $guardrails['warnings'] : [];
+                $guardrails['warnings'] = array_values(array_unique(array_merge($existing, $playbookDiagnostics['warnings'])));
+        }
+        $decisionOutcome = DecisionOutcomeProjector::fromCanonical($canonicalSynthesis, [
+            'playbook_runtime' => $playbookDiagnostics,
+            'risk_profile' => $riskProfile,
+            'guardrails' => $guardrails,
+        ]);
         $decisionBrief = $this->summaryService->buildDecisionBrief(
             array_merge($reliability, [
                 'synthesizer_output'     => $synthesizerOutput,
@@ -606,6 +621,9 @@ class DecisionRoomRunner {
                 'risk_profile'           => $riskProfile,
                 'evidence_report'        => $evidenceReport,
                 'verdict'                => $verdictRow ?: null,
+                'canonical_synthesis'    => $canonicalSynthesis,
+                'playbook_runtime'        => $playbookDiagnostics,
+                'decision_outcome'        => $decisionOutcome,
             ])
         );
 
@@ -640,6 +658,9 @@ class DecisionRoomRunner {
             'auto_retry' => $autoRetryResult,
             'decision_quality_score' => $qualityScore,
             'decision_brief' => $decisionBrief,
+            'canonical_synthesis' => $canonicalSynthesis,
+            'decision_outcome' => $decisionOutcome,
+            'playbook_runtime' => $playbookDiagnostics,
             'premortem_summary' => $premortemSummary,
         ]);
     }

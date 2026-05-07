@@ -1,5 +1,6 @@
 import { registerAction } from '../../core/events.js';
 import { withProviderRuntime } from '../../core/providerRuntime.js';
+import { isConfirmationConfirmed, requestConfirmation } from '../../utils/confirmationUi.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -116,15 +117,26 @@ function registerJuryHandlers() {
   });
 
   // Rerun with stronger adversarial settings
-  registerAction('rerun-jury-strong', async () => {
+  registerAction('rerun-jury-strong', async (ctx = {}) => {
     const { state, render, apiFetch } = getCtx();
     const session = state.currentSession;
     if (!session) return;
 
-    const confirmed = window.confirm(
-      'Relancer le jury avec débat renforcé ? Une nouvelle analyse sera créée. La session originale est conservée.'
-    );
-    if (!confirmed) return;
+    if (!isConfirmationConfirmed(ctx)) {
+      requestConfirmation(state, {
+        id: `rerun-jury-strong:${session.id}`,
+        mode: 'modal',
+        tone: 'warning',
+        title: 'Relancer le jury avec debat renforce ?',
+        body: 'Une nouvelle analyse sera creee. La session originale est conservee.',
+        expertBody: 'Le nombre de rounds peut augmenter et les parametres adversariaux sont renforces.',
+        confirmLabel: 'Relancer le jury',
+        action: 'rerun-jury-strong',
+      });
+      render();
+      return;
+    }
+    
 
     state.juryRunning = true;
     state.juryResults = null;

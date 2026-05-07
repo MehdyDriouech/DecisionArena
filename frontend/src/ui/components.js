@@ -50,6 +50,72 @@ function renderAlert({ text = '', bodyHtml = '', variant = 'info' } = {}) {
   return `<div class="alert alert-${escapeHtml(variant)}">${content}</div>`;
 }
 
+function renderPendingConfirmation(confirm, opts = {}) {
+  if (!confirm || typeof confirm !== 'object') return '';
+  const inlineOnly = opts.inlineOnly === true;
+  const modalOnly = opts.modalOnly === true;
+  const mode = confirm.mode === 'inline' ? 'inline' : 'modal';
+  if (inlineOnly && mode !== 'inline') return '';
+  if (modalOnly && mode !== 'modal') return '';
+
+  const uiMode = normalizeComponentUiMode(opts.uiMode ?? window.DecisionArena?.store?.state?.uiMode);
+  const title = escapeHtml(confirm.title || '');
+  const body = confirm.body
+    ? `<div style="margin-top:6px;font-size:13px;color:var(--text-secondary);line-height:1.45;">${escapeHtml(confirm.body)}</div>`
+    : '';
+  const expert = uiMode === 'expert' && confirm.expertBody
+    ? `<div data-ui="expert-only" style="margin-top:8px;font-size:12px;color:var(--text-muted);line-height:1.45;">${escapeHtml(confirm.expertBody)}</div>`
+    : '';
+  const error = confirm.fieldError
+    ? `<div class="error-banner" style="margin-top:10px;padding:8px 10px;font-size:12px;">${escapeHtml(confirm.fieldError)}</div>`
+    : '';
+  const fields = (Array.isArray(confirm.fields) ? confirm.fields : []).map((field) => {
+    const name = String(field.name || '').trim();
+    if (!name) return '';
+    const label = escapeHtml(field.label || name);
+    const placeholder = escapeHtml(field.placeholder || '');
+    const value = escapeHtml(field.value || '');
+    const required = field.required ? ' data-confirm-required="1"' : '';
+    if (field.type === 'textarea') {
+      return `
+        <div class="form-group" style="margin:10px 0 0;">
+          <label>${label}${field.required ? ' *' : ''}</label>
+          <textarea class="textarea" data-confirm-field="${escapeHtml(name)}"${required} placeholder="${placeholder}" style="min-height:72px;">${value}</textarea>
+        </div>`;
+    }
+    return `
+      <div class="form-group" style="margin:10px 0 0;">
+        <label>${label}${field.required ? ' *' : ''}</label>
+        <input class="input" data-confirm-field="${escapeHtml(name)}"${required} value="${value}" placeholder="${placeholder}">
+      </div>`;
+  }).join('');
+  const confirmClass = confirm.tone === 'danger' ? 'btn-danger' : 'btn-primary';
+  const border = confirm.tone === 'danger' ? 'rgba(239,68,68,0.45)' : 'rgba(245,158,11,0.45)';
+  const bg = confirm.tone === 'danger' ? 'rgba(239,68,68,0.06)' : 'rgba(245,158,11,0.07)';
+  const card = `
+    <div data-confirm-card data-confirm-id="${escapeHtml(confirm.id)}" class="card confirmation-card" style="padding:12px 14px;border-color:${border};background:${bg};">
+      <div style="font-weight:800;color:var(--text-primary);">${title}</div>
+      ${body}
+      ${expert}
+      ${fields}
+      ${error}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+        <button type="button" class="btn ${confirmClass} btn-sm" data-action="confirm-pending-confirmation" data-confirm-id="${escapeHtml(confirm.id)}">
+          ${escapeHtml(confirm.confirmLabel || 'Confirm')}
+        </button>
+        <button type="button" class="btn btn-secondary btn-sm" data-action="cancel-pending-confirmation" data-confirm-id="${escapeHtml(confirm.id)}">
+          ${escapeHtml(confirm.cancelLabel || 'Cancel')}
+        </button>
+      </div>
+    </div>`;
+
+  if (mode === 'inline') return `<div style="margin-top:12px;">${card}</div>`;
+  return `
+    <div class="persona-modal-overlay confirmation-overlay" data-confirm-card data-confirm-id="${escapeHtml(confirm.id)}">
+      <div class="persona-modal" style="max-width:500px;">${card}</div>
+    </div>`;
+}
+
 function renderActionBar({ actionsHtml = '', className = '' } = {}) {
   const cls = ['action-bar', className].filter(Boolean).join(' ');
   return `<div class="${escapeHtml(cls)}">${actionsHtml}</div>`;
@@ -59,6 +125,112 @@ function renderAdvancedPanel({ bodyHtml = '', title = '', className = '' } = {})
   const cls = ['advanced-panel', className].filter(Boolean).join(' ');
   const titleHtml = title ? `<div class="advanced-panel-title">${escapeHtml(title)}</div>` : '';
   return `<div class="${escapeHtml(cls)}" data-ui="expert-only">${titleHtml}${bodyHtml}</div>`;
+}
+
+function renderPlaybookOutputContract(playbook, opts = {}) {
+  if (!playbook) return '';
+  const escHtml = opts.escHtml ?? escapeHtml;
+  const language = opts.language || window.i18n?.getLanguage?.() || 'fr';
+  const items = Array.isArray(playbook.output_contract) ? playbook.output_contract : [];
+  if (!items.length) return '';
+  return `
+    <section class="playbook-output-contract" style="grid-column:1 / -1;margin:14px 0;padding:14px 16px;border:1px solid rgba(16,185,129,0.28);background:rgba(16,185,129,0.06);border-radius:8px;">
+      <div style="font-weight:700;font-size:14px;color:var(--text-primary);margin-bottom:8px;">${escHtml(language === 'en' ? 'You will get:' : 'Vous allez obtenir :')}</div>
+      <ul style="margin:0;padding-left:18px;color:var(--text-secondary);font-size:13px;line-height:1.5;">
+        ${items.map((item) => `<li>${escHtml(item)}</li>`).join('')}
+      </ul>
+    </section>`;
+}
+
+function renderPlaybookDecisionGuide(playbook, opts = {}) {
+  if (!playbook) return '';
+  const escHtml = opts.escHtml ?? escapeHtml;
+  const language = opts.language || window.i18n?.getLanguage?.() || 'fr';
+  const labels = language === 'en'
+    ? {
+      when: 'When to use this mode',
+      recommended: 'Typical use cases',
+      avoid: 'When NOT to use it',
+      challenged: 'What this playbook challenges:',
+      goodOutcome: 'Good outcome:',
+      killSignals: 'Kill / pivot signals:',
+      decisionType: 'Decision supported:',
+    }
+    : {
+      when: 'Quand utiliser ce mode',
+      recommended: 'Cas d usage typiques',
+      avoid: 'Cas ou il ne faut PAS l utiliser',
+      challenged: 'Ce que ce playbook challenge :',
+      goodOutcome: 'Bon resultat :',
+      killSignals: 'Signaux de kill / pivot :',
+      decisionType: 'Decision aidee :',
+    };
+  const list = (title, items) => {
+    const arr = Array.isArray(items) ? items.filter(Boolean) : [];
+    if (!arr.length) return '';
+    return `
+      <div>
+        <div style="font-weight:700;font-size:12px;color:var(--text-primary);margin-bottom:6px;">${escHtml(title)}</div>
+        <ul style="margin:0;padding-left:18px;font-size:12px;line-height:1.45;color:var(--text-secondary);">
+          ${arr.map((item) => `<li>${escHtml(item)}</li>`).join('')}
+        </ul>
+      </div>`;
+  };
+  return `
+    <section class="playbook-decision-guide" style="grid-column:1 / -1;margin:14px 0 18px;padding:16px;border:1px solid var(--border);background:var(--bg-secondary);border-radius:8px;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+        <div>
+          <div style="font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);font-weight:700;">${escHtml(playbook.intention)}</div>
+          <div style="font-weight:800;font-size:18px;color:var(--text-primary);margin-top:2px;">${escHtml(playbook.name)}</div>
+          <div style="font-size:13px;color:var(--text-secondary);margin-top:4px;">${escHtml(playbook.tagline)}</div>
+        </div>
+        <span class="badge badge-default">${escHtml(playbook.cognitive_load)} · ${escHtml(playbook.estimated_duration)}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;">
+        ${list(labels.when, playbook.when_to_use)}
+        ${list(labels.recommended, playbook.recommended_for)}
+        ${list(labels.avoid, playbook.anti_patterns)}
+      </div>
+      <div style="margin-top:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;font-size:12px;line-height:1.45;color:var(--text-secondary);">
+        <div><strong style="color:var(--text-primary);">${escHtml(labels.challenged)}</strong><br>${escHtml(playbook.what_is_challenged)}</div>
+        <div><strong style="color:var(--text-primary);">${escHtml(labels.goodOutcome)}</strong><br>${escHtml(playbook.good_outcome_definition)}</div>
+        <div><strong style="color:var(--text-primary);">${escHtml(labels.killSignals)}</strong><br>${escHtml(playbook.kill_signal_definition)}</div>
+        <div><strong style="color:var(--text-primary);">${escHtml(labels.decisionType)}</strong><br>${escHtml(playbook.decision_type)}</div>
+      </div>
+    </section>`;
+}
+
+function renderPlaybookCard(playbook, opts = {}) {
+  if (!playbook) return '';
+  const escHtml = opts.escHtml ?? escapeHtml;
+  const language = opts.language || window.i18n?.getLanguage?.() || 'fr';
+  const active = !!opts.active;
+  const compact = !!opts.compact;
+  const action = opts.action || 'select-playbook';
+  const labels = language === 'en'
+    ? { when: 'Use when', decision: 'Decision', outputs: 'Outputs' }
+    : { when: 'Quand l utiliser', decision: 'Decision aidee', outputs: 'Sorties' };
+  const when = Array.isArray(playbook.when_to_use) ? playbook.when_to_use[0] : '';
+  const firstContract = (playbook.output_contract || []).slice(0, compact ? 2 : 3).join(' · ');
+  // Progressive disclosure: keep cards scannable; show guidance only for the selected card.
+  const showGuidance = active && !compact;
+  return `
+    <button type="button" class="template-card starter-card playbook-card ${active ? 'selected active' : ''}"
+      data-action="${escHtml(action)}"
+      data-playbook-id="${escHtml(playbook.id)}"
+      aria-pressed="${active}"
+      style="text-align:left;display:block;width:100%;cursor:pointer;">
+      <span class="simple-intent-title" style="display:block;">${escHtml(playbook.intention)}</span>
+      <span class="template-card-name starter-title" style="display:block;margin-top:3px;">${escHtml(playbook.name)}</span>
+      <span class="simple-intent-desc" style="display:block;margin-top:6px;">${escHtml(playbook.tagline)}</span>
+      ${showGuidance && when ? `<span class="playbook-card-guide"><strong>${escHtml(labels.when)}:</strong> ${escHtml(when)}</span>` : ''}
+      ${showGuidance && playbook.decision_type ? `<span class="playbook-card-guide"><strong>${escHtml(labels.decision)}:</strong> ${escHtml(playbook.decision_type)}</span>` : ''}
+      ${showGuidance && firstContract ? `<span class="playbook-card-outputs"><strong>${escHtml(labels.outputs)}:</strong> ${escHtml(firstContract)}</span>` : ''}
+      <span class="template-card-meta starter-meta" style="display:flex;margin-top:10px;gap:6px;flex-wrap:wrap;">
+        <span class="badge badge-default">${escHtml(playbook.cognitive_load)}</span>
+        <span class="starter-meta-rounds">${escHtml(playbook.estimated_duration)}</span>
+      </span>
+    </button>`;
 }
 
 /**
@@ -143,8 +315,8 @@ function renderTooltip(tooltip) {
 
 function normalizeComponentUiMode(value) {
   if (value === 'expert' || value === 'advanced') return 'expert';
-  if (value === 'simple' || value === 'basic') return 'simple';
-  return 'simple';
+  if (value === 'basic' || value === 'simple') return 'basic';
+  return 'basic';
 }
 
 function resolveUiMode(opts = {}) {
@@ -329,6 +501,262 @@ function renderDecisionBrief(data, opts = {}) {
     <p>${escHtml(nextStep)}</p>
   </div>
 </div>`;
+}
+
+function normalizeDecisionOutcome(data) {
+  if (!data || typeof data !== 'object') return null;
+  return data.decision_outcome && typeof data.decision_outcome === 'object'
+    ? data.decision_outcome
+    : data;
+}
+
+function renderDecisionOutcomeCard(data, opts = {}) {
+  const outcome = normalizeDecisionOutcome(data);
+  if (!outcome) return '';
+  const escHtml = opts.escHtml ?? escapeHtml;
+  const uiMode = resolveUiMode(opts);
+  const isExpert = uiMode === 'expert';
+  const sessionId = String(opts.sessionId || opts.session_id || '').trim();
+  const status = cleanDecisionBriefText(outcome.status || '') || 'validate_first';
+  const confidence = (cleanDecisionBriefText(outcome.confidence || '') || 'weak').toLowerCase();
+  const risk = cleanDecisionBriefText(outcome.execution_risk_level || '') || 'unknown';
+  const summary = cleanDecisionBriefText(outcome.decision_summary || '') || 'Decision outcome incomplete.';
+  const actions = (Array.isArray(outcome.required_next_actions) ? outcome.required_next_actions : [])
+    .map(cleanDecisionBriefText).filter(Boolean);
+  const unknowns = (Array.isArray(outcome.blocking_unknowns) ? outcome.blocking_unknowns : [])
+    .map(cleanDecisionBriefText).filter(Boolean);
+  const validation = outcome.validation_logic && typeof outcome.validation_logic === 'object' ? outcome.validation_logic : {};
+  const pb = outcome.playbook_specific_outcomes && typeof outcome.playbook_specific_outcomes === 'object'
+    ? outcome.playbook_specific_outcomes : {};
+  const diagnostics = outcome.diagnostics && typeof outcome.diagnostics === 'object' ? outcome.diagnostics : {};
+  const warnings = Array.isArray(diagnostics.warnings) ? diagnostics.warnings.map(cleanDecisionBriefText).filter(Boolean) : [];
+  const contractVersion = cleanDecisionBriefText(outcome.contract_version || '');
+  const taxonomyVersion = cleanDecisionBriefText(outcome.taxonomy_version || '');
+  const persistenceSafety = outcome.persistence_safety && typeof outcome.persistence_safety === 'object'
+    ? outcome.persistence_safety
+    : null;
+  const safeToPersist = persistenceSafety?.safe_to_persist === true;
+  const requiresConfirm = persistenceSafety?.requires_user_confirmation === true;
+  const derivedFallback = persistenceSafety?.derived_from_fallback === true;
+  const evidenceClaims = Array.isArray(outcome.evidence_claims)
+    ? outcome.evidence_claims.filter((claim) => claim && typeof claim === 'object' && cleanDecisionBriefText(claim.claim || ''))
+    : [];
+  const evidenceSummary = outcome.evidence_summary && typeof outcome.evidence_summary === 'object' ? outcome.evidence_summary : null;
+  const confidenceReasons = Array.isArray(outcome.confidence_explanation)
+    ? outcome.confidence_explanation.map(cleanDecisionBriefText).filter(Boolean)
+    : [];
+  const uncertaintySignals = outcome.uncertainty_signals && typeof outcome.uncertainty_signals === 'object'
+    ? outcome.uncertainty_signals
+    : {};
+
+  const label = (value) => String(value || '').replace(/_/g, ' ');
+  const list = (items, empty) => items.length
+    ? `<ul>${items.slice(0, 5).map((x) => `<li>${escHtml(x)}</li>`).join('')}</ul>`
+    : `<p class="decision-outcome-empty">${escHtml(empty)}</p>`;
+  const validationItems = [
+    ['Success signal', validation.success_signal],
+    ['Kill criteria', validation.kill_criteria],
+    ['Threshold', validation.validation_threshold],
+    ['Failure signal', validation.failure_signal],
+  ].map(([k, v]) => [k, cleanDecisionBriefText(v)]).filter(([, v]) => v);
+  const outcomeRows = Object.entries(pb)
+    .map(([k, v]) => [label(k), cleanDecisionBriefText(v)])
+    .filter(([, v]) => v)
+    .slice(0, 8);
+  const evidenceStatusLabel = (status) => ({
+    verified: 'Verified',
+    weak_evidence: 'Weak evidence',
+    assumption: 'Assumption',
+    unknown: 'Unknown',
+    contradicted: 'Contradicted',
+  }[status] || label(status || 'weak_evidence'));
+  const evidenceStatusClass = (status) => ({
+    verified: 'badge-success',
+    weak_evidence: 'badge-warning',
+    assumption: 'badge-default',
+    unknown: 'badge-warning',
+    contradicted: 'badge-danger',
+  }[status] || 'badge-default');
+  const evidenceCounts = evidenceSummary?.status_counts && typeof evidenceSummary.status_counts === 'object'
+    ? evidenceSummary.status_counts
+    : {};
+  const evidenceCountBadges = ['verified', 'weak_evidence', 'assumption', 'unknown', 'contradicted']
+    .map((status) => {
+      const n = Number(evidenceCounts[status] || 0);
+      return n > 0 ? `<span class="badge ${evidenceStatusClass(status)}">${escHtml(evidenceStatusLabel(status))}: ${escHtml(String(n))}</span>` : '';
+    })
+    .join('');
+  const confidenceBadgeClass = ({
+    strong: 'badge-success',
+    moderate: 'badge-warning',
+    weak: 'badge-danger',
+  }[confidence] || 'badge-default');
+  const statusBadgeClass = (() => {
+    switch (status) {
+      case 'proceed': return 'badge-success';
+      case 'proceed_with_constraints': return 'badge-warning';
+      case 'pivot': return 'badge-warning';
+      case 'validate_first': return 'badge-warning';
+      case 'kill': return 'badge-danger';
+      default: return 'badge-default';
+    }
+  })();
+  const signalValue = (key) => uncertaintySignals[key] == null ? '' : cleanDecisionBriefText(uncertaintySignals[key]);
+  const expertSignalRows = [
+    ['Parser reliability', signalValue('parser_reliability')],
+    ['Critical unknowns', signalValue('critical_unknowns')],
+    ['Contradictions', signalValue('contradictions')],
+    ['Weak evidence claims', signalValue('weak_evidence_claims')],
+    ['Assumption claims', signalValue('assumption_claims')],
+    ['Fallback used', uncertaintySignals.fallback_used ? 'yes' : 'no'],
+  ].filter(([, v]) => v !== '');
+  const playbookGaps = Array.isArray(uncertaintySignals.playbook_gaps)
+    ? uncertaintySignals.playbook_gaps.map(cleanDecisionBriefText).filter(Boolean)
+    : [];
+
+  return `
+<section class="decision-outcome-card">
+  <div class="decision-outcome-top">
+    <div>
+      <div class="decision-outcome-kicker">Decision outcome</div>
+      <h3>${escHtml(label(status))}</h3>
+      <p>${escHtml(summary)}</p>
+    </div>
+    <div class="decision-outcome-badges">
+      <span class="badge ${statusBadgeClass}">${escHtml(label(status))}</span>
+      <span class="badge ${confidenceBadgeClass}">${escHtml(label(confidence))}</span>
+      <span class="badge badge-warning">risk: ${escHtml(label(risk))}</span>
+    </div>
+  </div>
+  ${confidenceReasons.length ? `
+    <div class="decision-outcome-section confidence-explanation">
+      <h4>Why this confidence?</h4>
+      <ul>${confidenceReasons.slice(0, isExpert ? 6 : 3).map((reason) => `<li>${escHtml(reason)}</li>`).join('')}</ul>
+      ${playbookGaps.length ? `<p data-ui="expert-only">Playbook gaps: ${escHtml(playbookGaps.map(label).join(', '))}</p>` : ''}
+    </div>
+  ` : ''}
+  <div class="decision-outcome-grid">
+    <div>
+      <h4>Required next actions</h4>
+      ${list(actions, 'No executable next action extracted yet.')}
+    </div>
+    <div>
+      <h4>Blocking unknowns</h4>
+      ${list(unknowns, 'No blocking unknown listed.')}
+    </div>
+  </div>
+  ${validationItems.length ? `
+    <div class="decision-outcome-section">
+      <h4>Validation logic</h4>
+      <div class="decision-outcome-mini-grid">
+        ${validationItems.map(([k, v]) => `<div><strong>${escHtml(k)}</strong><span>${escHtml(v)}</span></div>`).join('')}
+      </div>
+    </div>
+  ` : ''}
+  ${outcomeRows.length ? `
+    <div class="decision-outcome-section">
+      <h4>Playbook-specific outcomes</h4>
+      <div class="decision-outcome-mini-grid">
+        ${outcomeRows.map(([k, v]) => `<div><strong>${escHtml(k)}</strong><span>${escHtml(v)}</span></div>`).join('')}
+      </div>
+    </div>
+  ` : ''}
+  ${evidenceClaims.length ? `
+    <div class="decision-outcome-section evidence-claims-section">
+      <div class="evidence-claims-head">
+        <h4>Evidence discipline</h4>
+        <div class="evidence-claim-counts">${evidenceCountBadges}</div>
+      </div>
+      ${!isExpert ? `
+        <details class="decision-outcome-evidence-details">
+          <summary>Voir les claims (${escHtml(String(evidenceClaims.length))})</summary>
+          <div class="evidence-claims-list">
+            ${evidenceClaims.slice(0, 3).map((claim) => {
+              const status = String(claim.verification_status || 'weak_evidence');
+              const type = cleanDecisionBriefText(claim.claim_type || 'assumption');
+              const text = cleanDecisionBriefText(claim.claim || '');
+              return `
+                <div class="evidence-claim-row">
+                  <div class="evidence-claim-main">
+                    <span class="badge ${evidenceStatusClass(status)}">${escHtml(evidenceStatusLabel(status))}</span>
+                    <span class="badge badge-default">${escHtml(label(type))}</span>
+                    <p>${escHtml(text)}</p>
+                  </div>
+                </div>`;
+            }).join('')}
+          </div>
+        </details>
+      ` : `
+      <div class="evidence-claims-list">
+        ${evidenceClaims.slice(0, 8).map((claim) => {
+          const status = String(claim.verification_status || 'weak_evidence');
+          const type = cleanDecisionBriefText(claim.claim_type || 'assumption');
+          const text = cleanDecisionBriefText(claim.claim || '');
+          const support = Array.isArray(claim.supporting_evidence) ? claim.supporting_evidence.map(cleanDecisionBriefText).filter(Boolean) : [];
+          const contra = Array.isArray(claim.contradictions) ? claim.contradictions.map(cleanDecisionBriefText).filter(Boolean) : [];
+          return `
+            <div class="evidence-claim-row">
+              <div class="evidence-claim-main">
+                <span class="badge ${evidenceStatusClass(status)}">${escHtml(evidenceStatusLabel(status))}</span>
+                <span class="badge badge-default">${escHtml(label(type))}</span>
+                <p>${escHtml(text)}</p>
+              </div>
+              ${isExpert && (support.length || contra.length) ? `
+                <div class="evidence-claim-detail" data-ui="expert-only">
+                  ${support.length ? `<span>Support: ${escHtml(support.slice(0, 2).join(' | '))}</span>` : ''}
+                  ${contra.length ? `<span>Challenge: ${escHtml(contra.slice(0, 2).join(' | '))}</span>` : ''}
+                </div>
+              ` : ''}
+            </div>`;
+        }).join('')}
+      </div>
+      `}
+    </div>
+  ` : ''}
+  ${isExpert && (warnings.length || expertSignalRows.length) ? `
+    <details class="decision-outcome-diagnostics" data-ui="expert-only">
+      <summary>Outcome diagnostics</summary>
+      ${warnings.length ? `<ul>${warnings.slice(0, 8).map((w) => `<li>${escHtml(w)}</li>`).join('')}</ul>` : ''}
+      ${diagnostics.parser_confidence != null ? `<p>Parser confidence: ${escHtml(String(diagnostics.parser_confidence))}</p>` : ''}
+      ${Array.isArray(diagnostics.extraction_strategy_used) ? `<p>Strategy: ${escHtml(diagnostics.extraction_strategy_used.join(', '))}</p>` : ''}
+      ${contractVersion ? `<p>Contract: ${escHtml(contractVersion)}</p>` : ''}
+      ${taxonomyVersion ? `<p>Taxonomy: ${escHtml(taxonomyVersion)}</p>` : ''}
+      ${persistenceSafety ? `
+        <div style="margin-top:8px;">
+          <div style="font-weight:700;margin-bottom:4px;">Persistence safety</div>
+          <ul style="margin:0;padding-left:18px;">
+            <li>safe_to_persist: <strong>${escHtml(String(safeToPersist))}</strong></li>
+            <li>requires_user_confirmation: <strong>${escHtml(String(requiresConfirm))}</strong></li>
+            <li>derived_from_fallback: <strong>${escHtml(String(derivedFallback))}</strong></li>
+            ${persistenceSafety.parser_confidence != null ? `<li>parser_confidence: ${escHtml(String(persistenceSafety.parser_confidence))}</li>` : ''}
+            ${Array.isArray(persistenceSafety.missing_critical_fields) && persistenceSafety.missing_critical_fields.length
+              ? `<li>missing_critical_fields: ${escHtml(persistenceSafety.missing_critical_fields.join(', '))}</li>`
+              : ''}
+            ${persistenceSafety.reason ? `<li>reason: ${escHtml(String(persistenceSafety.reason))}</li>` : ''}
+          </ul>
+          ${requiresConfirm && sessionId ? `
+            <div style="margin-top:10px;">
+              <button class="btn btn-primary btn-sm"
+                data-action="confirm-decision-memory"
+                data-session-id="${escHtml(sessionId)}"
+                ${window.DecisionArena?.store?.state?.memoryConfirmingSessionId === sessionId ? 'disabled' : ''}>
+                ${window.DecisionArena?.store?.state?.memoryConfirmingSessionId === sessionId ? '<span class="spinner"></span>' : '✅'} Confirmer &amp; persister la mémoire
+              </button>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">
+                Cette action n&rsquo;enregistre qu&rsquo;un r&eacute;sum&eacute; orient&eacute; d&eacute;cision (pas l&rsquo;historique chat).
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      ` : ''}
+      ${expertSignalRows.length ? `
+        <div class="decision-outcome-signal-grid">
+          ${expertSignalRows.map(([k, v]) => `<div><strong>${escHtml(k)}</strong><span>${escHtml(v)}</span></div>`).join('')}
+        </div>
+      ` : ''}
+    </details>
+  ` : ''}
+</section>`;
 }
 
 function pickTradeoffs(decisionBrief) {
@@ -825,12 +1253,17 @@ export {
   renderAlert,
   renderActionBar,
   renderAdvancedPanel,
+  renderPendingConfirmation,
+  renderPlaybookCard,
+  renderPlaybookDecisionGuide,
+  renderPlaybookOutputContract,
   renderByokProviderConnectModal,
   createErrorBanner,
   mountHtml,
   renderCardDescription,
   renderTooltip,
   renderPanelRecommendBadge,
+  renderDecisionOutcomeCard,
   renderDecisionBrief,
   pickTradeoffs,
   renderTradeoffMatrix,

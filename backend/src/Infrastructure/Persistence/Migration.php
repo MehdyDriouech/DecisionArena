@@ -52,6 +52,11 @@ class Migration {
         $this->createLearningInsightsCacheTable();
         $this->createJuryAdversarialReportsTable();
         $this->createPersonaDecisionDynamicsTable();
+        $this->createDecisionMemoryTables();
+        $this->createDecisionMemoryFts();
+        $this->createDecisionMemoryEmbeddingsTable();
+        $this->createStrategicContextTables();
+        $this->createDecisionRoomTables();
         $this->seedDefaultTemplates();
         $this->seedStressTestTemplate();
         $this->seedSixThinkingHatsTemplate();
@@ -59,6 +64,232 @@ class Migration {
         $this->seedDefaultScenarioPacks();
         $this->backfillContextDocumentChunks();
         $this->purgeOldLogs();
+    }
+
+    private function createDecisionMemoryTables(): void
+    {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS decision_memories (
+                memory_id            TEXT PRIMARY KEY,
+                session_id           TEXT NOT NULL UNIQUE,
+                playbook_id          TEXT NOT NULL,
+                decision_status      TEXT NOT NULL,
+                confidence           TEXT NOT NULL,
+                decision_summary     TEXT NOT NULL,
+                validated_hypotheses TEXT NOT NULL DEFAULT '[]',
+                failed_assumptions   TEXT NOT NULL DEFAULT '[]',
+                unresolved_risks     TEXT NOT NULL DEFAULT '[]',
+                recommended_next_steps TEXT NOT NULL DEFAULT '[]',
+                historical_outcome   TEXT NOT NULL,
+                contract_version     TEXT NOT NULL,
+                taxonomy_version     TEXT NOT NULL,
+                persistence_safety   TEXT NOT NULL,
+                user_confirmed       INTEGER NOT NULL DEFAULT 0,
+                created_at           TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        ");
+        // Lifecycle / decay columns (best-effort ALTER for existing DBs)
+        $this->addColumnIfMissing('decision_memories', 'memory_state', "TEXT NOT NULL DEFAULT 'active'");
+        $this->addColumnIfMissing('decision_memories', 'superseded_by', 'TEXT NULL');
+        $this->addColumnIfMissing('decision_memories', 'invalidated_reason', 'TEXT NULL');
+        $this->addColumnIfMissing('decision_memories', 'last_reviewed_at', 'TEXT NULL');
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_decision_memories_created_at ON decision_memories(created_at)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_decision_memories_playbook ON decision_memories(playbook_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_decision_memories_state ON decision_memories(memory_state)');
+        } catch (\Throwable) {}
+
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS decision_memory_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_memory_id TEXT NOT NULL,
+                to_memory_id   TEXT NOT NULL,
+                link_type      TEXT NOT NULL,
+                created_at     TEXT NOT NULL,
+                FOREIGN KEY (from_memory_id) REFERENCES decision_memories(memory_id),
+                FOREIGN KEY (to_memory_id) REFERENCES decision_memories(memory_id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_decision_memory_links_from ON decision_memory_links(from_memory_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_decision_memory_links_to ON decision_memory_links(to_memory_id)');
+        } catch (\Throwable) {}
+
+        // Audit log for lifecycle changes (append-only)
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS decision_memory_audit_events (
+                event_id       TEXT PRIMARY KEY,
+                memory_id      TEXT NOT NULL,
+                event_type     TEXT NOT NULL,
+                previous_state TEXT NULL,
+                new_state      TEXT NULL,
+                reason         TEXT NULL,
+                created_at     TEXT NOT NULL,
+                FOREIGN KEY (memory_id) REFERENCES decision_memories(memory_id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_decision_memory_audit_memory ON decision_memory_audit_events(memory_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_decision_memory_audit_created ON decision_memory_audit_events(created_at)');
+        } catch (\Throwable) {}
+    }
+
+    /**
+     * Optional accelerator: FTS5 index for safe, structured Decision Memory search.
+     * Must never break startup if FTS5 is unavailable.
+     */
+    private function createDecisionMemoryFts(): void
+    {
+        try {
+            // Probe FTS5 availability deterministically (CREATE VIRTUAL TABLE fails if missing).
+            $this->pdo->exec("
+                CREATE VIRTUAL TABLE IF NOT EXISTS decision_memory_fts USING fts5(
+                    memory_id,
+                    decision_summary,
+                    unresolved_risks_text,
+                    recommended_next_steps_text,
+                    validated_hypotheses_text,
+                    failed_assumptions_text,
+                    historical_outcome_text,
+                    playbook_id,
+                    decision_status,
+                    confidence,
+                    searchable_text
+                )
+            ");
+        } catch (\Throwable) {
+            // FTS5 optional: fallback mode is LIKE over decision_memories.
+        }
+    }
+
+    /**
+     * Optional discovery index: embeddings for experimental semantic similarity.
+     * Must never break startup if feature is unused.
+     */
+    private function createDecisionMemoryEmbeddingsTable(): void
+    {
+        try {
+            $this->pdo->exec("
+                CREATE TABLE IF NOT EXISTS decision_memory_embeddings (
+                    memory_id           TEXT NOT NULL,
+                    embedding_provider  TEXT NOT NULL,
+                    embedding_model     TEXT NOT NULL,
+                    embedding_version   TEXT NOT NULL,
+                    indexed_text_hash   TEXT NOT NULL,
+                    vector_json         TEXT NOT NULL,
+                    created_at          TEXT NOT NULL,
+                    PRIMARY KEY (memory_id, embedding_provider, embedding_model, embedding_version),
+                    FOREIGN KEY (memory_id) REFERENCES decision_memories(memory_id)
+                )
+            ");
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_dme_memory_id ON decision_memory_embeddings(memory_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_dme_provider_model_ver ON decision_memory_embeddings(embedding_provider, embedding_model, embedding_version)');
+        } catch (\Throwable) {
+            // best-effort; must not break startup
+        }
+    }
+
+    private function createStrategicContextTables(): void
+    {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS strategic_contexts (
+                context_id   TEXT PRIMARY KEY,
+                title        TEXT NOT NULL,
+                description  TEXT NOT NULL DEFAULT '',
+                status       TEXT NOT NULL DEFAULT 'active', -- active|paused|completed|abandoned
+                created_at   TEXT NOT NULL,
+                updated_at   TEXT NOT NULL
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_strategic_contexts_status ON strategic_contexts(status)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_strategic_contexts_updated_at ON strategic_contexts(updated_at)');
+        } catch (\Throwable) {}
+
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS strategic_context_memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                context_id TEXT NOT NULL,
+                memory_id  TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(context_id, memory_id),
+                FOREIGN KEY (context_id) REFERENCES strategic_contexts(context_id),
+                FOREIGN KEY (memory_id)  REFERENCES decision_memories(memory_id)
+            )
+        ");
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS strategic_context_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                context_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(context_id, session_id),
+                FOREIGN KEY (context_id) REFERENCES strategic_contexts(context_id),
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_memories_context ON strategic_context_memories(context_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_sessions_context ON strategic_context_sessions(context_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_memories_memory ON strategic_context_memories(memory_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_sessions_session ON strategic_context_sessions(session_id)');
+        } catch (\Throwable) {}
+    }
+
+    /**
+     * Palace-lite organization: strategic context (“wing”) contains decision rooms (“rooms”); rooms link memories and sessions via join tables only.
+     */
+    private function createDecisionRoomTables(): void
+    {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS decision_rooms (
+                room_id      TEXT PRIMARY KEY,
+                context_id   TEXT NOT NULL,
+                title        TEXT NOT NULL,
+                description  TEXT NOT NULL DEFAULT '',
+                playbook_id  TEXT NULL,
+                status       TEXT NOT NULL DEFAULT 'active',
+                created_at   TEXT NOT NULL,
+                updated_at   TEXT NOT NULL,
+                FOREIGN KEY (context_id) REFERENCES strategic_contexts(context_id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_decision_rooms_context ON decision_rooms(context_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_decision_rooms_status ON decision_rooms(status)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_decision_rooms_updated_at ON decision_rooms(updated_at)');
+        } catch (\Throwable) {}
+
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS decision_room_memories (
+                room_id    TEXT NOT NULL,
+                memory_id  TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(room_id, memory_id),
+                FOREIGN KEY (room_id) REFERENCES decision_rooms(room_id),
+                FOREIGN KEY (memory_id) REFERENCES decision_memories(memory_id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_drm_room ON decision_room_memories(room_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_drm_memory ON decision_room_memories(memory_id)');
+        } catch (\Throwable) {}
+
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS decision_room_sessions (
+                room_id    TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(room_id, session_id),
+                FOREIGN KEY (room_id) REFERENCES decision_rooms(room_id),
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_drs_room ON decision_room_sessions(room_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_drs_session ON decision_room_sessions(session_id)');
+        } catch (\Throwable) {}
     }
 
     /**
@@ -381,6 +612,11 @@ class Migration {
         $this->addColumnIfMissing('sessions', 'rerun_reason', 'TEXT NULL');
         $this->addColumnIfMissing('sessions', 'session_variant', 'TEXT NULL');
         $this->addColumnIfMissing('sessions', 'facilitation_framework', 'TEXT NULL');
+        // Decision Memory reuse traceability (Decision Memory Retrieval & Controlled Reuse)
+        $this->addColumnIfMissing('sessions', 'selected_memory_ids', "TEXT DEFAULT '[]'");
+        $this->addColumnIfMissing('sessions', 'injected_memory_context', 'TEXT NULL');
+        $this->addColumnIfMissing('sessions', 'memory_reuse_mode', 'TEXT NULL'); // "manual"
+        $this->addColumnIfMissing('sessions', 'memory_used_at', 'TEXT NULL');
         $this->addColumnIfMissing('messages', 'phase', 'TEXT NULL');
         $this->addColumnIfMissing('messages', 'target_agent_id', 'TEXT NULL');
         $this->addColumnIfMissing('messages', 'mode_context', 'TEXT NULL');

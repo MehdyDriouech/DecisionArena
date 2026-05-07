@@ -2563,6 +2563,8 @@ a {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 14px;
+  /* Buttons using `.template-card` must not inherit UA black text. */
+  color: var(--text-primary);
   transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
   display: flex;
   flex-direction: column;

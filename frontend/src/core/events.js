@@ -66,6 +66,15 @@ function bindGlobalEventDelegation(root = document) {
     }
     const el = e.target.closest('[data-action]');
     if (!el) return;
+
+    // For form controls, rely on 'change'/'input' instead of 'click'.
+    // Otherwise clicking a <select> to open it can trigger an action + rerender,
+    // preventing the user from selecting an option.
+    const targetTag = (e.target?.tagName || '').toUpperCase();
+    const elTag = (el.tagName || '').toUpperCase();
+    if (targetTag === 'SELECT' || targetTag === 'INPUT' || targetTag === 'TEXTAREA') return;
+    if (elTag === 'SELECT' || elTag === 'INPUT' || elTag === 'TEXTAREA') return;
+
     try {
       try { window.DecisionArena.services?.LogService?.logUiAction?.('action', { name: el.dataset.action }); } catch (_) {}
       await dispatchAction(el.dataset.action, { event: e, element: el });

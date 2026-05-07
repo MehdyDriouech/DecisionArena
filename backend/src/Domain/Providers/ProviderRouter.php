@@ -40,10 +40,18 @@ class ProviderRouter {
         ?Agent $agent = null,
         ?string $explicitProviderId = null,
         ?string $explicitModel = null,
-        ?array $sessionAgentOverride = null
+        ?array $sessionAgentOverride = null,
+        ?array $options = null
     ): array {
         $explicitProviderId = $explicitProviderId !== null ? trim($explicitProviderId) : null;
         $explicitModel      = $explicitModel !== null ? trim($explicitModel) : null;
+        $options            = is_array($options) ? $options : [];
+        $temperature        = $this->normalizeTemperature($options['temperature'] ?? null);
+        if ($temperature !== null) {
+            $options['temperature'] = $temperature;
+        } else {
+            unset($options['temperature']);
+        }
 
         // 1. Session-agent override (highest priority) — with graceful fallback to global routing
         $requestedProviderId = null;
@@ -73,7 +81,7 @@ class ProviderRouter {
                     'request_payload' => [
                         'routing_mode' => 'session_agent_override',
                         'messages'     => $messages,
-                        'options'      => ['temperature' => null, 'max_tokens' => null, 'stream' => false],
+                        'options'      => ['temperature' => $temperature, 'max_tokens' => null, 'stream' => false],
                         'prompt_size'  => [
                             'message_count'   => count($messages),
                             'character_count' => $this->countChars($messages),
@@ -81,7 +89,7 @@ class ProviderRouter {
                     ],
                 ]);
 
-                $content  = $provider->chat($messages, $model);
+                $content  = $provider->chat($messages, $model, $options);
                 $duration = (int)floor(microtime(true) * 1000) - $start;
 
                 $this->logger->logLlmResponse([
@@ -142,7 +150,7 @@ class ProviderRouter {
                     'routing_mode' => 'explicit',
                     'messages' => $messages,
                     'options' => [
-                        'temperature' => null,
+                        'temperature' => $temperature,
                         'max_tokens' => null,
                         'stream' => false,
                     ],
@@ -153,7 +161,7 @@ class ProviderRouter {
                 ],
             ]);
 
-            $content = $provider->chat($messages, $model);
+            $content = $provider->chat($messages, $model, $options);
             $duration = (int)floor(microtime(true) * 1000) - $start;
 
             $this->logger->logLlmResponse([
@@ -213,7 +221,7 @@ class ProviderRouter {
                         'routing_mode' => $routingMode,
                         'messages' => $messages,
                         'options' => [
-                            'temperature' => null,
+                            'temperature' => $temperature,
                             'max_tokens' => null,
                             'stream' => false,
                         ],
@@ -224,7 +232,7 @@ class ProviderRouter {
                     ],
                 ]);
 
-                $content = $provider->chat($messages, $model);
+                $content = $provider->chat($messages, $model, $options);
                 $duration = (int)floor(microtime(true) * 1000) - $start;
 
                 $this->logger->logLlmResponse([
@@ -293,6 +301,20 @@ class ProviderRouter {
             throw new \RuntimeException('No model configured for this call.');
         }
         return $model;
+    }
+
+    private function normalizeTemperature(mixed $value): ?float {
+        if ($value === null || $value === '') {
+            return null;
+        }
+        if (!is_numeric($value)) {
+            return null;
+        }
+        $n = (float)$value;
+        if (!is_finite($n)) {
+            return null;
+        }
+        return max(0.0, min(2.0, $n));
     }
 
     private function resolveProviderRow(string $id): ?array {

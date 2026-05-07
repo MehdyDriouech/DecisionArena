@@ -48,7 +48,7 @@ function renderContextDocPanel() {
         ${session ? `
           <div style="display:flex;gap:8px;margin-top:14px;">
             <button class="btn btn-secondary btn-sm" data-action="replace-ctx-doc" data-session-id="${escHtml(session.id)}">${t('contextDoc.replace')}</button>
-            <button class="btn btn-danger btn-sm" data-action="delete-ctx-doc" data-session-id="${escHtml(session.id)}">${t('contextDoc.delete')}</button>
+            <button class="btn btn-danger btn-sm" data-ui="expert-only" data-action="delete-ctx-doc" data-session-id="${escHtml(session.id)}">${t('contextDoc.delete')}</button>
           </div>
         ` : ''}
       </div>

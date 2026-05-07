@@ -211,6 +211,18 @@ class DecisionSummaryService {
         $synthOut = $runResult['synthesizer_output'] ?? '';
         $risk     = $runResult['risk_profile'] ?? null;
         $relSum   = $runResult['decision_reliability_summary'] ?? [];
+        $playbookRuntime = $runResult['playbook_runtime'] ?? null;
+        $playbookId = is_array($playbookRuntime) ? ($playbookRuntime['playbook_id'] ?? null) : null;
+        $canonicalSynthesis = is_array($runResult['canonical_synthesis'] ?? null)
+            ? $runResult['canonical_synthesis']
+            : CanonicalSynthesisExtractor::extract((string)$synthOut, is_string($playbookId) ? $playbookId : null);
+        $decisionOutcome = is_array($runResult['decision_outcome'] ?? null)
+            ? $runResult['decision_outcome']
+            : DecisionOutcomeProjector::fromCanonical($canonicalSynthesis, [
+                'playbook_runtime' => is_array($playbookRuntime) ? $playbookRuntime : [],
+                'risk_profile' => is_array($risk) ? $risk : [],
+                'guardrails' => is_array($guardrails) ? $guardrails : [],
+            ]);
 
         $decisionMap = [
             'go'                   => 'GO',
@@ -223,14 +235,40 @@ class DecisionSummaryService {
         ];
         $rawLabel = strtolower($adj['decision_label'] ?? 'no_consensus');
         $decision = $decisionMap[$rawLabel] ?? 'NO_CONSENSUS';
+        if (($decision === 'NO_CONSENSUS' || $decision === 'INSUFFICIENT_CONTEXT') && !empty($canonicalSynthesis['decision'])) {
+            $decision = (string)$canonicalSynthesis['decision'];
+        }
 
         $confidence  = strtoupper($adj['confidence_level'] ?? 'LOW');
+        if ($confidence === 'LOW' && !empty($canonicalSynthesis['confidence'])) {
+            $confidence = (string)$canonicalSynthesis['confidence'];
+        }
         $reliability = $adj['decision_status'] ?? 'FRAGILE';
+        if ($reliability === 'FRAGILE' && !empty($canonicalSynthesis['status'])) {
+            $reliability = (string)$canonicalSynthesis['status'];
+        }
 
-        $why      = $this->parseSynthesizerSection($synthOut, 'Why');
-        $risks    = $this->parseSynthesizerSection($synthOut, 'Main Risks');
-        $nextStep = $this->parseSynthesizerNextStep($synthOut);
-        $validationLogic = $this->parseSynthesizerValidationLogic($synthOut);
+        $why      = is_array($canonicalSynthesis['why'] ?? null) ? $canonicalSynthesis['why'] : [];
+        $risks    = is_array($canonicalSynthesis['risks'] ?? null) ? $canonicalSynthesis['risks'] : [];
+        $nextActions = is_array($canonicalSynthesis['recommended_next_actions'] ?? null) ? $canonicalSynthesis['recommended_next_actions'] : [];
+        $nextStep = $nextActions !== [] ? implode("\n", array_slice($nextActions, 0, 3)) : '';
+        $validationLogic = is_array($canonicalSynthesis['validation_logic'] ?? null)
+            && count(array_filter($canonicalSynthesis['validation_logic'], fn($v) => trim((string)$v) !== '')) > 0
+                ? $canonicalSynthesis['validation_logic']
+                : null;
+
+        if (empty($why)) {
+            $why = $this->parseSynthesizerSection($synthOut, 'Why');
+        }
+        if (empty($risks)) {
+            $risks = $this->parseSynthesizerSection($synthOut, 'Main Risks');
+        }
+        if (empty($nextStep)) {
+            $nextStep = $this->parseSynthesizerNextStep($synthOut);
+        }
+        if ($validationLogic === null) {
+            $validationLogic = $this->parseSynthesizerValidationLogic($synthOut);
+        }
 
         if (empty($why)) {
             $why = array_slice(
@@ -247,6 +285,10 @@ class DecisionSummaryService {
         }
 
         $primaryWarning = $guardrails['warnings'][0] ?? ($runResult['reliability_warnings'][0] ?? '');
+        if (is_array($playbookRuntime) && !empty($playbookRuntime['warnings'])) {
+            $pbText = 'Playbook output completeness warning: ' . implode(', ', array_slice($playbookRuntime['warnings'], 0, 3)) . '.';
+            $primaryWarning = $primaryWarning !== '' ? ($pbText . ' ' . $primaryWarning) : $pbText;
+        }
 
         if (!empty(($runResult['context_quality'] ?? [])['context_truncated'])) {
             $t = 'Context document was truncated for model prompts; treat conclusions as lower confidence.';
@@ -300,7 +342,14 @@ class DecisionSummaryService {
                 'challenged_claims_count' => $evidenceReport['challenged_claims_count'] ?? null,
                 'high_importance_challenged_count' => $evidenceReport['high_importance_challenged_count'] ?? null,
             ] : null,
+            'canonical_synthesis' => $canonicalSynthesis,
+            'parser_diagnostics'  => $canonicalSynthesis['parser_diagnostics'] ?? null,
+            'decision_outcome'    => $decisionOutcome,
         ];
+
+        if (is_array($playbookRuntime)) {
+            $brief['playbook_runtime'] = $playbookRuntime;
+        }
 
         if ($validationLogic !== null) {
             $brief['validation_logic'] = $validationLogic;

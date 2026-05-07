@@ -105,13 +105,14 @@ function applyProductPreset(presetId) {
   DA.store.state.newSession = {
     ...ns,
     productPreset: presetId,
+    selectedPlaybookId: presetId,
     productFamily: def.productFamily,
     selectedIntent: def.productFamily,
     simpleIntent: def.productFamily === 'decide' ? 'decide' : 'test',
     founderInterrogation: presetId === FOUNDER_SPRINT_PRESET_ID
       ? (isFounderInterrogationFilled(existingFi)
         ? existingFi
-        : buildEmptyFounderInterrogation(DA.store.state.uiMode !== 'expert'))
+        : buildEmptyFounderInterrogation(DA.store.state.uiMode === 'basic'))
       : null,
     mode,
     rounds: def.rounds,

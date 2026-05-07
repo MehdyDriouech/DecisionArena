@@ -6,6 +6,8 @@ use Http\Request;
 use Http\Response;
 use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\ContextDocumentRepository;
+use Infrastructure\Persistence\DecisionMemoryRepository;
+use Domain\DecisionMemory\DecisionMemoryContextBuilder;
 use Domain\Orchestration\StressTestRunner;
 use Domain\Orchestration\StructuredRunResult;
 use Domain\Orchestration\PromptBuilder;
@@ -14,11 +16,13 @@ class StressTestController {
     private SessionRepository         $sessionRepo;
     private ContextDocumentRepository $docRepo;
     private StressTestRunner          $runner;
+    private DecisionMemoryRepository  $memoryRepo;
 
     public function __construct() {
         $this->sessionRepo = new SessionRepository();
         $this->docRepo     = new ContextDocumentRepository();
         $this->runner      = new StressTestRunner();
+        $this->memoryRepo  = new DecisionMemoryRepository();
     }
 
     public function run(Request $req): array {
@@ -46,9 +50,29 @@ class StressTestController {
         }
 
         $language   = $session['language'] ?? 'en';
-        $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt(
-            $this->docRepo->findBySession($sessionId)
-        );
+
+        // Controlled Decision Memory reuse (manual, compact, auditable)
+        $selectedMemoryIds = json_decode((string)($session['selected_memory_ids'] ?? '[]'), true);
+        $selectedMemoryIds = is_array($selectedMemoryIds) ? $selectedMemoryIds : [];
+        $reuse = $this->memoryRepo->compactReusableForIds(array_map('strval', $selectedMemoryIds));
+        $injectInfo = null;
+        $rawDoc = $this->docRepo->findBySession($sessionId);
+        if (!empty($reuse['allowed'])) {
+            $built = DecisionMemoryContextBuilder::buildInjectionBlock($reuse['allowed'], (string)$language);
+            $injectInfo = $built;
+            if (!is_array($rawDoc)) {
+                $rawDoc = [
+                    'id' => 'memory-only',
+                    'session_id' => $sessionId,
+                    'title' => 'Memory context',
+                    'source_type' => 'memory',
+                    'content' => '',
+                    'character_count' => 0,
+                ];
+            }
+            $rawDoc['content'] = $built['block'] . "\n\n" . (string)($rawDoc['content'] ?? '');
+        }
+        $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt($rawDoc);
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($session['decision_threshold'] ?? null);
 
         // Feature 3 & 4
@@ -71,6 +95,25 @@ class StressTestController {
             $session['decision_dynamics_preset'] ?? null
         );
 
+        $memoryReuse = [
+            'reuse_mode' => $injectInfo ? 'manual' : null,
+            'selected_memory_ids' => array_values(array_map('strval', $selectedMemoryIds)),
+            'injected_memory_ids' => $injectInfo ? (array)($injectInfo['injected_ids'] ?? []) : [],
+            'blocked' => (array)($reuse['blocked'] ?? []),
+            'truncated' => $injectInfo ? (bool)($injectInfo['truncated'] ?? false) : false,
+            'injected_chars' => $injectInfo ? (int)($injectInfo['chars'] ?? 0) : 0,
+        ];
+        $result['memory_reuse'] = $memoryReuse;
+        if ($injectInfo) {
+            try {
+                $this->sessionRepo->update($sessionId, [
+                    'injected_memory_context' => (string)($injectInfo['block'] ?? ''),
+                    'memory_reuse_mode' => 'manual',
+                    'memory_used_at' => date('c'),
+                ]);
+            } catch (\Throwable $e) {}
+        }
+
         $dynamicsRepo = new \Infrastructure\Persistence\PersonaDecisionDynamicsRepository();
         $agentDecisionDynamics = $dynamicsRepo->transparencyForAgents(
             $selectedAgents,
@@ -90,6 +133,9 @@ class StressTestController {
                 JSON_UNESCAPED_UNICODE
             ),
         ]);
+
+        // Decision Memory v1 — persist only if memory-safe.
+        try { $this->memoryRepo->persistIfSafe($result, $sessionId); } catch (\Throwable $e) {}
 
         return [
             'session_id'   => $sessionId,
@@ -115,6 +161,9 @@ class StressTestController {
             'guardrails' => $result['guardrails'] ?? null,
             'decision_quality_score' => $result['decision_quality_score'] ?? null,
             'decision_brief' => $result['decision_brief'] ?? null,
+            'canonical_synthesis' => $result['canonical_synthesis'] ?? null,
+            'decision_outcome' => $result['decision_outcome'] ?? null,
+            'playbook_runtime' => $result['playbook_runtime'] ?? null,
             'agent_decision_dynamics' => $agentDecisionDynamics,
         ];
     }

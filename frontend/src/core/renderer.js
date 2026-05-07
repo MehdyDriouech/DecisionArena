@@ -1,5 +1,6 @@
 /* Renderer — manages DOM updates for sidebar and main content */
 import { normalizeUiMode } from './store.js';
+import { renderPendingConfirmation } from '../ui/components.js';
 
 function t(key) {
   return window.i18n?.t(key) ?? key;
@@ -16,11 +17,13 @@ function renderSidebar() {
   const nav = [
     { id: 'launch-assistant', icon: '🚀', label: t('dashboard.launchAssistant') },
     { id: 'dashboard',        icon: '🏠', label: t('nav.dashboard') },
+    { id: 'strategic-contexts', icon: '🧭', label: t('nav.contexts') },
+    { id: 'decision-memory',  icon: '🗂️', label: t('nav.decisionMemory') },
     { id: 'administration',   icon: '⚙️', label: t('nav.admin') },
   ];
 
   const adminViews   = ['personas', 'persona-builder', 'persona-maker', 'providers', 'souls', 'templates', 'template-maker', 'scenario-packs', 'logs', 'retrospective'];
-  const featureViews = ['launch-assistant', 'session-comparisons', 'session-comparison'];
+  const featureViews = ['launch-assistant', 'session-comparisons', 'session-comparison', 'decision-memory', 'strategic-contexts'];
   const isAdminSubView = adminViews.includes(state.view);
 
   const sidebar = document.getElementById('sidebar');
@@ -50,7 +53,7 @@ function renderSidebar() {
     <div class="sidebar-ui-mode">
       <div class="sidebar-ui-mode-label">${t('ui.mode.label')}</div>
       <div class="sidebar-ui-mode-buttons">
-        <button type="button" class="language-option ${state.uiMode !== 'expert' ? 'active' : ''}" data-action="set-ui-mode" data-ui-mode="simple">${t('ui.mode.simple')}</button>
+        <button type="button" class="language-option ${state.uiMode !== 'expert' ? 'active' : ''}" data-action="set-ui-mode" data-ui-mode="basic">${t('ui.mode.basic')}</button>
         <button type="button" class="language-option ${state.uiMode === 'expert' ? 'active' : ''}" data-action="set-ui-mode" data-ui-mode="expert">${t('ui.mode.expert')}</button>
       </div>
     </div>
@@ -90,6 +93,10 @@ function renderMain() {
 
   const views  = window.DecisionArena.views || {};
   const viewFn = views[state.view] || views.dashboard;
+  const confirmationOverlay = renderPendingConfirmation(state.pendingConfirmation, {
+    modalOnly: true,
+    uiMode: state.uiMode,
+  });
 
   if (!viewFn) {
     main.innerHTML = errorBanner + `<div class="view-container"><p>View "${escHtml(state.view)}" not found.</p></div>`;
@@ -100,9 +107,9 @@ function renderMain() {
   const plainViews      = ['persona-builder', 'persona-maker', 'session-history', 'template-maker', 'launch-assistant', 'session-comparisons', 'session-comparison'];
 
   if (fullHeightViews.includes(state.view) || plainViews.includes(state.view)) {
-    main.innerHTML = errorBanner + viewFn();
+    main.innerHTML = errorBanner + viewFn() + confirmationOverlay;
   } else {
-    main.innerHTML = `<div class="view-container">${errorBanner}${viewFn()}</div>`;
+    main.innerHTML = `<div class="view-container">${errorBanner}${viewFn()}</div>${confirmationOverlay}`;
   }
 
   main.dataset.renderedView = state.view;
@@ -120,18 +127,19 @@ function renderMain() {
 function applyUiModeVisibility(mode) {
   const normalized = normalizeUiMode(mode);
 
-  document.body.classList.toggle('ui-simple', normalized === 'simple');
+  document.body.classList.toggle('ui-basic', normalized === 'basic');
+  // Back-compat: older builds used "ui-simple". Ensure it never remains stuck.
+  document.body.classList.toggle('ui-simple', false);
   document.body.classList.toggle('ui-expert', normalized === 'expert');
 
-  // Legacy compatibility: old "advanced" blocks are intentionally treated
-  // as expert-only in this two-level migration lot.
   document.querySelectorAll('[data-complexity]').forEach((el) => {
     el.style.display = normalized === 'expert' ? '' : 'none';
   });
 
   document.querySelectorAll('[data-ui-min]').forEach((el) => {
     const min = el.dataset.uiMin;
-    el.style.display = (normalized === 'expert' || min === 'simple') ? '' : 'none';
+    // Legacy: some markup may still use data-ui-min="simple".
+    el.style.display = (normalized === 'expert' || min === 'basic' || min === 'simple') ? '' : 'none';
   });
 }
 
@@ -143,7 +151,7 @@ function render() {
   renderSidebar();
   renderMain();
   try {
-    const mode = window.DecisionArena.store.state.uiMode || 'simple';
+    const mode = window.DecisionArena.store.state.uiMode || 'basic';
     applyUiModeVisibility(mode);
   } catch (_) {}
 }

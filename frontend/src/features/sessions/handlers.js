@@ -6,6 +6,7 @@ import {
 } from '../../utils/quickDecisionHydrate.js';
 import { applyIntentPreset } from '../../utils/intentPresets.js';
 import { applyAnalysisFamily } from '../newSession/analysisCatalog.js';
+import { isConfirmationConfirmed, requestConfirmation, uiCopy } from '../../utils/confirmationUi.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -143,6 +144,7 @@ function registerSessionsHandlers() {
           guardrails:          data.guardrails          || null,
           decision_quality_score: data.decision_quality_score ?? null,
           decision_brief:       data.decision_brief ?? null,
+          decision_outcome:     data.decision_outcome ?? data.decision_brief?.decision_outcome ?? null,
           premortem_summary:   data.premortem_summary ?? null,
           jury_adversarial:    data.jury_adversarial || null,
         };
@@ -167,6 +169,7 @@ function registerSessionsHandlers() {
             state.sessionHistory.reliability_warnings = ds?.reliability_warnings ?? state.sessionHistory.reliability_warnings;
             state.sessionHistory.decision_reliability_summary = ds?.decision_reliability_summary ?? state.sessionHistory.decision_reliability_summary;
             state.sessionHistory.context_clarification = ds?.context_clarification ?? state.sessionHistory.context_clarification;
+            state.sessionHistory.decision_outcome = ds?.decision_outcome ?? state.sessionHistory.decision_outcome;
           }
         } catch (_) {
           if (state.sessionHistory) {
@@ -183,11 +186,31 @@ function registerSessionsHandlers() {
     }
   });
 
-  registerAction('delete-session', async ({ element }) => {
+  registerAction('delete-session', async (ctx = {}) => {
+    const { element } = ctx;
     const { state, render, SessionService, t } = getCtx();
+    if (state.uiMode !== 'expert') {
+      state.error = 'Expert mode required.';
+      render();
+      return;
+    }
     const sessionId    = element.dataset.sessionId;
     const sessionTitle = element.dataset.sessionTitle || '';
-    if (!window.confirm(`${t('sessions.confirmDelete')} "${sessionTitle}" ?`)) return;
+    if (!isConfirmationConfirmed(ctx)) {
+      requestConfirmation(state, {
+        id: `delete-session:${sessionId}`,
+        mode: 'modal',
+        tone: 'danger',
+        title: `${t('sessions.confirmDelete')} "${sessionTitle}" ?`,
+        body: uiCopy('Cette session sera retirée de l’historique.', 'This session will be removed from history.'),
+        expertBody: uiCopy('Les vues liées devront être rechargées si cette session était ouverte.', 'Linked views will need to be reloaded if this session was open.'),
+        confirmLabel: uiCopy('Supprimer la session', 'Delete session'),
+        action: 'delete-session',
+        payload: { sessionId, sessionTitle },
+      });
+      render();
+      return;
+    }
     try {
       await SessionService.remove(sessionId);
       state.sessions = state.sessions.filter((s) => s.id !== sessionId);
@@ -199,10 +222,27 @@ function registerSessionsHandlers() {
     }
   });
 
-  registerAction('delete-all-sessions', async () => {
+  registerAction('delete-all-sessions', async (ctx = {}) => {
     const { state, render, apiFetch, t } = getCtx();
-    const answer = window.prompt(t('sessions.confirmDeleteAll'));
-    if (answer !== 'DELETE') return;
+    if (state.uiMode !== 'expert') {
+      state.error = 'Expert mode required.';
+      render();
+      return;
+    }
+    if (!isConfirmationConfirmed(ctx)) {
+      requestConfirmation(state, {
+        id: 'delete-all-sessions',
+        mode: 'modal',
+        tone: 'danger',
+        title: t('sessions.confirmDeleteAll'),
+        body: uiCopy('Toutes les sessions de l’historique seront supprimées.', 'All sessions in history will be deleted.'),
+        expertBody: uiCopy('Cette action vide aussi la session courante côté UI.', 'This also clears the current session in the UI.'),
+        confirmLabel: uiCopy('Supprimer toutes les sessions', 'Delete all sessions'),
+        action: 'delete-all-sessions',
+      });
+      render();
+      return;
+    }
     try {
       await apiFetch('/api/sessions/delete-all', { method: 'POST' });
       state.sessions      = [];
@@ -220,6 +260,11 @@ function registerSessionsHandlers() {
     const sessionId = element.dataset.sessionId;
     const format    = element.dataset.format || 'markdown';
     const redacted  = element.dataset.redacted || '';
+    if (format === 'json' && state.uiMode !== 'expert') {
+      state.error = 'Expert mode required.';
+      render();
+      return;
+    }
     try {
       let url = `/api/sessions/${sessionId}/export?format=${format}`;
       if (redacted) url += `&redacted=${redacted}`;

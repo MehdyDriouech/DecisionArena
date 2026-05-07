@@ -328,9 +328,9 @@ function renderAdministrationExpert(t, escHtml, state, pageTitle) {
       ${renderAdminCardGrid(ADMIN_RUN_ANALYZE_ITEMS, t, escHtml, ' admin-card-grid--hub-expert')}`,
     expertOnly: false,
   });
-  const advancedBlock = renderAdminIntentBlock(t, escHtml, {
-    blockId: 'advanced',
-    titleKey: 'admin.block.advanced',
+  const expertToolsBlock = renderAdminIntentBlock(t, escHtml, {
+    blockId: 'expert-tools',
+    titleKey: 'admin.block.expertTools',
     icon: '🔬',
     innerHtml: renderAdminCardGrid(ADMIN_ADVANCED_ITEMS, t, escHtml, ' admin-card-grid--hub-expert'),
     expertOnly: true,
@@ -345,14 +345,14 @@ function renderAdministrationExpert(t, escHtml, state, pageTitle) {
       ${setupBlock}
       ${buildBlock}
       ${runBlock}
-      ${advancedBlock}
+      ${expertToolsBlock}
     </div>
   `;
 }
 
 function renderAdministration() {
   const { state, t, escHtml } = getCtx();
-  const isSimple = state.uiMode !== 'expert';
+  const isSimple = state.uiMode === 'basic';
   const pageTitle = isSimple
     ? (t('admin.home.titleSimple') !== 'admin.home.titleSimple' ? t('admin.home.titleSimple') : 'Configuration')
     : t('admin.title');
@@ -461,6 +461,164 @@ function renderDecisionDynamicsPresetAdminReference() {
 
 /* ── Personas ── */
 
+function getPersonaSandboxState(state) {
+  if (!state.personaSandbox) {
+    state.personaSandbox = {
+      prompt: '',
+      personaId: '',
+      providerId: '',
+      model: '',
+      temperature: '',
+      compareMode: 'single',
+      comparePersonaIds: [],
+      compareProviderIds: [],
+      compareModelsText: '',
+      loading: false,
+      error: null,
+      results: [],
+    };
+  }
+  return state.personaSandbox;
+}
+
+function renderSandboxChecklist(items, selectedIds, listName, escHtml) {
+  const selected = new Set(selectedIds || []);
+  return `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;">
+      ${items.map((item) => {
+        const id = String(item.id || '');
+        const label = item.label || item.name || id;
+        return `
+          <label class="mode-check-label" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:8px;padding:8px 10px;">
+            <input type="checkbox" data-ps-list="${escHtml(listName)}" value="${escHtml(id)}" ${selected.has(id) ? 'checked' : ''} style="accent-color:var(--accent);">
+            <span>${escHtml(label)}</span>
+          </label>`;
+      }).join('')}
+    </div>`;
+}
+
+function renderPersonaSandboxResults(results, escHtml) {
+  if (!Array.isArray(results) || results.length === 0) {
+    return '';
+  }
+  return `
+    <div style="margin-top:16px;display:grid;gap:12px;">
+      ${results.map((run) => {
+        const diagnostics = run.diagnostics || {};
+        const parser = diagnostics.parser_diagnostics || null;
+        const confidence = typeof parser?.parser_confidence === 'number'
+          ? `${Math.round(parser.parser_confidence * 100)}%`
+          : 'n/a';
+        const diagJson = JSON.stringify(diagnostics, null, 2);
+        const statusCls = run.error ? 'fail' : 'ok';
+        const statusText = run.error ? run.error : `${run.duration_ms || 0} ms`;
+        return `
+          <div class="card" style="padding:14px;border-radius:8px;">
+            <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
+              <div>
+                <div style="font-weight:700;color:var(--text-primary);">${escHtml(run.persona_name || run.persona_id || 'Persona')}</div>
+                <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">
+                  ${escHtml(run.provider_name || run.provider_id || 'Auto routing')} - ${escHtml(run.model || 'model default')} - parser ${escHtml(confidence)}
+                </div>
+              </div>
+              <span class="provider-test-result ${statusCls}" style="margin-top:0;">${escHtml(statusText)}</span>
+            </div>
+            <div style="margin-top:12px;">
+              <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:6px;">Reponse brute</div>
+              <pre class="code-preview" style="max-height:320px;margin:0;">${escHtml(run.raw_response || '')}</pre>
+            </div>
+            <details style="margin-top:10px;">
+              <summary style="cursor:pointer;font-size:12px;color:var(--text-muted);font-weight:600;">Prompt systeme</summary>
+              <pre class="code-preview" style="max-height:260px;margin-top:8px;">${escHtml(run.system_prompt || '')}</pre>
+            </details>
+            <details style="margin-top:8px;">
+              <summary style="cursor:pointer;font-size:12px;color:var(--text-muted);font-weight:600;">Diagnostics runtime</summary>
+              <pre class="code-preview" style="max-height:260px;margin-top:8px;">${escHtml(diagJson)}</pre>
+            </details>
+          </div>`;
+      }).join('')}
+    </div>`;
+}
+
+function renderPersonaSandboxPanel() {
+  const { state, escHtml } = getCtx();
+  const personas = state.personas || [];
+  const providers = getAvailableProviders(state);
+  const sb = getPersonaSandboxState(state);
+  const selectedPersonaId = sb.personaId || personas[0]?.id || '';
+  const selectedProviderId = sb.providerId || '';
+  const selectedPersonaIds = Array.isArray(sb.comparePersonaIds) && sb.comparePersonaIds.length
+    ? sb.comparePersonaIds
+    : personas.slice(0, 2).map((p) => p.id);
+  const selectedProviderIds = Array.isArray(sb.compareProviderIds) && sb.compareProviderIds.length
+    ? sb.compareProviderIds
+    : providers.slice(0, 2).map((p) => p.id);
+  const providerOptions = providers.map((p) => `
+    <option value="${escHtml(p.id)}" ${selectedProviderId === p.id ? 'selected' : ''}>${escHtml(formatRoutingOptionLabel(p))}</option>
+  `).join('');
+  const personaOptions = personas.map((p) => `
+    <option value="${escHtml(p.id)}" ${selectedPersonaId === p.id ? 'selected' : ''}>${escHtml(p.name || p.id)}</option>
+  `).join('');
+  const compareMode = sb.compareMode || 'single';
+  const compareControls = compareMode === 'persona'
+    ? `<div class="form-group" style="grid-column:1/-1;"><label>Personas a comparer</label>${renderSandboxChecklist(personas, selectedPersonaIds, 'comparePersonaIds', escHtml)}</div>`
+    : compareMode === 'provider'
+      ? `<div class="form-group" style="grid-column:1/-1;"><label>Providers a comparer</label>${renderSandboxChecklist(providers, selectedProviderIds, 'compareProviderIds', escHtml)}</div>`
+      : compareMode === 'model'
+        ? `<div class="form-group" style="grid-column:1/-1;"><label>Modeles a comparer</label><textarea class="input" rows="3" data-ps-field="compareModelsText" placeholder="qwen2.5:7b&#10;qwen2.5:14b">${escHtml(sb.compareModelsText || '')}</textarea><div class="card-description" style="font-size:12px;margin-top:6px;">Un modele par ligne, ou separe par virgules.</div></div>`
+        : '';
+
+  return `
+    <div class="card persona-sandbox-card" style="padding:18px;margin-bottom:20px;border-radius:8px;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
+        <div>
+          <div style="font-weight:800;font-size:16px;color:var(--text-primary);">Test Persona</div>
+          <div class="card-description" style="font-size:12px;margin-top:4px;">Sandbox local pour tuner une persona, comparer providers/modeles, et inspecter prompt + sortie brute.</div>
+        </div>
+        <button class="btn btn-primary btn-sm" data-action="run-persona-sandbox" ${sb.loading ? 'disabled' : ''}>
+          ${sb.loading ? '<span class="spinner"></span> Test en cours...' : 'Run test'}
+        </button>
+      </div>
+      <div class="form-group">
+        <label>Prompt utilisateur</label>
+        <textarea class="input" rows="4" data-ps-field="prompt" placeholder="Ex: Challenge cette idee de go-to-market en 5 points concrets.">${escHtml(sb.prompt || '')}</textarea>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;">
+        <div class="form-group">
+          <label>Persona</label>
+          <select class="input" data-ps-field="personaId">${personaOptions}</select>
+        </div>
+        <div class="form-group">
+          <label>Provider</label>
+          <select class="input" data-ps-field="providerId">
+            <option value="" ${selectedProviderId === '' ? 'selected' : ''}>Auto / routage global</option>
+            ${providerOptions}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Modele</label>
+          <input class="input" data-ps-field="model" value="${escHtml(sb.model || '')}" placeholder="default ou nom exact">
+        </div>
+        <div class="form-group">
+          <label>Temperature optionnelle</label>
+          <input class="input" data-ps-field="temperature" type="number" min="0" max="2" step="0.1" value="${escHtml(sb.temperature || '')}" placeholder="ex: 0.4">
+        </div>
+        <div class="form-group">
+          <label>Comparaison</label>
+          <select class="input" data-ps-field="compareMode">
+            <option value="single" ${compareMode === 'single' ? 'selected' : ''}>Single run</option>
+            <option value="persona" ${compareMode === 'persona' ? 'selected' : ''}>Persona vs persona</option>
+            <option value="model" ${compareMode === 'model' ? 'selected' : ''}>Modele vs modele</option>
+            <option value="provider" ${compareMode === 'provider' ? 'selected' : ''}>Provider vs provider</option>
+          </select>
+        </div>
+        ${compareControls}
+      </div>
+      ${sb.error ? `<div class="provider-test-result fail">${escHtml(sb.error)}</div>` : ''}
+      ${renderPersonaSandboxResults(sb.results, escHtml)}
+    </div>`;
+}
+
 function renderPersonas() {
   const { state, escHtml, t } = getCtx();
   const personas  = state.personas;
@@ -473,6 +631,7 @@ function renderPersonas() {
       <div class="card-description" style="margin-top:6px;">${t('admin.personas.page.desc')}</div>
       <button class="btn btn-secondary btn-sm" style="margin-top:8px;" data-nav="administration">${t('nav.backAdmin')}</button>
     </div>
+    ${renderPersonaSandboxPanel()}
     ${renderDynamicsRecoAdminPanel()}
     ${renderDecisionDynamicsPresetAdminReference()}
     ${personas.length === 0 ? `<div class="loading-state"><span class="spinner"></span> ${t('personas.loading')}</div>` : `

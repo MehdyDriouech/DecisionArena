@@ -3,7 +3,9 @@ import { registerAction, registerChangeListener, registerInputListener, register
 import { normalizeDecisionDynamics } from '../../utils/decisionDynamics.js';
 import { updateProviderSettings, deleteProviderKey, maskProviderKey } from '../../core/store.js';
 import { withProviderRuntime } from '../../core/providerRuntime.js';
+import { getAvailableProviders } from '../../core/providerRouting.js';
 import { testProviderConnection } from '../../services/providerService.js';
+import { isConfirmationConfirmed, requestConfirmation, uiCopy } from '../../utils/confirmationUi.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -235,6 +237,80 @@ function sortedLocalServerProviders(providerList) {
 }
 
 /** Injecte `renderProviderForm` dans le modal « Provider local ». */
+function ensurePersonaSandboxState(state) {
+  if (!state.personaSandbox) {
+    state.personaSandbox = {
+      prompt: '',
+      personaId: '',
+      providerId: '',
+      model: '',
+      temperature: '',
+      compareMode: 'single',
+      comparePersonaIds: [],
+      compareProviderIds: [],
+      compareModelsText: '',
+      loading: false,
+      error: null,
+      results: [],
+    };
+  }
+  return state.personaSandbox;
+}
+
+function syncPersonaSandboxFromDom(state) {
+  const sb = ensurePersonaSandboxState(state);
+  document.querySelectorAll('[data-ps-field]').forEach((el) => {
+    const field = el.dataset.psField;
+    if (!field) return;
+    sb[field] = el.type === 'checkbox' ? el.checked : el.value;
+  });
+  for (const listName of ['comparePersonaIds', 'compareProviderIds']) {
+    sb[listName] = Array.from(document.querySelectorAll(`[data-ps-list="${listName}"]`))
+      .filter((el) => el.checked)
+      .map((el) => el.value)
+      .filter(Boolean);
+  }
+  return sb;
+}
+
+function splitSandboxModels(raw) {
+  return String(raw || '')
+    .split(/[\n,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 6);
+}
+
+function buildPersonaSandboxRuns(state) {
+  const sb = syncPersonaSandboxFromDom(state);
+  const personas = state.personas || [];
+  const providers = getAvailableProviders(state);
+  const basePersonaId = sb.personaId || personas[0]?.id || '';
+  const baseProviderId = sb.providerId || '';
+  const baseModel = String(sb.model || '').trim();
+  const temperature = String(sb.temperature || '').trim();
+  const base = {
+    persona_id: basePersonaId,
+    provider_id: baseProviderId || null,
+    model: baseModel || null,
+    temperature: temperature || null,
+  };
+
+  if (sb.compareMode === 'persona') {
+    const ids = (sb.comparePersonaIds?.length ? sb.comparePersonaIds : personas.slice(0, 2).map((p) => p.id)).slice(0, 6);
+    return ids.map((personaId) => ({ ...base, persona_id: personaId }));
+  }
+  if (sb.compareMode === 'provider') {
+    const ids = (sb.compareProviderIds?.length ? sb.compareProviderIds : providers.slice(0, 2).map((p) => p.id)).slice(0, 6);
+    return ids.map((providerId) => ({ ...base, provider_id: providerId }));
+  }
+  if (sb.compareMode === 'model') {
+    const models = splitSandboxModels(sb.compareModelsText || baseModel);
+    return (models.length ? models : [baseModel]).filter(Boolean).slice(0, 6).map((model) => ({ ...base, model }));
+  }
+  return [base];
+}
+
 function mountLocalServerProviderIntoModal(provider) {
   const renderFn = window.DecisionArena.views.shared?.renderProviderForm;
   const host = document.getElementById('provider-local-modal-form-host');
@@ -264,6 +340,47 @@ function registerAdminHandlers() {
   registerAction('show-persona', ({ element }) => {
     const fn = getViews().showPersonaModal;
     if (fn) fn(element.dataset.personaId);
+  });
+
+  registerAction('run-persona-sandbox', async () => {
+    const { state, render, apiFetch } = getCtx();
+    const sb = syncPersonaSandboxFromDom(state);
+    const prompt = String(sb.prompt || '').trim();
+    const runs = buildPersonaSandboxRuns(state);
+    if (!prompt) {
+      sb.error = 'Prompt utilisateur requis.';
+      sb.results = [];
+      render();
+      return;
+    }
+    if (!runs.length || !runs[0]?.persona_id) {
+      sb.error = 'Selectionnez au moins une persona.';
+      sb.results = [];
+      render();
+      return;
+    }
+    sb.loading = true;
+    sb.error = null;
+    sb.results = [];
+    render();
+    try {
+      const result = await apiFetch('/api/personas/sandbox-test', {
+        method: 'POST',
+        body: JSON.stringify(withProviderRuntime({
+          prompt,
+          language: state.newSession?.language || 'fr',
+          runs,
+        })),
+      });
+      sb.results = Array.isArray(result.runs) ? result.runs : [];
+      sb.error = result.error ? (result.message || 'Sandbox request failed.') : null;
+    } catch (err) {
+      sb.error = err.message || 'Sandbox request failed.';
+      sb.results = [];
+    } finally {
+      sb.loading = false;
+      render();
+    }
   });
 
   registerAction('save-persona-modes', async ({ element }) => {
@@ -517,11 +634,26 @@ function registerAdminHandlers() {
     render();
   });
 
-  registerAction('delete-provider', async ({ element }) => {
+  registerAction('delete-provider', async (ctx = {}) => {
+    const { element } = ctx;
     const { state, render, apiFetch, t } = getCtx();
     const providerId = element.dataset.providerId;
     if (!providerId) return;
-    if (!confirm(t('providers.confirmDelete'))) return;
+    if (!isConfirmationConfirmed(ctx)) {
+      requestConfirmation(state, {
+        id: `delete-provider:${providerId}`,
+        mode: 'modal',
+        tone: 'danger',
+        title: t('providers.confirmDelete'),
+        body: uiCopy('Ce provider ne sera plus disponible pour les nouveaux runs.', 'This provider will no longer be available for new runs.'),
+        expertBody: uiCopy('Les sessions déjà enregistrées ne sont pas supprimées.', 'Already saved sessions are not deleted.'),
+        confirmLabel: uiCopy('Supprimer le provider', 'Delete provider'),
+        action: 'delete-provider',
+        payload: { providerId },
+      });
+      render();
+      return;
+    }
     try {
       await apiFetch(`/api/providers/${providerId}`, { method: 'DELETE' });
       state.providers = state.providers.filter((p) => p.id !== providerId);
@@ -876,9 +1008,22 @@ function registerAdminHandlers() {
     try { await navigator.clipboard.writeText(String(text)); } catch (_) {}
   });
 
-  registerAction('logs-delete-old', async () => {
+  registerAction('logs-delete-old', async (ctx = {}) => {
     const { state, render, apiFetch, t } = getCtx();
-    if (!confirm(t('logs.confirmDeleteOld'))) return;
+    if (!isConfirmationConfirmed(ctx)) {
+      requestConfirmation(state, {
+        id: 'logs-delete-old',
+        mode: 'modal',
+        tone: 'warning',
+        title: t('logs.confirmDeleteOld'),
+        body: uiCopy('Les logs récents restent disponibles.', 'Recent logs remain available.'),
+        expertBody: uiCopy('Suppression par filtre older_than_days=7.', 'Deletion uses older_than_days=7.'),
+        confirmLabel: uiCopy('Nettoyer les anciens logs', 'Clean old logs'),
+        action: 'logs-delete-old',
+      });
+      render();
+      return;
+    }
     state.logs.maintenanceStatus = t('logs.deleting');
     render();
     try {
@@ -890,10 +1035,22 @@ function registerAdminHandlers() {
     render();
   });
 
-  registerAction('logs-delete-all', async () => {
+  registerAction('logs-delete-all', async (ctx = {}) => {
     const { state, render, apiFetch, t } = getCtx();
-    const conf = prompt(t('logs.confirmDeleteAllPrompt'), '');
-    if (conf !== 'DELETE') return;
+    if (!isConfirmationConfirmed(ctx)) {
+      requestConfirmation(state, {
+        id: 'logs-delete-all',
+        mode: 'modal',
+        tone: 'danger',
+        title: t('logs.confirmDeleteAllPrompt'),
+        body: uiCopy('Tous les logs visibles seront supprimés.', 'All visible logs will be deleted.'),
+        expertBody: uiCopy('Envoie confirm=DELETE à /api/logs.', 'Sends confirm=DELETE to /api/logs.'),
+        confirmLabel: uiCopy('Supprimer les logs', 'Delete logs'),
+        action: 'logs-delete-all',
+      });
+      render();
+      return;
+    }
     state.logs.maintenanceStatus = t('logs.deleting');
     render();
     try {
@@ -992,11 +1149,26 @@ function registerAdminHandlers() {
     }
   });
 
-  registerAction('delete-template', async ({ element }) => {
+  registerAction('delete-template', async (ctx = {}) => {
+    const { element } = ctx;
     const { state, render, apiFetch, t } = getCtx();
     const templateId = element.dataset.templateId;
     const name       = element.dataset.templateName || '';
-    if (!window.confirm(`${t('template.confirmDelete')} "${name}" ?`)) return;
+    if (!isConfirmationConfirmed(ctx)) {
+      requestConfirmation(state, {
+        id: `delete-template:${templateId}`,
+        mode: 'modal',
+        tone: 'danger',
+        title: `${t('template.confirmDelete')} "${name}" ?`,
+        body: uiCopy('Ce modèle ne sera plus proposé pour démarrer une session.', 'This template will no longer be offered to start a session.'),
+        expertBody: uiCopy('Les sessions déjà créées depuis ce template restent conservées.', 'Sessions already created from this template remain saved.'),
+        confirmLabel: uiCopy('Supprimer le template', 'Delete template'),
+        action: 'delete-template',
+        payload: { templateId, templateName: name },
+      });
+      render();
+      return;
+    }
     try {
       await apiFetch(`/api/templates/${templateId}`, { method: 'DELETE' });
       state.templates = state.templates.filter((tmpl) => tmpl.id !== templateId);
@@ -1099,6 +1271,27 @@ function registerAdminHandlers() {
   });
   /* ── Provider form submit ─────────────────────────────────────────────── */
   registerSubmit('provider-form', () => doSaveProvider());
+
+  registerInputListener((e) => {
+    if (!e.target.dataset.psField) return false;
+    const { state } = getCtx();
+    const sb = ensurePersonaSandboxState(state);
+    sb[e.target.dataset.psField] = e.target.value;
+    if (sb.error) sb.error = null;
+    return true;
+  });
+
+  registerChangeListener((e) => {
+    const { state, render } = getCtx();
+    if (e.target.dataset.psField || e.target.dataset.psList) {
+      syncPersonaSandboxFromDom(state);
+      if (e.target.dataset.psField === 'compareMode') {
+        render();
+      }
+      return true;
+    }
+    return false;
+  });
 
   registerInputListener((e) => {
     const el = e.target.closest('[data-action="provider-key-input"]');
@@ -1504,12 +1697,27 @@ function registerScenarioPackAdminHandlers() {
     render();
   });
 
-  registerAction('delete-scenario-pack', async ({ element }) => {
+  registerAction('delete-scenario-pack', async (ctx = {}) => {
+    const { element } = ctx;
     const { state, render, ScenarioPackService, t } = spCtx();
     const packId   = element?.dataset?.scenarioId;
     const packName = element?.dataset?.scenarioName || packId;
     if (!packId) return;
-    if (!window.confirm(`${t('scenario.admin.delete')} "${packName}" ?`)) return;
+    if (!isConfirmationConfirmed(ctx)) {
+      requestConfirmation(state, {
+        id: `delete-scenario-pack:${packId}`,
+        mode: 'modal',
+        tone: 'danger',
+        title: `${t('scenario.admin.delete')} "${packName}" ?`,
+        body: uiCopy('Ce pack ne sera plus disponible dans les scénarios.', 'This pack will no longer be available in scenarios.'),
+        expertBody: uiCopy('Les sessions existantes ne sont pas modifiées.', 'Existing sessions are not modified.'),
+        confirmLabel: uiCopy('Supprimer le scénario', 'Delete scenario'),
+        action: 'delete-scenario-pack',
+        payload: { scenarioId: packId, scenarioName: packName },
+      });
+      render();
+      return;
+    }
     try {
       await ScenarioPackService.remove(packId);
       await reloadPacks(state, ScenarioPackService);
@@ -1612,7 +1820,8 @@ function registerPromptPolicyHandlers() {
   });
 
   // Select a policy from the sidebar
-  registerAction('policy-select', async ({ element }) => {
+  registerAction('policy-select', async (ctx = {}) => {
+    const { element } = ctx;
     const { state, render, t } = getCtx();
     const id = element?.dataset?.policyId;
     if (!id) return;
@@ -1622,7 +1831,21 @@ function registerPromptPolicyHandlers() {
 
     // Warn if unsaved changes
     if (ps.draft !== null && ps.draft !== undefined && ps.activeId && ps.activeId !== id) {
-      if (!window.confirm(t('admin.promptPolicies.confirmDiscard'))) return;
+      if (!isConfirmationConfirmed(ctx)) {
+        requestConfirmation(state, {
+          id: `policy-discard:${id}`,
+          mode: 'modal',
+          tone: 'warning',
+          title: uiCopy('Abandonner les modifications ?', 'Discard changes?'),
+          body: t('admin.promptPolicies.confirmDiscard'),
+          expertBody: uiCopy('La policy chargée change, le brouillon local est abandonné.', 'The loaded policy changes, and the local draft is discarded.'),
+          confirmLabel: uiCopy('Changer de policy', 'Switch policy'),
+          action: 'policy-select',
+          payload: { policyId: id },
+        });
+        render();
+        return;
+      }
     }
 
     state.promptPolicies = { ...ps, loadingId: id, error: null };

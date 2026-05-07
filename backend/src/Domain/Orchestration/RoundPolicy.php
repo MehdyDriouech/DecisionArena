@@ -31,11 +31,11 @@ class RoundPolicy {
 
     public function getRoundTypeDirective(string $roundType, bool $forceStrongContradiction = false): string {
         $directive = match ($roundType) {
-            self::ROUND_OPENING => 'Opening: State your independent view, key assumptions and main risks.',
-            self::ROUND_CHALLENGE => 'Challenge: Directly challenge the weakest assumption from another agent (evidence-backed). Name the reasoning you contest.',
-            self::ROUND_ALLIANCE => 'Alliance: Identify one agent whose reasoning partially matches yours and explain the shared inference chain.',
-            self::ROUND_DEFENSE => 'Defense: Defend your position against the strongest opposing argument surfaced so far.',
-            self::ROUND_SYNTHESIS => 'Synthesis posture: Clarify whether your position changed and why (what evidence or argument moved you).',
+            self::ROUND_OPENING => 'Opening: State your independent view, key assumptions, strongest trade-off, and one critical unknown.',
+            self::ROUND_CHALLENGE => 'Challenge: Directly challenge the weakest decision-relevant assumption from another agent. Name the claim, missing support, and test that would resolve it.',
+            self::ROUND_ALLIANCE => 'Alliance: Identify one agent whose reasoning partially matches yours, then add a limit, caveat, or decision condition.',
+            self::ROUND_DEFENSE => 'Defense: Defend or revise your position against the strongest opposing argument. Concede what is valid.',
+            self::ROUND_SYNTHESIS => 'Synthesis posture: Clarify what changed, what remains unknown, and the decision implication.',
             default => '',
         };
         $suffix = '';

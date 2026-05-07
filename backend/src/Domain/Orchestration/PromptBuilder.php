@@ -16,6 +16,7 @@ class PromptBuilder {
     private string $storageDir;
     private MarkdownFileLoader $loader;
     private Logger $logger;
+    private PlaybookRuntime $playbookRuntime;
 
     /** @var array<string, mixed> Metadata from last buildContextDocumentContent FTS step (merged into prompt logs). */
     private array $lastRetrievalLogMeta = [];
@@ -29,6 +30,7 @@ class PromptBuilder {
         $this->storageDir = __DIR__ . '/../../../storage';
         $this->loader     = new MarkdownFileLoader($this->storageDir);
         $this->logger     = new Logger();
+        $this->playbookRuntime = new PlaybookRuntime();
     }
 
     /**
@@ -79,6 +81,13 @@ class PromptBuilder {
 ---
 ## Evidence discipline (shared context)
 
+Use an evidence-first posture without becoming bureaucratic:
+
+- distinguish facts, assumptions, signals, intuitions, and unknowns when it matters
+- name critical unknowns that could change the decision
+- challenge weak evidence and overconfident claims
+- keep the answer natural; do not turn every response into a form
+
 If a claim is not supported by the **Shared Context Document** in this task:
 
 - explicitly label it as **unsupported**
@@ -88,6 +97,88 @@ If a claim is not supported by the **Shared Context Document** in this task:
 When a "## Retrieved excerpts" section appears in the user message, you may reference those rows as **[E1], [E2], …** only when the cited text is clearly relevant; you are not required to cite in every sentence.
 
 TEXT;
+    }
+
+    /**
+     * Lightweight debate discipline shared by personas.
+     *
+     * This is behavioral guidance, not a rigid response template. It keeps
+     * agents useful and adversarial without forcing a checklist shape.
+     */
+    public function buildArgumentDisciplineSystemBlock(): string {
+        return <<<'TEXT'
+
+---
+## Argument discipline
+
+Keep your persona's point of view, but make the reasoning decision-useful:
+
+- separate observation, assumption, inference, and recommendation when the distinction matters
+- challenge weak claims, including attractive claims from your own side
+- make disagreement explicit when it changes the decision; do not manufacture consensus
+- avoid repeating another agent unless you add new evidence, a sharper trade-off, or a changed conclusion
+- name the critical unknown that would most change your vote
+- end with the decision implication: proceed, constrain, validate first, pivot, or stop
+
+Be concise. Prefer one strong objection over several generic concerns.
+
+TEXT;
+    }
+
+    public function buildPlaybookDebateDisciplineBlock(?string $playbookId, string $language = 'en'): string {
+        $rules = match ($playbookId) {
+            'stress-test' => [
+                'Attack the riskiest assumption, not the easiest objection.',
+                'Look for concrete failure modes and hidden dependencies.',
+                'Prefer kill/pivot criteria and de-risking tests over broad warnings.',
+            ],
+            'jury' => [
+                'Arbitrate between options with explicit criteria.',
+                'Surface minority arguments instead of smoothing them away.',
+                'Name what would make the recommendation reliable enough to act on.',
+            ],
+            'founder-sprint' => [
+                'Push toward market validation, not founder preference.',
+                'Challenge ICP, wedge, acquisition path, and urgency signals.',
+                'Prefer the smallest next experiment and a clear kill criterion.',
+            ],
+            'ceo-challenge' => [
+                'Challenge strategic assumptions, timing, moat, and execution capacity.',
+                'Make leadership trade-offs explicit.',
+                'Separate ambition from operational readiness.',
+            ],
+            'confrontation' => [
+                'Preserve the strongest version of both sides before synthesizing.',
+                'Name the real conflict point instead of splitting the difference.',
+                'Convert disagreement into a decision path or test.',
+            ],
+            'quick-decision' => [
+                'Prioritize the constraint, immediate action, and main risk.',
+                'Do not over-explain; identify what is good enough to decide now.',
+                'Use validate-first when the missing information blocks execution.',
+            ],
+            default => [],
+        };
+        if ($rules === []) {
+            return '';
+        }
+
+        $title = $language === 'fr'
+            ? "## Discipline argumentative du playbook"
+            : "## Playbook debate discipline";
+        $body = implode("\n", array_map(fn($line) => "- {$line}", $rules));
+        return "\n\n---\n\n{$title}\n{$body}\n";
+    }
+
+    public function buildRepetitionReductionBlock(array $previousMessages, string $language = 'en'): string {
+        if ($previousMessages === []) {
+            return '';
+        }
+        return "\n\n---\n\n## Repetition guard\n"
+            . "- Do not restate the prior debate summary.\n"
+            . "- Add only one of: a new objection, a sharper trade-off, a concrete validation test, or a changed vote.\n"
+            . "- If you agree with a prior agent, name the specific claim and add the condition or limit.\n"
+            . "- Keep the response shorter when your position did not materially change.\n";
     }
 
     /**
@@ -168,6 +259,7 @@ TEXT;
         string $sessionVariant = ''
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'decision-room', $language);
+        $playbookId = $this->playbookRuntime->resolvePlaybookId('decision-room', [], $objective);
 
         if ($sessionVariant === 'premortem') {
             $premortemPolicy = $this->loadPrompt('pre_mortem');
@@ -183,6 +275,8 @@ TEXT;
             $contextDoc, $retrievalSessionId, $objective, $retrievalLastUserMessage
         );
         $userContent .= "**Objective:** $objective\n\n";
+        $userContent .= $this->playbookRuntime->buildPromptBlock($playbookId, $language);
+        $userContent .= $this->buildPlaybookDebateDisciplineBlock($playbookId, $language);
         if (!empty($previousRoundMessages)) {
             $userContent .= "**Previous Round Contributions:**\n";
             foreach ($previousRoundMessages as $msg) {
@@ -190,6 +284,7 @@ TEXT;
                 $userContent .= "\n**[$agentLabel]:** {$msg['content']}\n";
             }
             $userContent .= "\n";
+            $userContent .= $this->buildRepetitionReductionBlock($previousRoundMessages, $language);
         }
         if (!empty($memoryContext['argument_memory_summary'])) {
             $userContent .= "# Argument Memory (summary)\n\n";
@@ -219,9 +314,7 @@ TEXT;
             $userContent .= $this->buildForcedDisagreementInstruction($mode);
         }
 
-        if ($agent->id === 'synthesizer' && $round === $totalRounds) {
-            $userContent .= $this->buildFinalVerdictInstruction();
-        } elseif ($round === $totalRounds) {
+        if ($agent->id !== 'synthesizer' && $round === $totalRounds) {
             $userContent .= $this->buildFinalVoteInstruction();
         }
 
@@ -241,6 +334,7 @@ TEXT;
                 'context_doc_injected' => !empty($contextDoc['content']),
                 'memory_injected' => !empty($memoryContext['argument_memory_summary']),
                 'force_disagreement' => (bool)$forceDisagreement,
+                'playbook_id' => $playbookId,
             ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
         ]);
 
@@ -266,6 +360,7 @@ TEXT;
             $contextDoc, $retrievalSessionId, $objective, $retrievalLastUserMessage
         );
         $userContent .= "**Objective under debate:** $objective\n\n";
+        $userContent .= $this->buildPlaybookDebateDisciplineBlock('confrontation', $language);
 
         if (!empty($previousMessages)) {
             $userContent .= "**Previous contributions:**\n";
@@ -275,6 +370,7 @@ TEXT;
                 $userContent .= "\n**[$agentId]** *(Phase: $phaseName)*: {$msg['content']}\n";
             }
             $userContent .= "\n";
+            $userContent .= $this->buildRepetitionReductionBlock($previousMessages, $language);
         }
 
         $userContent .= "**Your task for this phase:** $phaseInstruction";
@@ -326,6 +422,7 @@ TEXT;
         ?string $retrievalLastUserMessage = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'confrontation', $language);
+        $playbookId = $this->playbookRuntime->resolvePlaybookId('confrontation', [], $objective);
 
         $instruction = $this->getConfrontationRoundInstruction(
             $currentRound, $totalRounds, $interactionStyle, $agent->id, $previousMessages, $assignedTarget,
@@ -336,6 +433,8 @@ TEXT;
             $contextDoc, $retrievalSessionId, $objective, $retrievalLastUserMessage
         );
         $userContent .= "**Objective under debate:** $objective\n\n";
+        $userContent .= $this->playbookRuntime->buildPromptBlock($playbookId, $language);
+        $userContent .= $this->buildPlaybookDebateDisciplineBlock($playbookId, $language);
 
         if (!empty($previousMessages)) {
             $userContent .= "**Previous Round Contributions:**\n";
@@ -345,6 +444,7 @@ TEXT;
                 $userContent .= "\n**[$agentLabel]**{$target}: {$msg['content']}\n";
             }
             $userContent .= "\n";
+            $userContent .= $this->buildRepetitionReductionBlock($previousMessages, $language);
         }
         if (!empty($memoryContext['argument_memory_summary'])) {
             $userContent .= "# Argument Memory (summary)\n\n";
@@ -389,6 +489,7 @@ TEXT;
                 'context_doc_injected' => !empty($contextDoc['content']),
                 'memory_injected' => !empty($memoryContext['argument_memory_summary']),
                 'force_disagreement' => (bool)$forceDisagreement,
+                'playbook_id' => $playbookId,
             ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
         ]);
 
@@ -407,11 +508,14 @@ TEXT;
         ?string $retrievalLastUserMessage = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'confrontation', $language);
+        $playbookId = $this->playbookRuntime->resolvePlaybookId('confrontation', [], $objective);
 
         $userContent  = $this->buildContextDocumentContent(
             $contextDoc, $retrievalSessionId, $objective, $retrievalLastUserMessage
         );
         $userContent .= "**Objective debated:** $objective\n\n";
+        $userContent .= $this->playbookRuntime->buildPromptBlock($playbookId, $language);
+        $userContent .= $this->buildPlaybookDebateDisciplineBlock($playbookId, $language);
         $userContent .= "**Full Debate History:**\n";
         foreach ($allMessages as $msg) {
             $agentLabel = $msg['agent_id'] ?? 'Agent';
@@ -455,7 +559,7 @@ TEXT;
             $userContent .= "\n";
         }
         $userContent .= "Be decisive. Produce a clear verdict: Proceed / Proceed with conditions / Pause / Stop.";
-        $userContent .= $this->buildFinalVerdictInstruction();
+        $userContent .= $this->buildSynthesizerOutputFormatInstruction($playbookId, $language);
 
         if ($forceDisagreement) {
             $userContent .= $this->buildForcedDisagreementInstruction('synthesizer');
@@ -476,6 +580,7 @@ TEXT;
                 'context_doc_injected' => !empty($contextDoc['content']),
                 'memory_injected' => !empty($memoryContext['weighted_analysis']),
                 'force_disagreement' => (bool)$forceDisagreement,
+                'playbook_id' => $playbookId,
             ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
         ]);
 
@@ -494,11 +599,14 @@ TEXT;
         ?string $retrievalLastUserMessage = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'quick-decision', $language);
+        $playbookId = $this->playbookRuntime->resolvePlaybookId('quick-decision', [], $objective);
 
         $userContent  = $this->buildContextDocumentContent(
             $contextDoc, $retrievalSessionId, $objective, $retrievalLastUserMessage
         );
         $userContent .= "**Objective:** $objective\n\n";
+        $userContent .= $this->playbookRuntime->buildPromptBlock($playbookId, $language);
+        $userContent .= $this->buildPlaybookDebateDisciplineBlock($playbookId, $language);
 
         $isSynthesizer = $agent->id === 'synthesizer';
 
@@ -508,6 +616,7 @@ TEXT;
                 $userContent .= "\n**[{$msg['agent_id']}]:** {$msg['content']}\n";
             }
             $userContent .= "\n";
+            $userContent .= $this->buildRepetitionReductionBlock($previousMessages, $language);
         }
 
         if ($socialDynamicsBlock !== null && $socialDynamicsBlock !== '') {
@@ -519,14 +628,14 @@ TEXT;
 
         if ($isSynthesizer) {
             $userContent .= "**Your task:** Synthesize the analyses above into a final recommendation.\n";
-            $userContent .= "Format: Conclusion, Key Risks, Recommended Action.\n";
-            $userContent .= $this->buildFinalVerdictInstruction();
+            $userContent .= "Keep it concise and executable.\n";
+            $userContent .= $this->buildSynthesizerOutputFormatInstruction($playbookId, $language);
             if ($forceDisagreement) {
                 $userContent .= $this->buildForcedDisagreementInstruction('synthesizer');
             }
         } else {
             $userContent .= "**Your task (QUICK DECISION):** Give a concise decision-oriented analysis.\n\n";
-            $userContent .= "Use this exact format:\n\n## Strongest Argument\n(one key argument for this direction)\n\n## Biggest Risk\n(the single most critical risk)\n\n## Recommendation\n(clear yes/no/conditional recommendation)";
+            $userContent .= "Prefer this compact shape, while keeping the answer natural:\n\n## Strongest Argument\n(one key argument for this direction)\n\n## Biggest Risk\n(the single most critical risk)\n\n## Recommendation\n(clear yes/no/conditional recommendation)";
             if ($forceDisagreement) {
                 $userContent .= $this->buildForcedDisagreementInstruction();
             }
@@ -547,6 +656,7 @@ TEXT;
                 'character_count' => mb_strlen($systemContent, 'UTF-8') + mb_strlen($userContent, 'UTF-8'),
                 'context_doc_injected' => !empty($contextDoc['content']),
                 'force_disagreement' => (bool)$forceDisagreement,
+                'playbook_id' => $playbookId,
             ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
         ]);
 
@@ -570,6 +680,7 @@ TEXT;
         ?string $retrievalLastUserMessage = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'stress-test', $language);
+        $playbookId = $this->playbookRuntime->resolvePlaybookId('stress-test', [], $objective);
 
         $roundPolicy = new RoundPolicy();
 
@@ -577,6 +688,8 @@ TEXT;
             $contextDoc, $retrievalSessionId, $objective, $retrievalLastUserMessage
         );
         $userContent .= "**Objective to stress-test:** $objective\n\n";
+        $userContent .= $this->playbookRuntime->buildPromptBlock($playbookId, $language);
+        $userContent .= $this->buildPlaybookDebateDisciplineBlock($playbookId, $language);
 
         if (!empty($previousRoundMessages)) {
             $userContent .= "**Previous round analyses:**\n";
@@ -585,6 +698,7 @@ TEXT;
                 $userContent .= "\n**[$agentLabel]:** {$msg['content']}\n";
             }
             $userContent .= "\n";
+            $userContent .= $this->buildRepetitionReductionBlock($previousRoundMessages, $language);
         }
         if (!empty($memoryContext['argument_memory_summary'])) {
             $userContent .= "# Argument Memory (summary)\n\n";
@@ -599,7 +713,7 @@ TEXT;
 
         if ($isSynthesizer && $round === $totalRounds) {
             $userContent .= "**Your task — STRESS TEST REPORT (FINAL SYNTHESIS):**\n\n";
-            $userContent .= "Based on all the agents' risk analyses, produce the final Stress Test Report using EXACTLY this structure:\n\n";
+            $userContent .= "Based on all the agents' risk analyses, produce the final Stress Test Report. Prefer this structure, but do not sacrifice clarity if the evidence requires nuance:\n\n";
             $userContent .= "# Stress Test Report\n\n";
             $userContent .= "## Most Likely Failure Modes\n(list 3-5 realistic scenarios where this fails)\n\n";
             $userContent .= "## Highest Impact Risks\n(risks with the most severe consequences)\n\n";
@@ -607,7 +721,7 @@ TEXT;
             $userContent .= "## Mitigations\n(concrete actions to reduce each major risk)\n\n";
             $userContent .= "## Kill Criteria\n(explicit conditions under which you should stop/pivot)\n\n";
             $userContent .= "## Recommended Next Step\n(the single most important action to de-risk before investing more)\n\n";
-            $userContent .= $this->buildFinalVerdictInstruction();
+            $userContent .= $this->buildSynthesizerOutputFormatInstruction($playbookId, $language);
         } elseif ($round === 1) {
             $userContent .= "**Your task — ROUND 1 (FAILURE SCENARIOS):**\n\n";
             $userContent .= "Adopt a risk-first posture. Stay within your domain expertise.\n\n";
@@ -659,6 +773,7 @@ TEXT;
                 'context_doc_injected' => !empty($contextDoc['content']),
                 'memory_injected' => !empty($memoryContext['argument_memory_summary']),
                 'force_disagreement' => (bool)$forceDisagreement,
+                'playbook_id' => $playbookId,
             ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
         ]);
 
@@ -961,6 +1076,8 @@ TEXT;
             . "## Domain Weight\n0-10\n\n"
             . "## Main Argument\n...\n\n"
             . "## Biggest Risk\n...\n\n"
+            . "## New Information Or Challenge\n"
+            . "(what you add beyond prior agents; if nothing material changed, say so briefly)\n\n"
             . "## Change Since Last Round\n...\n";
     }
 
@@ -1094,6 +1211,7 @@ TEXT;
         $parts[] = "---\n**You are {$agent->persona->name}, the {$agent->persona->title}. Answer ONLY as yourself.**";
 
         $parts[] = trim($this->buildEvidenceDisciplineSystemBlock());
+        $parts[] = trim($this->buildArgumentDisciplineSystemBlock());
 
         if ($language === 'fr') {
             $parts[] = "---\n## INSTRUCTION DE LANGUE OBLIGATOIRE\n**Tu dois répondre UNIQUEMENT en français. Toutes tes réponses doivent être rédigées en français, sans exception. Même si le contexte est en anglais, ta réponse doit être entièrement en français.**";
@@ -1274,17 +1392,17 @@ If evidence warnings were listed, include a short "## Evidence warnings" section
 TEXT;
     }
 
-    public function buildSynthesizerOutputFormatInstruction(): string
+    public function buildSynthesizerOutputFormatInstruction(?string $playbookId = null, string $language = 'en'): string
     {
         $base = <<<TEXT
 
-Respond using EXACTLY this format (no extra sections, no free-form text outside these headings):
+Use this stable shape when possible. Keep the synthesis natural and decision-oriented; do not omit key decision fields even if wording or headings vary.
 
 ## Decision
 GO | NO-GO | ITERATE | NO_CONSENSUS | INSUFFICIENT_CONTEXT
 
 ## Confidence
-LOW | MEDIUM | HIGH
+weak | moderate | strong
 
 ## Why
 - (max 3 bullet points explaining the key reasons)
@@ -1292,8 +1410,8 @@ LOW | MEDIUM | HIGH
 ## Main Risks
 - (max 3 bullet points)
 
-The final synthesis MUST include the exact heading `## Validation Logic`.
-Do not omit this section.
+The final synthesis should include a clearly named validation logic section.
+Do not omit the validation logic itself.
 If some information is missing, infer a measurable first validation hypothesis instead of omitting the section.
 Avoid vanity metrics. Prefer measurable, observable, time-bounded criteria when possible.
 
@@ -1315,7 +1433,9 @@ Kill criteria: ...
 
 TEXT;
 
-        return $base . "\n\n" . $this->buildTradeoffsJsonAppendix();
+        return $base
+            . $this->playbookRuntime->buildPromptBlock($playbookId, $language)
+            . "\n\n" . $this->buildTradeoffsJsonAppendix();
     }
 
     /**
@@ -1427,7 +1547,9 @@ TEXT;
             . "When responding to another agent, {$obligation}:\n\n"
             . "## Target Agent\n<exact agent id>\n\n"
             . "## Claim Challenged\n<short quote from the target agent's argument, or None>\n\n"
+            . "## Claim Type\nobservation | assumption | inference | recommendation | unknown\n\n"
             . "## Objection\n<your precise objection to that specific claim, or None>\n\n"
+            . "## Missing Support\n<what evidence, signal, or test would make this claim reliable, or None>\n\n"
             . "## Concession\n<a valid point you accept from the target agent, or None>\n\n"
             . "## Position Change\nunchanged | weakened | strengthened | changed\n";
     }

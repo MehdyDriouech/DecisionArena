@@ -8,7 +8,7 @@
  */
 
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
-import { renderDecisionBrief, renderPremortemInvertedBanner, renderPremortemStructuredCard } from '../../ui/components.js';
+import { renderDecisionBrief, renderDecisionOutcomeCard, renderPremortemInvertedBanner, renderPremortemStructuredCard } from '../../ui/components.js';
 import { formatHitlMessageBadges, formatRerunWithChallengeButton } from '../../utils/messageLookup.js';
 import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
 
@@ -114,9 +114,10 @@ function renderExportButtons(sessionId) {
     <button class="btn btn-secondary btn-sm" data-action="export-session" data-session-id="${escHtml(sessionId)}" data-format="markdown" title="${t('export.exportMd')}">
       ${t('export.exportMd')}
     </button>
-    <button class="btn btn-secondary btn-sm" data-action="export-session" data-session-id="${escHtml(sessionId)}" data-format="json" title="${t('export.exportJson')}">
+    ${isExpert ? `
+    <button class="btn btn-secondary btn-sm" data-ui="expert-only" data-action="export-session" data-session-id="${escHtml(sessionId)}" data-format="json" title="${t('export.exportJson')}">
       ${t('export.exportJson')}
-    </button>
+    </button>` : ''}
     <button class="btn btn-secondary btn-sm" data-action="export-session" data-session-id="${escHtml(sessionId)}" data-format="markdown" data-redacted="1" title="${t('export.redacted')}">
       🔒 ${t('export.redacted')}
     </button>
@@ -421,6 +422,7 @@ function renderChat() {
   if (!brief && session?.decision_brief && typeof session.decision_brief === 'string') {
     try { brief = JSON.parse(session.decision_brief); } catch (_) {}
   }
+  const decisionOutcome = session?.decision_outcome || brief?.decision_outcome || session?.result?.decision_outcome || null;
 
   let premortemSummary = session?.premortem_summary ?? null;
   if (!premortemSummary && session?.result && typeof session.result === 'object' && session.result.premortem_summary) {
@@ -476,6 +478,7 @@ function renderChat() {
 
       ${rcError ? `<div style="padding:8px 12px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;font-size:12px;color:#dc2626;margin-bottom:8px;">${escHtml(rcError)}</div>` : ''}
       ${isPremortemChat ? renderPremortemInvertedBanner(t, escHtml) : ''}
+      ${renderDecisionOutcomeCard(decisionOutcome, { uiMode: state.uiMode })}
       ${renderDecisionBrief(brief, {
         sessionId: session.id,
         uiMode: state.uiMode,

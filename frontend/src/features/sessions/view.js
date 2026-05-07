@@ -4,6 +4,8 @@
  */
 
 import { renderEmptyState } from '../../ui/components.js';
+import { getPlaybookIntentGroups } from '../../core/playbooks.js';
+import { renderPlaybookCard } from '../../ui/components.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -50,6 +52,7 @@ function extractSessionOutcome(session) {
 
 function renderSessionCard(session, fullActions = false) {
   const { state, escHtml, formatDate, agentIcon, agentName, t } = getCtx();
+  const isExpert = state.uiMode === 'expert';
   const outcome = extractSessionOutcome(session);
   const decisionBadge = outcome.decision
     ? `<span class="badge badge-info">Décision: ${escHtml(String(outcome.decision).replace(/_/g, ' '))}</span>`
@@ -151,12 +154,14 @@ function renderSessionCard(session, fullActions = false) {
         <button class="btn btn-secondary btn-sm" data-action="export-session" data-session-id="${escHtml(session.id)}" data-format="markdown">
           ${t('sessions.exportMd')}
         </button>
-        <button class="btn btn-secondary btn-sm" data-action="export-session" data-session-id="${escHtml(session.id)}" data-format="json">
-          ${t('sessions.exportJson')}
-        </button>
-        <button class="btn btn-danger btn-sm" data-action="delete-session" data-session-id="${escHtml(session.id)}" data-session-title="${escHtml(session.title)}">
-          ${t('sessions.delete')}
-        </button>
+        ${isExpert ? `
+          <button class="btn btn-secondary btn-sm" data-ui="expert-only" data-action="export-session" data-session-id="${escHtml(session.id)}" data-format="json">
+            ${t('sessions.exportJson')}
+          </button>
+          <button class="btn btn-danger btn-sm" data-ui="expert-only" data-action="delete-session" data-session-id="${escHtml(session.id)}" data-session-title="${escHtml(session.title)}">
+            ${t('sessions.delete')}
+          </button>
+        ` : ''}
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);cursor:pointer;margin-left:auto;">
           <input type="checkbox" data-action="toggle-compare-session" data-session-id="${escHtml(session.id)}" ${(state.compareSelectedIds || []).includes(session.id) ? 'checked' : ''} style="accent-color:var(--accent);">
           ${t('sessions.selectForCompare')}
@@ -167,16 +172,36 @@ function renderSessionCard(session, fullActions = false) {
 }
 
 function renderDashboard() {
-  const { state, t } = getCtx();
+  const { state, escHtml, t } = getCtx();
   const recent = state.sessions.slice(0, 5);
   const isExpert = state.uiMode === 'expert';
+  const lang = window.i18n?.getLanguage?.() || 'fr';
+  const contextsPkg = state.strategicContexts || { items: [] };
+  const contexts = Array.isArray(contextsPkg.items) ? contextsPkg.items : [];
+  const activeContexts = contexts.filter((c) => String(c.status || 'active') === 'active').slice(0, isExpert ? 6 : 4);
+  const playbookGroups = getPlaybookIntentGroups(lang).map((group) => `
+    <section class="playbook-intent-group">
+      <div class="playbook-intent-group-head">
+        <div class="playbook-intent-label">${escHtml(group.label)}</div>
+        <div class="playbook-intent-question">${escHtml(group.question)}</div>
+        <div class="playbook-intent-description">${escHtml(group.description)}</div>
+      </div>
+      <div class="playbook-intent-cards">
+        ${group.playbooks.map((playbook) => renderPlaybookCard(playbook, {
+          escHtml,
+          compact: !isExpert,
+          language: lang,
+        })).join('')}
+      </div>
+    </section>
+  `).join('');
 
   const heroSimple = `
     <div class="hero-block">
       <h1 class="hero-title">${t('dashboard.simple.heroTitle')}</h1>
       <p class="hero-copy">${t('dashboard.simple.heroSubtitle')}</p>
       <div class="dashboard-simple-ctas" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
-        <button type="button" class="btn btn-primary btn-lg" data-action="dashboard-select-family" data-family="validate">
+        <button type="button" class="btn btn-primary btn-lg" data-action="select-playbook" data-playbook-id="founder-sprint">
           ${t('dashboard.simple.primaryCta')}
         </button>
         <button type="button" class="btn btn-secondary" data-action="goto-new-session">
@@ -191,15 +216,6 @@ function renderDashboard() {
       <h1 class="hero-title">${t('dashboard.heroTitle')}</h1>
       <p class="hero-copy">${t('dashboard.heroSubtitle')}</p>
       <div class="intent-grid">
-        <button type="button" class="btn btn-secondary" data-action="dashboard-intent-explore">
-          ${t('newSession.intent.explore')}
-        </button>
-        <button type="button" class="btn btn-secondary" data-action="dashboard-intent-decide">
-          ${t('newSession.intent.decide')}
-        </button>
-        <button type="button" class="btn btn-secondary" data-action="dashboard-intent-test">
-          ${t('newSession.intent.test')}
-        </button>
         <button type="button" class="btn btn-secondary" data-action="goto-new-session">
           ${t('dashboard.configureAnalysis')}
         </button>
@@ -209,6 +225,53 @@ function renderDashboard() {
 
   return `
     ${isExpert ? heroExpert : heroSimple}
+
+    <div class="section" style="margin-bottom:22px;">
+      <div class="section-header" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <span class="section-label">${escHtml(t('nav.contexts'))}</span>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="btn btn-secondary btn-sm" data-nav="strategic-contexts">${escHtml(t('dashboard.viewAll'))}</button>
+          <button class="btn btn-secondary btn-sm" data-action="load-strategic-contexts">↺</button>
+        </div>
+      </div>
+      ${activeContexts.length === 0 ? `
+        <div class="empty-state" style="padding:16px 0;">
+          <div class="empty-state-text">${escHtml(lang === 'en' ? 'No active context yet. Create one to group related decisions.' : 'Aucun contexte actif. Créez-en un pour regrouper les décisions liées.')}</div>
+          <button class="btn btn-primary btn-sm" data-nav="strategic-contexts">＋ ${escHtml(lang === 'en' ? 'Create context' : 'Créer un contexte')}</button>
+        </div>
+      ` : `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;">
+          ${activeContexts.map((c) => {
+            const cs = c.current_state || {};
+            const risks = Array.isArray(cs.active_risks) ? cs.active_risks : [];
+            return `
+              <div class="card" style="padding:14px 16px;cursor:pointer;" data-action="goto-context" data-context-id="${escHtml(c.context_id)}">
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                  <span class="badge badge-success">active</span>
+                  <div style="font-weight:800;">${escHtml(String(c.title || ''))}</div>
+                  <span style="margin-left:auto;font-size:11px;color:var(--text-muted);">${escHtml(String(c.updated_at || ''))}</span>
+                </div>
+                <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                  ${cs.current_decision_status ? `<span class="badge badge-info">${escHtml(cs.current_decision_status)}</span>` : `<span class="badge badge-muted">—</span>`}
+                  ${cs.current_confidence ? `<span class="badge badge-muted">${escHtml(t('contexts.confidence'))}: ${escHtml(cs.current_confidence)}</span>` : ''}
+                  <span class="badge ${risks.length ? 'badge-warning' : 'badge-muted'}">${escHtml(t('contexts.risks'))}: ${risks.length}</span>
+                </div>
+                ${cs.latest_next_step ? `<div style="margin-top:8px;font-size:12px;color:var(--text-secondary);"><strong>${escHtml(t('contexts.next'))}:</strong> ${escHtml(cs.latest_next_step)}</div>` : ''}
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `}
+    </div>
+
+    <div class="section dashboard-playbooks" style="margin-bottom:24px;">
+      <div class="section-header">
+        <span class="section-label">${lang === 'en' ? 'Choose by decision intent' : 'Choisir par intention de decision'}</span>
+      </div>
+      <div class="playbook-intent-groups">
+        ${playbookGroups}
+      </div>
+    </div>
 
     <div class="sessions-list">
       <div class="section-header">
@@ -235,30 +298,13 @@ function renderDashboard() {
       <button type="button" class="btn btn-secondary btn-sm" data-nav="launch-assistant">
         ${t('dashboard.launchAssistant')}
       </button>
-      <button type="button" class="btn btn-secondary btn-sm" data-nav="chat">
-        ${t('mode.chat')}
-      </button>
-      <button type="button" class="btn btn-secondary btn-sm" data-nav="decision-room">
-        ${t('mode.decisionRoom')}
-      </button>
-      <button type="button" class="btn btn-secondary btn-sm" data-action="goto-new-session" data-mode="confrontation">
-        ${t('mode.confrontation')}
-      </button>
-      <button type="button" class="btn btn-secondary btn-sm" data-action="goto-new-session" data-mode="quick-decision">
-        ${t('mode.quickDecision')}
-      </button>
-      <button type="button" class="btn btn-secondary btn-sm" data-action="goto-new-session" data-mode="stress-test">
-        ${t('mode.stressTest')}
-      </button>
-      <button type="button" class="btn btn-secondary btn-sm" data-action="goto-new-session" data-mode="jury">
-        ${t('jury.title')}
-      </button>
     </div>
   `;
 }
 
 function renderSessions() {
   const { state, t } = getCtx();
+  const isExpert = state.uiMode === 'expert';
   const filter   = state.sessionFilter || 'all';
   const filtered = state.sessions.filter((s) => {
     if (filter === 'favorites')   return s.is_favorite;
@@ -272,8 +318,8 @@ function renderSessions() {
         <div class="page-title">${t('sessions.title')}</div>
         <div class="page-subtitle">${t('sessions.subtitle')}</div>
       </div>
-      ${state.sessions.length > 0 ? `
-        <button class="btn btn-danger btn-sm" data-action="delete-all-sessions" style="flex-shrink:0;margin-top:4px;">
+      ${isExpert && state.sessions.length > 0 ? `
+        <button class="btn btn-danger btn-sm" data-ui="expert-only" data-action="delete-all-sessions" style="flex-shrink:0;margin-top:4px;">
           🗑️ ${t('sessions.deleteAll')}
         </button>
       ` : ''}

@@ -1,5 +1,6 @@
 /* Comparisons feature — action handlers */
 import { registerAction } from '../../core/events.js';
+import { isConfirmationConfirmed, requestConfirmation, uiCopy } from '../../utils/confirmationUi.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -55,10 +56,30 @@ function registerComparisonsHandlers() {
     }
   });
 
-  registerAction('delete-comparison', async ({ element }) => {
+  registerAction('delete-comparison', async (ctx = {}) => {
+    const { element } = ctx;
     const { state, render, navigate, ComparisonService, t } = getCtx();
+    if (state.uiMode !== 'expert') {
+      state.error = 'Expert mode required.';
+      render();
+      return;
+    }
     const compId = element.dataset.compId;
-    if (!confirm(t('compare.confirmDelete'))) return;
+    if (!isConfirmationConfirmed(ctx)) {
+      requestConfirmation(state, {
+        id: `delete-comparison:${compId}`,
+        mode: 'modal',
+        tone: 'danger',
+        title: t('compare.confirmDelete'),
+        body: uiCopy('Cette comparaison disparaîtra de la liste sauvegardée.', 'This comparison will disappear from the saved list.'),
+        expertBody: uiCopy('Les sessions comparées ne sont pas supprimées.', 'Compared sessions are not deleted.'),
+        confirmLabel: uiCopy('Supprimer la comparaison', 'Delete comparison'),
+        action: 'delete-comparison',
+        payload: { compId },
+      });
+      render();
+      return;
+    }
     try {
       await ComparisonService.remove(compId);
       state.comparisons = state.comparisons.filter((c) => c.id !== compId);

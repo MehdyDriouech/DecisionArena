@@ -14,3 +14,6 @@ export { ScenarioPackService } from './scenarioPackService.js';
 export { PromptPolicyService } from './promptPolicyService.js';
 export { EvidenceService } from './evidenceService.js';
 export { RiskProfileService } from './riskProfileService.js';
+export { DecisionMemoryService } from './decisionMemoryService.js';
+export { StrategicContextService } from './strategicContextService.js';
+export { MemorySnapshotService } from './memorySnapshotService.js';

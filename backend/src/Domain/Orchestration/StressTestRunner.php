@@ -40,6 +40,7 @@ class StressTestRunner {
     private RiskProfileAnalyzer $riskAnalyzer;
     private DecisionQualityScoreService $qualityScoreService;
     private DecisionSummaryService $summaryService;
+    private PlaybookRuntime $playbookRuntime;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -60,6 +61,7 @@ class StressTestRunner {
         $this->riskAnalyzer    = new RiskProfileAnalyzer();
         $this->qualityScoreService = new DecisionQualityScoreService();
         $this->summaryService      = new DecisionSummaryService();
+        $this->playbookRuntime     = new PlaybookRuntime();
     }
 
     public function run(
@@ -79,6 +81,7 @@ class StressTestRunner {
         $rounds = min(max($rounds, 1), RoundPolicy::MAX_ROUNDS);
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($decisionThreshold);
         $dynamicsPreset = \Domain\Agents\DecisionDynamicsPreset::normalizeId($decisionDynamicsPreset);
+        $playbookId = $this->playbookRuntime->resolvePlaybookId('stress-test', [], $objective);
 
         // Critic goes first if selected (risk-first posture)
         $nonSynthesizers = array_values(array_filter($selectedAgents, fn($a) => $a !== 'synthesizer'));
@@ -220,7 +223,7 @@ class StressTestRunner {
 
                     // Parse verdict from synthesizer on the final round
                     if ($agentId === 'synthesizer' && $round === $rounds) {
-                        $parsed = VerdictParser::parse($content);
+                        $parsed = VerdictParser::parse($content, $playbookId);
                         if ($parsed) {
                             $this->verdictRepo->create(array_merge($parsed, [
                                 'id'         => $this->uuid(),
@@ -394,6 +397,8 @@ class StressTestRunner {
             }
         }
         $verdictRow = $this->verdictRepo->findBySession($sessionId);
+        $canonicalSynthesis = CanonicalSynthesisExtractor::extract($synthOut, $playbookId);
+        $playbookDiagnostics = $this->playbookRuntime->extractDiagnostics($synthOut, $playbookId);
 
         // Minimal reliability warning when a majority of agents errored.
         $guardrails = [];
@@ -418,6 +423,15 @@ class StressTestRunner {
             }
         } catch (\Throwable) {
         }
+        if (!empty($playbookDiagnostics['warnings'])) {
+            $existing = isset($guardrails['warnings']) && is_array($guardrails['warnings']) ? $guardrails['warnings'] : [];
+            $guardrails['warnings'] = array_values(array_unique(array_merge($existing, $playbookDiagnostics['warnings'])));
+        }
+        $decisionOutcome = DecisionOutcomeProjector::fromCanonical($canonicalSynthesis, [
+            'playbook_runtime' => $playbookDiagnostics,
+            'risk_profile' => $riskProfile,
+            'guardrails' => $guardrails,
+        ]);
 
         $decisionBrief = $this->summaryService->buildDecisionBrief(
             array_merge($reliability, [
@@ -429,6 +443,9 @@ class StressTestRunner {
                 'false_consensus'        => $fc,
                 'verdict'                => $verdictRow ?: null,
                 'session_mode_hint'      => 'stress',
+                'canonical_synthesis'    => $canonicalSynthesis,
+                'playbook_runtime'        => $playbookDiagnostics,
+                'decision_outcome'        => $decisionOutcome,
             ])
         );
 
@@ -456,6 +473,9 @@ class StressTestRunner {
             'risk_threshold_info' => $reliability['risk_threshold_info'] ?? null,
             'decision_quality_score' => $qualityScore,
             'decision_brief' => $decisionBrief,
+            'canonical_synthesis' => $canonicalSynthesis,
+            'decision_outcome' => $decisionOutcome,
+            'playbook_runtime' => $playbookDiagnostics,
         ]);
     }
 

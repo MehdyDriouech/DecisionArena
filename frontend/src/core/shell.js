@@ -20,7 +20,7 @@ function renderSidebarShell(i18n) {
     <div class="sidebar-ui-mode">
       <div class="sidebar-ui-mode-label">${t('ui.mode.label')}</div>
       <div class="sidebar-ui-mode-buttons">
-        <button type="button" class="language-option ${state.uiMode !== 'expert' ? 'active' : ''}" data-action="set-ui-mode" data-ui-mode="simple">${t('ui.mode.simple')}</button>
+        <button type="button" class="language-option ${state.uiMode !== 'expert' ? 'active' : ''}" data-action="set-ui-mode" data-ui-mode="basic">${t('ui.mode.basic')}</button>
         <button type="button" class="language-option ${state.uiMode === 'expert' ? 'active' : ''}" data-action="set-ui-mode" data-ui-mode="expert">${t('ui.mode.expert')}</button>
       </div>
     </div>

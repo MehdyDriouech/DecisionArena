@@ -7,6 +7,7 @@ import * as agentsUtils from './utils/agents.js';
 import * as intentPresetUtils from './utils/intentPresets.js';
 import * as messageLookup from './utils/messageLookup.js';
 import { renderSidebarShell } from './core/shell.js';
+import { validatePlaybookCatalog } from './core/playbooks.js';
 
 /* ── Core: renderer + router + events ── */
 import { render, renderSidebar, renderMain, applyUiModeVisibility, applyComplexityVisibility } from './core/renderer.js';
@@ -32,6 +33,8 @@ import { registerGraphViewFeature } from './features/graphView/index.js';
 import { registerJuryFeature } from './features/jury/index.js';
 import { registerArgumentHeatmapFeature } from './features/argumentHeatmap/index.js';
 import { registerDebateReplayFeature } from './features/debateReplay/index.js';
+import { registerDecisionMemoryFeature } from './features/decisionMemory/index.js';
+import { registerStrategicContextsFeature } from './features/strategicContexts/index.js';
 
 /* ── Feature handler modules ── */
 import { registerGlobalHandlers } from './core/globalHandlers.js';
@@ -52,6 +55,8 @@ import { registerGraphViewHandlers } from './features/graphView/handlers.js';
 import { registerJuryHandlers } from './features/jury/handlers.js';
 import { registerArgumentHeatmapHandlers } from './features/argumentHeatmap/handlers.js';
 import { registerDebateReplayHandlers } from './features/debateReplay/handlers.js';
+import { registerDecisionMemoryHandlers } from './features/decisionMemory/handlers.js';
+import { registerStrategicContextsHandlers } from './features/strategicContexts/handlers.js';
 
 function bootstrapModuleArchitecture() {
   /* Core namespace */
@@ -107,6 +112,8 @@ function bootstrapModuleArchitecture() {
   registerJuryFeature();
   registerArgumentHeatmapFeature();
   registerDebateReplayFeature();
+  registerDecisionMemoryFeature();
+  registerStrategicContextsFeature();
 
   /* ── Register all action/event handlers ── */
   registerGlobalHandlers();
@@ -132,6 +139,8 @@ function bootstrapModuleArchitecture() {
   registerJuryHandlers();
   registerArgumentHeatmapHandlers();
   registerDebateReplayHandlers();
+  registerDecisionMemoryHandlers();
+  registerStrategicContextsHandlers();
   registerHumanLoopHandlers();
 
   /* ── Wire global event delegation (replaces legacy-app.js listeners) ── */
@@ -147,6 +156,7 @@ async function init() {
 
 async function startApp() {
   bootstrapModuleArchitecture();
+  validatePlaybookCatalog();
   // Expose complexity helpers on the global namespace
   window.DecisionArena.setUiComplexity = (level) => {
     store.setUiComplexity(level);
@@ -158,7 +168,7 @@ async function startApp() {
   };
   window.DecisionArena.applyUiModeVisibility = applyUiModeVisibility;
   window.DecisionArena.applyComplexityVisibility = applyComplexityVisibility;
-  applyUiModeVisibility(window.DecisionArena?.store?.state?.uiMode || 'simple');
+  applyUiModeVisibility(window.DecisionArena?.store?.state?.uiMode || 'basic');
   renderSidebarShell(window.i18n);
   await init();
 }

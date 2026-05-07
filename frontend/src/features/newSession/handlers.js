@@ -10,6 +10,7 @@ import {
 } from '../../utils/intentPresets.js';
 import { ANALYSIS_CATALOG, applyAnalysisFamily } from './analysisCatalog.js';
 import { applyProductPreset } from './productPresets.js';
+import { getPlaybookById, isModeBackedPlaybook, isProductPlaybook } from '../../core/playbooks.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -38,6 +39,12 @@ function _composeSessionObjectivePrompt(ns) {
   if (ctx) return ctx;
   if (q) return `Question:\n${q}`;
   return '';
+}
+
+function _runtimePlaybookMarker(playbookId) {
+  return getPlaybookById(playbookId)
+    ? `## Runtime Playbook\nplaybook_id: ${playbookId}`
+    : '';
 }
 
 function _defaultRoundsForMode(mode) {
@@ -75,6 +82,7 @@ function resetNewSessionState() {
     title: '',
     idea: '',
     mode: expert ? 'chat' : 'stress-test',
+    selectedPlaybookId: expert ? null : 'stress-test',
     productFamily: expert ? null : 'validate',
     productPreset: null,
     founderInterrogation: null,
@@ -100,11 +108,24 @@ function resetNewSessionState() {
     llmAssignmentMode: 'global',
     teamProviderAssignments: { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } },
     selectedStarter: null,
-    starterModelsCollapsed: false,
+    // Collapsed by default to reduce “fourre-tout” on first view.
+    starterModelsCollapsed: true,
     isFork: false,
     source_session_id: null,
     forkDraftSessionId: null,
     decisionDynamicsPreset: 'balanced',
+    // Decision Memory reuse (manual selection only; no auto injection)
+    selectedMemoryIds: [],
+    memoryPicker: {
+      open: false,
+      loading: false,
+      error: null,
+      filters: { playbook_id: '', decision_status: '', confidence: '', from: '', to: '', link_type: '', q: '' },
+      memories: null,
+      compactPreview: null, // { allowed, blocked }
+      allowStaleConfirmed: false,
+      expertOverride: false,
+    },
   };
 }
 
@@ -115,6 +136,10 @@ function _availableSimpleAgents(mode) {
 }
 
 function _applySimpleLaunchDefaults(ns) {
+  if (ns.selectedPlaybookId && getPlaybookById(ns.selectedPlaybookId)) {
+    applyDecisionPlaybook(ns.selectedPlaybookId);
+    return;
+  }
   if (ns.productPreset) {
     applyProductPreset(ns.productPreset);
     return;
@@ -123,6 +148,57 @@ function _applySimpleLaunchDefaults(ns) {
     ? ns.productFamily
     : 'validate';
   applyAnalysisFamily(family);
+}
+
+function applyDecisionPlaybook(playbookId) {
+  const DA = window.DecisionArena;
+  if (!DA || !getPlaybookById(playbookId)) return false;
+  if (isProductPlaybook(playbookId)) {
+    return applyProductPreset(playbookId);
+  }
+
+  if (!isModeBackedPlaybook(playbookId)) return false;
+
+  const state = DA.store.state;
+  const ns = state.newSession || {};
+  const mode = playbookId;
+  const available = getAvailablePersonaIdsForMode(mode);
+  const defaultAgents = resolveDefaultPresetPersonas(available);
+  const setIfEmpty = (arr, fallback) => (Array.isArray(arr) && arr.length > 0 ? arr : fallback);
+  const next = {
+    ...ns,
+    selectedPlaybookId: playbookId,
+    productPreset: null,
+    founderInterrogation: null,
+    mode,
+    productFamily: null,
+    selectedIntent: null,
+    simpleIntent: mode === 'quick-decision' || mode === 'jury' ? 'decide' : 'test',
+    selectedStarter: null,
+    selectedScenarioId: null,
+    selectedTemplateId: null,
+    facilitationFramework: null,
+    presetRationale: null,
+    fastDecisionEnabled: false,
+    forceDisagreement: mode === 'quick-decision' ? !!ns.forceDisagreement : true,
+    rounds: mode === 'quick-decision' ? 1 : (Number.isFinite(Number(ns.rounds)) ? Number(ns.rounds) : 3),
+    llmAssignmentMode: 'global',
+    agentProviders: {},
+    teamProviderAssignments: { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } },
+  };
+
+  if (mode === 'confrontation') {
+    const stress = ANALYSIS_CATALOG.stress || {};
+    next.blueTeam = setIfEmpty(ns.blueTeam, Array.isArray(stress.blueTeam) ? stress.blueTeam : ['pm', 'architect', 'po', 'ux-expert']);
+    next.redTeam = setIfEmpty(ns.redTeam, Array.isArray(stress.redTeam) ? stress.redTeam : ['analyst', 'critic']);
+    next.selectedAgents = Array.from(new Set([...next.blueTeam, ...next.redTeam]));
+    next.cfRounds = ns.cfRounds ?? 3;
+  } else {
+    next.selectedAgents = setIfEmpty(ns.selectedAgents, defaultAgents);
+  }
+
+  state.newSession = next;
+  return true;
 }
 
 function _debouncedContextCheck(text, state) {
@@ -172,6 +248,105 @@ function registerNewSessionHandlers() {
     render();
   });
 
+  /* ══════════════════════════════════════════════════════════════════════
+     Decision Memory reuse (manual selection + compact preview)
+  ═══════════════════════════════════════════════════════════════════════ */
+  registerAction('toggle-memory-picker', () => {
+    const { state, render } = getCtx();
+    const mp = state.newSession.memoryPicker || (state.newSession.memoryPicker = {});
+    mp.open = !mp.open;
+    render();
+  });
+
+  registerAction('set-memory-filter', ({ element }) => {
+    const { state, render } = getCtx();
+    const key = element?.dataset?.filterKey;
+    if (!key) return;
+    const mp = state.newSession.memoryPicker;
+    if (!mp || !mp.filters) return;
+    mp.filters[key] = element.value;
+    render();
+  });
+
+  registerAction('load-memory-picker', async () => {
+    const { state, render } = getCtx();
+    const mp = state.newSession.memoryPicker;
+    if (!mp) return;
+    mp.loading = true;
+    mp.error = null;
+    render();
+    try {
+      const data = await window.DecisionArena.services.DecisionMemoryService.list(150, mp.filters || {});
+      mp.memories = data.memories || [];
+    } catch (err) {
+      mp.error = String(err.message || err);
+    } finally {
+      mp.loading = false;
+      render();
+    }
+  });
+
+  registerAction('toggle-select-memory-for-new-session', async ({ element }) => {
+    const { state, render } = getCtx();
+    const id = element?.dataset?.memoryId;
+    if (!id) return;
+    const ns = state.newSession;
+    if (!Array.isArray(ns.selectedMemoryIds)) ns.selectedMemoryIds = [];
+    const set = new Set(ns.selectedMemoryIds);
+    if (set.has(id)) set.delete(id); else set.add(id);
+    ns.selectedMemoryIds = [...set].slice(0, 5);
+
+    // Refresh compact preview from server-truth contract
+    try {
+      const mp = ns.memoryPicker || {};
+      const preview = await window.DecisionArena.services.DecisionMemoryService.compactWithOptions(
+        ns.selectedMemoryIds,
+        { allow_stale: !!mp.allowStaleConfirmed, expert_override: !!mp.expertOverride },
+      );
+      ns.memoryPicker.compactPreview = preview;
+    } catch (_) {}
+    render();
+  });
+
+  registerAction('clear-selected-memories-new-session', async () => {
+    const { state, render } = getCtx();
+    state.newSession.selectedMemoryIds = [];
+    try {
+      state.newSession.memoryPicker.compactPreview = { allowed: [], blocked: [] };
+    } catch (_) {}
+    render();
+  });
+
+  registerAction('confirm-allow-stale-memories', async () => {
+    const { state, render } = getCtx();
+    const ns = state.newSession;
+    ns.memoryPicker = ns.memoryPicker || {};
+    ns.memoryPicker.allowStaleConfirmed = true;
+    try {
+      const preview = await window.DecisionArena.services.DecisionMemoryService.compactWithOptions(
+        ns.selectedMemoryIds || [],
+        { allow_stale: true, expert_override: !!ns.memoryPicker.expertOverride },
+      );
+      ns.memoryPicker.compactPreview = preview;
+    } catch (_) {}
+    render();
+  });
+
+  registerAction('toggle-expert-memory-override', async () => {
+    const { state, render } = getCtx();
+    const ns = state.newSession;
+    ns.memoryPicker = ns.memoryPicker || {};
+    ns.memoryPicker.expertOverride = !ns.memoryPicker.expertOverride;
+    try {
+      const preview = await window.DecisionArena.services.DecisionMemoryService.compactWithOptions(
+        ns.selectedMemoryIds || [],
+        { allow_stale: !!ns.memoryPicker.allowStaleConfirmed, expert_override: !!ns.memoryPicker.expertOverride },
+      );
+      ns.memoryPicker.compactPreview = preview;
+    } catch (_) {}
+    render();
+  });
+
   registerAction('set-simple-intent', ({ event, element }) => {
     const intent = event?.target?.closest('[data-intent]')?.dataset?.intent || element?.dataset?.intent;
     if (!intent) return;
@@ -194,6 +369,16 @@ function registerNewSessionHandlers() {
       || element?.dataset?.productPreset;
     if (!presetId) return;
     applyProductPreset(presetId);
+    window.DecisionArena.render?.();
+  });
+
+  registerAction('select-playbook', ({ event, element }) => {
+    const { state, navigate } = getCtx();
+    const playbookId = event?.target?.closest('[data-playbook-id]')?.dataset?.playbookId
+      || element?.dataset?.playbookId;
+    if (!playbookId) return;
+    if (!applyDecisionPlaybook(playbookId)) return;
+    if (state.view !== 'new-session') navigate('new-session');
     window.DecisionArena.render?.();
   });
 
@@ -224,6 +409,7 @@ function registerNewSessionHandlers() {
       state.newSession = {
         ...(state.newSession || {}),
         mode,
+        selectedPlaybookId: isModeBackedPlaybook(mode) ? mode : null,
         productFamily: null,
         productPreset: null,
         founderInterrogation: null,
@@ -326,7 +512,7 @@ function registerNewSessionHandlers() {
     }
 
     // Mode Simple: prefill hidden advanced fields so launch never depends on expert controls.
-    const isSimpleDisplay = state.uiMode !== 'expert';
+    const isSimpleDisplay = state.uiMode === 'basic';
     const starterLocksConfig = Boolean(
       ns.selectedScenarioId
       || (ns.selectedStarter && (ns.selectedStarter.type === 'template' || ns.selectedStarter.type === 'scenario')),
@@ -374,6 +560,11 @@ function registerNewSessionHandlers() {
         : ns.selectedAgents;
 
       let initialPrompt = _composeSessionObjectivePrompt(ns);
+      const runtimePlaybookId = ns.productPreset || ns.selectedPlaybookId || null;
+      const runtimeMarker = _runtimePlaybookMarker(runtimePlaybookId);
+      if (runtimeMarker) {
+        initialPrompt = `${initialPrompt}\n\n---\n\n${runtimeMarker}`;
+      }
       if (ns.productPreset === 'founder-sprint') {
         const fi = ns.founderInterrogation && typeof ns.founderInterrogation === 'object' ? ns.founderInterrogation : null;
         const filled = fi ? [
@@ -402,12 +593,14 @@ function registerNewSessionHandlers() {
           initialPrompt = `${initialPrompt}\n\n---\n\n${lines.join('\n')}`;
         }
 
+        // Prompt overlays are runtime instructions only. UX/business playbook truth stays in core/playbooks.js.
         const overlay = t('productPreset.founderSprint.promptOverlay');
         if (overlay && !String(overlay).startsWith('productPreset.')) {
           initialPrompt = `${initialPrompt}\n\n---\n\n${overlay}`;
         }
       }
       if (ns.productPreset === 'ceo-challenge') {
+        // Prompt overlays are runtime instructions only. UX/business playbook truth stays in core/playbooks.js.
         const overlay = t('productPreset.ceoChallenge.promptOverlay');
         if (overlay && !String(overlay).startsWith('productPreset.')) {
           initialPrompt = `${initialPrompt}\n\n---\n\n${overlay}`;
@@ -417,6 +610,7 @@ function registerNewSessionHandlers() {
       const body = {
         title:           ns.title.trim(),
         initial_prompt:  initialPrompt,
+        playbook_id:      runtimePlaybookId,
         mode:            ns.mode,
         selected_agents: allAgents,
         rounds: ns.mode === 'quick-decision'
@@ -449,6 +643,7 @@ function registerNewSessionHandlers() {
           auto_retry_on_weak_debate: 1, auto_block_low_quality: 1,
           debate_intensity: 'high',
         } : {}),
+        selected_memory_ids: Array.isArray(ns.selectedMemoryIds) ? ns.selectedMemoryIds : [],
       };
 
       const session = await SessionService.create(body);
@@ -579,6 +774,7 @@ function registerNewSessionHandlers() {
       ns.mode = e.target.value;
       ns.productFamily = null;
       ns.productPreset = null;
+      ns.selectedPlaybookId = isModeBackedPlaybook(ns.mode) ? ns.mode : null;
       ns.founderInterrogation = null;
       if (!locks) {
         _applyCoherentDefaultsForMode(ns);
@@ -675,6 +871,7 @@ function _applyTemplate(state, template) {
   const ns = state.newSession;
   ns.productFamily = null;
   ns.productPreset = null;
+  ns.selectedPlaybookId = isModeBackedPlaybook(template.mode || 'decision-room') ? (template.mode || 'decision-room') : null;
   ns.founderInterrogation = null;
   ns.mode             = template.mode || 'decision-room';
   ns.selectedAgents   = [...(template.selected_agents || [])];
@@ -702,6 +899,7 @@ function _applyScenarioPack(state, pack) {
   const ns = state.newSession;
   ns.productFamily = null;
   ns.productPreset = null;
+  ns.selectedPlaybookId = isModeBackedPlaybook(pack.recommended_mode || 'decision-room') ? (pack.recommended_mode || 'decision-room') : null;
   ns.founderInterrogation = null;
   ns.mode              = pack.recommended_mode || 'decision-room';
   ns.selectedAgents    = [...(pack.persona_ids || [])];
@@ -890,4 +1088,4 @@ function _buildLlmPayload(ns) {
   return {};
 }
 
-export { registerNewSessionHandlers, registerScenarioHandlers, _applyTemplate, _applyScenarioPack, resetNewSessionState };
+export { registerNewSessionHandlers, registerScenarioHandlers, applyDecisionPlaybook, _applyTemplate, _applyScenarioPack, resetNewSessionState };

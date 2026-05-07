@@ -73,6 +73,7 @@ class SessionRepository {
         $extras = [];
         if (isset($data['devil_advocate_enabled']))   $extras['devil_advocate_enabled']   = (int)$data['devil_advocate_enabled'];
         if (isset($data['devil_advocate_threshold']))  $extras['devil_advocate_threshold']  = (float)$data['devil_advocate_threshold'];
+        if (isset($data['selected_memory_ids']))       $extras['selected_memory_ids'] = (string)$data['selected_memory_ids'];
         if (!empty($extras)) {
             try { $this->update($data['id'], $extras); } catch (\Throwable $e) {}
         }

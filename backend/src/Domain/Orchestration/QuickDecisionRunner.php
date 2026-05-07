@@ -33,6 +33,7 @@ class QuickDecisionRunner {
     private RiskProfileAnalyzer $riskAnalyzer;
     private DecisionQualityScoreService $qualityScoreService;
     private DecisionSummaryService $summaryService;
+    private PlaybookRuntime $playbookRuntime;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -50,6 +51,7 @@ class QuickDecisionRunner {
         $this->riskAnalyzer    = new RiskProfileAnalyzer();
         $this->qualityScoreService = new DecisionQualityScoreService();
         $this->summaryService      = new DecisionSummaryService();
+        $this->playbookRuntime     = new PlaybookRuntime();
     }
 
     public function run(
@@ -64,6 +66,7 @@ class QuickDecisionRunner {
     ): array {
         $warning = null;
         $guardrails = [];
+        $playbookId = $this->playbookRuntime->resolvePlaybookId('quick-decision', [], $objective);
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($decisionThreshold);
         $dynamicsPreset = \Domain\Agents\DecisionDynamicsPreset::normalizeId($decisionDynamicsPreset);
         $this->voteRepo->clearSession($sessionId);
@@ -209,7 +212,7 @@ class QuickDecisionRunner {
                 ]);
                 $synthesis[] = $msg;
 
-                $parsed = VerdictParser::parse($content);
+                $parsed = VerdictParser::parse($content, $playbookId);
                 if ($parsed) {
                     $verdictData = array_merge($parsed, [
                         'id'         => $this->uuid(),
@@ -286,6 +289,17 @@ class QuickDecisionRunner {
             $fc
         );
         $synthOut = $synthesis[0]['content'] ?? '';
+        $canonicalSynthesis = CanonicalSynthesisExtractor::extract($synthOut, $playbookId);
+        $playbookDiagnostics = $this->playbookRuntime->extractDiagnostics($synthOut, $playbookId);
+        if (!empty($playbookDiagnostics['warnings'])) {
+            $existing = isset($guardrails['warnings']) && is_array($guardrails['warnings']) ? $guardrails['warnings'] : [];
+            $guardrails['warnings'] = array_values(array_unique(array_merge($existing, $playbookDiagnostics['warnings'])));
+        }
+        $decisionOutcome = DecisionOutcomeProjector::fromCanonical($canonicalSynthesis, [
+            'playbook_runtime' => $playbookDiagnostics,
+            'risk_profile' => $riskProfile,
+            'guardrails' => $guardrails,
+        ]);
         $verdictRow = is_array($verdict) ? $verdict : $this->verdictRepo->findBySession($sessionId);
 
         // Minimal reliability warning when a majority of agents errored.
@@ -322,6 +336,9 @@ class QuickDecisionRunner {
                 'false_consensus'        => $fc,
                 'verdict'                => $verdictRow ?: null,
                 'session_mode_hint'      => 'quick',
+                'canonical_synthesis'    => $canonicalSynthesis,
+                'playbook_runtime'        => $playbookDiagnostics,
+                'decision_outcome'        => $decisionOutcome,
             ])
         );
 
@@ -346,6 +363,9 @@ class QuickDecisionRunner {
             'risk_threshold_info' => $reliability['risk_threshold_info'] ?? null,
             'decision_quality_score' => $qualityScore,
             'decision_brief' => $decisionBrief,
+            'canonical_synthesis' => $canonicalSynthesis,
+            'decision_outcome' => $decisionOutcome,
+            'playbook_runtime' => $playbookDiagnostics,
         ];
     }
 

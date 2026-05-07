@@ -3,7 +3,7 @@
  */
 
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
-import { renderDecisionBrief, renderDecisionDynamicsSummary, renderPremortemStructuredCard, renderTradeoffSection } from '../../ui/components.js';
+import { renderDecisionBrief, renderDecisionDynamicsSummary, renderDecisionOutcomeCard, renderPremortemStructuredCard, renderTradeoffSection } from '../../ui/components.js';
 import { renderExportButtons, renderAgentChatPanel } from '../chat/view.js';
 import { renderConfrontationAgentCard, renderWeightedVotePanel, renderDecisionReliabilityCard, renderVerdictCard } from '../confrontation/index.js';
 import { renderDebateAuditPanel } from '../debateAudit/index.js';
@@ -60,6 +60,7 @@ function renderQuickDecision() {
         ` : ''}
 
         ${results ? `
+          ${renderDecisionOutcomeCard(results.decision_outcome || results.decision_brief?.decision_outcome || null, { uiMode: state.uiMode, sessionId: session.id })}
           ${renderDecisionBrief(results.decision_brief || null, {
             sessionId: session.id,
             agentDecisionDynamics: results.agent_decision_dynamics,

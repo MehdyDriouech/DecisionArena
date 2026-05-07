@@ -70,6 +70,7 @@ Decision Arena ne promet pas “la bonne réponse”. Il propose :
 - **Providers locaux et cloud** — Ollama, LM Studio, API compatible OpenAI ; routage multi-provider.
 - **Personas en Markdown** — définitions versionnables, âmes / dynamiques de décision selon configuration.
 - **Local-first** — vos données et votre stack restent chez vous ; pas de dépendance à un SaaS fermé pour fonctionner.
+- **Mode expert : suppressions en lot** — sélection multiple et suppression groupée des **contextes stratégiques** et des entrées **Decision Memory** (actions “Tout sélectionner (vue)” + “Supprimer sélection”).
 
 ---
 
@@ -186,6 +187,53 @@ Vue volontairement plate :
 - **`backend/storage/personas/`** — Fichiers personas Markdown + helpers associés.
 
 Pas de “meta-framework” : PHP et JS restent lisibles ligne à ligne.
+
+---
+
+## Decision Memory (navigation & retrieval)
+
+Decision Arena inclut une couche **Decision Memory** orientée **décisions structurées** (pas de chat “mémoire implicite”).
+
+### Navigation primaire (source de vérité)
+
+Le parcours reste:
+
+**Strategic Context → Decision Room / Chain → Decision Memory**
+
+La navigation prime sur toute recherche.
+
+### Recherche déterministe (production) — SQLite FTS5 scoped
+
+- **But**: accélérer la recherche dans des **mémoires structurées** (résumé, risques, next steps…), **pas** du RAG, **pas** une “mémoire conversationnelle”.
+- **Index**: table virtuelle `decision_memory_fts` (FTS5, optionnel).
+- **Fallback**: si FTS5 indisponible, la recherche retombe en **LIKE**.
+- **API**: `GET /api/decision-memories/search` (scopes `context_id` / `room_id`, filtres, ordering déterministe)
+- **Safety**:
+  - jamais de raw chat / provider output / prompts / reasoning blobs
+  - exclusion par défaut des mémoires invalidées/archivées/stale (override expert explicite)
+
+### Similarité sémantique (expérimental) — discovery only (Expert-only)
+
+Optionnel et **secondaire** : aide à découvrir des décisions **similaires** (patterns de risques, hypothèses, pivots), sans remplacer la recherche FTS.
+
+- **Feature flag**: `SEMANTIC_MEMORY_ENABLED=false` par défaut.
+- **Stockage**: `decision_memory_embeddings` (SQLite, vecteurs JSON).
+- **Provider** (ce lot): `DeterministicFakeEmbeddingProvider` uniquement (pas d’appels externes).
+- **API**: `GET /api/decision-memories/similar` (params `memory_id` ou `q`, scopes + filtres).
+- **Garanties**:
+  - discovery only: **aucune** injection automatique dans les prompts
+  - **aucun** auto-link, aucune modification lifecycle/current_state
+  - warnings UI obligatoires: “Similarity does not imply correctness.” + “These are prior decision records, not verified facts.”
+
+### Scripts utiles
+
+- Rebuild FTS: `php backend/tools/rebuild_decision_memory_fts.php`
+- Rebuild embeddings (expérimental): `php backend/tools/rebuild_decision_memory_embeddings.php`
+
+### Admin / maintenance (expert-only)
+
+- Suppression hard d’une décision : `DELETE /api/decision-memories/{id}`  
+  (supprime aussi ses liens `decision_memory_links`, `decision_room_memories`, `strategic_context_memories`, `decision_memory_audit_events` et l’index embedding si présent).
 
 ---
 

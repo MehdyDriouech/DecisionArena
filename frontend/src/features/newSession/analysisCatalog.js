@@ -8,6 +8,7 @@ import {
   filterAvailablePersonas,
   resolveDefaultPresetPersonas,
 } from '../../utils/intentPresets.js';
+import { isModeBackedPlaybook } from '../../core/playbooks.js';
 
 /**
  * @typedef {Object} AnalysisFamilyDefinition
@@ -21,7 +22,6 @@ import {
  * @property {number} [cfRounds]
  * @property {boolean} [expertOnly]
  * @property {boolean} [forceDisagreement]
- * @property {string[]} recommendedFor — clés i18n (analysisFamily.*.reco.*)
  */
 
 /** @type {Record<string, AnalysisFamilyDefinition>} */
@@ -34,7 +34,6 @@ const ANALYSIS_CATALOG = {
     personas: ['critic', 'qa', 'architect', 'pm'],
     expertOnly: false,
     forceDisagreement: true,
-    recommendedFor: ['analysisFamily.validate.reco.0', 'analysisFamily.validate.reco.1'],
   },
   decide: {
     id: 'decide',
@@ -44,7 +43,6 @@ const ANALYSIS_CATALOG = {
     personas: ['pm', 'architect', 'critic', 'synthesizer'],
     expertOnly: false,
     forceDisagreement: true,
-    recommendedFor: ['analysisFamily.decide.reco.0', 'analysisFamily.decide.reco.1'],
   },
   stress: {
     id: 'stress',
@@ -56,7 +54,6 @@ const ANALYSIS_CATALOG = {
     redTeam: ['analyst', 'critic'],
     expertOnly: false,
     forceDisagreement: true,
-    recommendedFor: ['analysisFamily.stress.reco.0', 'analysisFamily.stress.reco.1'],
   },
   ship: {
     id: 'ship',
@@ -66,11 +63,8 @@ const ANALYSIS_CATALOG = {
     personas: ['qa', 'critic', 'architect', 'pm'],
     expertOnly: false,
     forceDisagreement: true,
-    recommendedFor: ['analysisFamily.ship.reco.0', 'analysisFamily.ship.reco.1'],
   },
 };
-
-const ANALYSIS_FAMILY_ORDER = ['validate', 'decide', 'stress', 'ship'];
 
 /**
  * Applique une famille produit au state `newSession` (pré-remplit mode, tours, équipes).
@@ -108,6 +102,7 @@ function applyAnalysisFamily(familyId) {
   DA.store.state.newSession = {
     ...ns,
     productFamily: familyId,
+    selectedPlaybookId: isModeBackedPlaybook(mode) ? mode : null,
     selectedIntent: familyId,
     simpleIntent: simpleIntentLegacy,
     mode,
@@ -134,6 +129,5 @@ function applyAnalysisFamily(familyId) {
 
 export {
   ANALYSIS_CATALOG,
-  ANALYSIS_FAMILY_ORDER,
   applyAnalysisFamily,
 };

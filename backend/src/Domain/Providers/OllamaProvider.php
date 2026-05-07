@@ -7,17 +7,21 @@ class OllamaProvider implements LlmProviderInterface {
         private string $defaultModel
     ) {}
 
-    public function chat(array $messages, string $model = ''): string {
+    public function chat(array $messages, string $model = '', array $options = []): string {
         $model = trim((string)($model ?: $this->defaultModel));
         if ($model === '') {
             throw new \RuntimeException('No model configured for Ollama call.');
         }
         $url = rtrim($this->baseUrl, '/') . '/api/chat';
-        $payload = json_encode([
+        $body = [
             'model'    => $model,
             'messages' => $messages,
             'stream'   => false,
-        ]);
+        ];
+        if (isset($options['temperature']) && is_numeric($options['temperature'])) {
+            $body['options'] = ['temperature' => (float)$options['temperature']];
+        }
+        $payload = json_encode($body);
         $ch = curl_init($url);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_POST, true);

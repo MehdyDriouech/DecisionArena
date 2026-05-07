@@ -4,7 +4,7 @@
  */
 
 import { renderConfrontationAgentCard, renderDebateInsightsPanels, renderWeightedVotePanel, renderDecisionReliabilityCard, renderVerdictCard, renderSessionMemoryPanel, renderSessionContextDocPanel } from '../confrontation/index.js';
-import { renderDecisionBrief, renderDecisionDynamicsSummary, renderPremortemInvertedBanner, renderPremortemStructuredCard, renderTradeoffSection, renderEmptyState, renderActionBar } from '../../ui/components.js';
+import { renderDecisionBrief, renderDecisionDynamicsSummary, renderDecisionOutcomeCard, renderPremortemInvertedBanner, renderPremortemStructuredCard, renderTradeoffSection, renderEmptyState, renderActionBar } from '../../ui/components.js';
 import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
 import { renderSixThinkingMethodBanner } from '../../utils/sixThinkingHats.js';
 
@@ -1202,6 +1202,8 @@ function renderSessionHistory() {
   const messages = data.messages || [];
   const mode     = session.mode || 'chat';
   const modeIcons = { chat: '💬', 'decision-room': '🏛️', confrontation: '⚔️' };
+  const decisionOutcome = data.decision_outcome || data.decision_brief?.decision_outcome || session.decision_outcome || null;
+  const memoryReuse = data?.playbook_runtime?.memory_reuse || data?.memory_reuse || (data?.session?.result ? null : null);
 
   const routingMode = state.providerRoutingSettings?.routing_mode || null;
   const routingBadge = routingMode
@@ -1245,7 +1247,7 @@ function renderSessionHistory() {
       </span>` : '';
     const messageId = String(msg.id || `${session.id}-hist-${msg.agent_id || 'agent'}-${idx}`);
     const isLong = String(msg.content || '').length > 650;
-    const isSimpleMode = state.uiMode !== 'expert';
+    const isSimpleMode = state.uiMode === 'basic';
     const canCollapse = isSimpleMode || isLong;
     const toggled = state.collapsedMessages?.[messageId];
     const collapsed = canCollapse ? (isSimpleMode ? toggled !== true : !!toggled) : false;
@@ -1276,7 +1278,7 @@ function renderSessionHistory() {
       const isSynth = msgs.some((m) => m.message_type === 'synthesis' || m.phase === 'synthesis');
       const label   = isSynth ? `✨ ${t('confrontation.phaseFinal')}` : mode === 'confrontation' ? `${t('confrontation.round')} ${r}` : `${t('dr.round')} ${r}`;
       const cards = msgs.map((m, i) => (
-        state.uiMode !== 'expert'
+        state.uiMode === 'basic'
           ? renderHistoryMessage(m, i)
           : renderConfrontationAgentCard(m, isSynth, `${session.id}-hist-r${r}-m${i}`)
       )).join('');
@@ -1326,9 +1328,24 @@ function renderSessionHistory() {
     <div style="max-width:960px;margin:0 auto;padding:24px 20px;">
       <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:24px;">
         <button class="btn btn-secondary btn-sm" data-nav="sessions">← ${t('nav.back')}</button>
+        <button class="btn btn-secondary btn-sm" data-ui="expert-only" data-action="link-session-to-strategic-context" data-session-id="${escHtml(session.id)}">🧭 ${escHtml(t('contexts.linkSession'))}</button>
       </div>
 
       <div class="session-view">
+        ${mode !== 'chat' ? renderDecisionOutcomeCard(decisionOutcome, { uiMode: state.uiMode, sessionId: session.id }) : ''}
+        ${state.uiMode === 'expert' && (data?.session?.selected_memory_ids || data?.session?.injected_memory_context || data?.memory_reuse || (data?.decision_outcome?.diagnostics?.memory_reuse)) ? `
+          <details data-ui="expert-only" class="card" style="margin:0 0 16px;padding:14px 16px;">
+            <summary style="cursor:pointer;font-weight:700;">🗂️ Decision Memory reuse (diagnostics)</summary>
+            <div style="margin-top:10px;font-size:12px;color:var(--text-secondary);line-height:1.5;">
+              <div><strong>selected_memory_ids</strong>: <code>${escHtml(String(data?.session?.selected_memory_ids ?? '[]'))}</code></div>
+              <div><strong>memory_reuse_mode</strong>: <code>${escHtml(String(data?.session?.memory_reuse_mode ?? ''))}</code></div>
+              <div><strong>memory_used_at</strong>: <code>${escHtml(String(data?.session?.memory_used_at ?? ''))}</code></div>
+              ${data?.session?.injected_memory_context ? `<div style="margin-top:10px;"><strong>injected_memory_context</strong><pre style="white-space:pre-wrap;font-size:11px;color:var(--text-secondary);margin:6px 0 0;">${escHtml(String(data.session.injected_memory_context))}</pre></div>` : ''}
+              ${data?.playbook_runtime?.memory_reuse ? `<div style="margin-top:10px;"><strong>memory_reuse</strong><pre style="white-space:pre-wrap;font-size:11px;color:var(--text-secondary);margin:6px 0 0;">${escHtml(JSON.stringify(data.playbook_runtime.memory_reuse, null, 2))}</pre></div>` : ''}
+              ${data?.memory_reuse ? `<div style="margin-top:10px;"><strong>memory_reuse</strong><pre style="white-space:pre-wrap;font-size:11px;color:var(--text-secondary);margin:6px 0 0;">${escHtml(JSON.stringify(data.memory_reuse, null, 2))}</pre></div>` : ''}
+            </div>
+          </details>
+        ` : ''}
         ${mode !== 'chat' ? renderDecisionBrief(buildSessionDecisionBrief(data, messages)) : ''}
 
         ${mode !== 'chat' ? renderSessionPrimaryActions(session, state, escHtml) : ''}

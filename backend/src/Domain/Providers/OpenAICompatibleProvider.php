@@ -8,13 +8,16 @@ class OpenAICompatibleProvider implements LlmProviderInterface {
         private string $defaultModel
     ) {}
 
-    public function chat(array $messages, string $model = ''): string {
+    public function chat(array $messages, string $model = '', array $options = []): string {
         $model = $model ?: $this->defaultModel;
+        $temperature = isset($options['temperature']) && is_numeric($options['temperature'])
+            ? (float)$options['temperature']
+            : 0.7;
         $url = rtrim($this->baseUrl, '/') . '/v1/chat/completions';
         $payload = json_encode([
             'model'       => $model,
             'messages'    => $messages,
-            'temperature' => 0.7,
+            'temperature' => $temperature,
         ]);
         $headers = ['Content-Type: application/json'];
         if ($this->apiKey) {

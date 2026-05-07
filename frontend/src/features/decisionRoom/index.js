@@ -3,7 +3,7 @@
  */
 
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
-import { renderDecisionBrief, renderDecisionDynamicsSummary, renderPremortemInvertedBanner, renderPremortemStructuredCard, renderTradeoffSection } from '../../ui/components.js';
+import { renderDecisionBrief, renderDecisionDynamicsSummary, renderDecisionOutcomeCard, renderPremortemInvertedBanner, renderPremortemStructuredCard, renderTradeoffSection } from '../../ui/components.js';
 import { renderExportButtons, renderAgentChatPanel } from '../chat/view.js';
 import { renderDebateInsightsPanels, renderWeightedVotePanel, renderDecisionReliabilityCard } from '../confrontation/index.js';
 import { renderDebateAuditPanel } from '../debateAudit/index.js';
@@ -112,7 +112,7 @@ function renderDRResults(results) {
     `;
   }).join('');
 
-  const uiMode = state.uiMode || 'simple';
+  const uiMode = state.uiMode || 'basic';
   const groupedHatsHtml = sixHats && uiMode === 'expert'
     ? renderSixThinkingHatsGroupedDebate(rounds, {
       escHtml,
@@ -126,6 +126,7 @@ function renderDRResults(results) {
 
   return (sixHats ? renderSixThinkingMethodBanner(sess, t, escHtml) : '')
     + (isPm ? renderPremortemInvertedBanner(t, escHtml) : '')
+    + renderDecisionOutcomeCard(results.decision_outcome || results.decision_brief?.decision_outcome || null, { uiMode, sessionId })
     + renderDecisionBrief(results.decision_brief || null, {
       sessionId,
       agentDecisionDynamics: results.agent_decision_dynamics,

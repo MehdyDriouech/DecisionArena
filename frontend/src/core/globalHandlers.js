@@ -1,7 +1,61 @@
 /* Global action handlers — language switch, error clear */
-import { registerAction } from './events.js';
+import { dispatchAction, registerAction } from './events.js';
 
 function registerGlobalHandlers() {
+  registerAction('cancel-pending-confirmation', ({ element }) => {
+    const state = window.DecisionArena.store.state;
+    const id = element?.dataset?.confirmId || '';
+    if (!state.pendingConfirmation || (id && state.pendingConfirmation.id !== id)) return;
+    state.pendingConfirmation = null;
+    window.DecisionArena.render?.();
+  });
+
+  registerAction('confirm-pending-confirmation', async ({ element }) => {
+    const state = window.DecisionArena.store.state;
+    const pending = state.pendingConfirmation;
+    const id = element?.dataset?.confirmId || '';
+    if (!pending || (id && pending.id !== id)) return;
+
+    const card = element?.closest?.('[data-confirm-card]');
+    const fieldValues = {};
+    let missingLabel = '';
+    card?.querySelectorAll?.('[data-confirm-field]')?.forEach((field) => {
+      const name = field.dataset.confirmField;
+      if (!name) return;
+      const value = String(field.value || '').trim();
+      fieldValues[name] = value;
+      if (!value && field.dataset.confirmRequired === '1' && !missingLabel) {
+        const label = field.closest('.form-group')?.querySelector('label')?.textContent || name;
+        missingLabel = label.replace('*', '').trim();
+      }
+    });
+
+    if (missingLabel) {
+      pending.fields = (pending.fields || []).map((field) => ({
+        ...field,
+        value: Object.prototype.hasOwnProperty.call(fieldValues, field.name) ? fieldValues[field.name] : field.value,
+      }));
+      pending.fieldError = window.i18n?.getLanguage?.() === 'en'
+        ? `${missingLabel} is required before confirming.`
+        : `${missingLabel} est requis avant de confirmer.`;
+      window.DecisionArena.render?.();
+      return;
+    }
+
+    state.pendingConfirmation = null;
+    await dispatchAction(pending.action, {
+      confirmed: true,
+      confirmationPayload: { ...(pending.payload || {}), ...fieldValues },
+      element: {
+        dataset: {
+          ...(pending.payload || {}),
+          ...fieldValues,
+          confirmed: '1',
+        },
+      },
+    });
+  });
+
   registerAction('clear-error', () => {
     const state = window.DecisionArena.store.state;
     state.error = null;
@@ -17,8 +71,10 @@ function registerGlobalHandlers() {
 
   registerAction('set-ui-mode', ({ element }) => {
     const m = element?.dataset?.uiMode;
-    if (m !== 'simple' && m !== 'expert') return;
-    const normalized = window.DecisionArena.store.setUiMode?.(m);
+    // Product UX: only "basic" | "expert". Legacy compatibility: "simple" -> "basic".
+    const next = m === 'simple' ? 'basic' : m;
+    if (next !== 'basic' && next !== 'expert') return;
+    const normalized = window.DecisionArena.store.setUiMode?.(next);
     if (!normalized) return;
     window.DecisionArena.applyUiModeVisibility?.(normalized);
     window.DecisionArena.render?.();
@@ -26,8 +82,10 @@ function registerGlobalHandlers() {
 
   registerAction('set-ui-complexity', ({ element }) => {
     const c = element?.dataset?.complexity;
-    if (!['basic', 'advanced', 'expert'].includes(c)) return;
-    const normalized = window.DecisionArena.store.setUiComplexity?.(c);
+    // Legacy-only: if any old UI still emits this action, map advanced->expert and avoid tri-mode UX.
+    const next = c === 'advanced' ? 'expert' : c;
+    if (!['basic', 'expert'].includes(next)) return;
+    const normalized = window.DecisionArena.store.setUiComplexity?.(next);
     if (!normalized) return;
     window.DecisionArena.applyUiModeVisibility?.(normalized);
     window.DecisionArena.render?.();

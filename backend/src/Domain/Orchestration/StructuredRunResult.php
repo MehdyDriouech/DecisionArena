@@ -62,7 +62,11 @@ final class StructuredRunResult {
             'guardrails'             => $result['guardrails'] ?? null,
             'decision_quality_score' => $result['decision_quality_score'] ?? null,
             'auto_retry'             => $result['auto_retry'] ?? null,
+            'canonical_synthesis'    => $result['canonical_synthesis'] ?? null,
+            'decision_outcome'       => $result['decision_outcome'] ?? null,
+            'playbook_runtime'       => $result['playbook_runtime'] ?? null,
             'premortem_summary'      => $result['premortem_summary'] ?? null,
+            'memory_reuse'           => $result['memory_reuse'] ?? null,
         ];
     }
 }

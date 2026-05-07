@@ -8,7 +8,7 @@ header('Access-Control-Allow-Headers: Content-Type, Authorization');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
 header('Content-Type: application/json');
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') {
     http_response_code(200);
     exit;
 }
@@ -24,6 +24,7 @@ spl_autoload_register(function (string $class) {
 require_once __DIR__ . '/../src/Http/Router.php';
 require_once __DIR__ . '/../src/Http/Request.php';
 require_once __DIR__ . '/../src/Http/Response.php';
+require_once __DIR__ . '/../src/Http/RawResponse.php';
 require_once __DIR__ . '/../src/Infrastructure/Persistence/Database.php';
 require_once __DIR__ . '/../src/Infrastructure/Persistence/Migration.php';
 
@@ -49,6 +50,7 @@ $router->post('/api/personas/build-draft', [Controllers\PersonaController::class
 $router->post('/api/personas/save-custom', [Controllers\PersonaController::class, 'saveCustom']);
 $router->post('/api/personas/modes', [Controllers\PersonaController::class, 'saveModes']);
 $router->post('/api/personas/decision-dynamics', [Controllers\PersonaController::class, 'saveDecisionDynamics']);
+$router->post('/api/personas/sandbox-test', [Controllers\PersonaSandboxController::class, 'test']);
 $router->post('/api/personas/make', [Controllers\PersonaMakerController::class, 'make']);
 $router->get('/api/personas', [Controllers\PersonaController::class, 'index']);
 $router->get('/api/personas/{id}', [Controllers\PersonaController::class, 'show']);
@@ -79,6 +81,8 @@ $router->post('/api/sessions', [Controllers\SessionController::class, 'store']);
 $router->post('/api/sessions/delete-all', [Controllers\SessionController::class, 'deleteAll']);
 $router->post('/api/sessions/from-template', [Controllers\TemplateController::class, 'fromTemplate']);
 $router->get('/api/sessions/{id}', [Controllers\SessionController::class, 'show']);
+$router->get('/api/sessions/{id}/decision-memory', [Controllers\DecisionMemoryController::class, 'bySession']);
+$router->post('/api/sessions/{id}/decision-memory/confirm', [Controllers\DecisionMemoryController::class, 'confirm']);
 $router->delete('/api/sessions/{id}', [Controllers\SessionController::class, 'delete']);
 $router->post('/api/sessions/{id}/status', [Controllers\SessionController::class, 'updateStatus']);
 $router->put('/api/sessions/{id}/memory', [Controllers\SessionController::class, 'memory']);
@@ -211,6 +215,47 @@ $router->put('/api/templates/{id}', [Controllers\TemplateController::class, 'upd
 $router->delete('/api/templates/{id}', [Controllers\TemplateController::class, 'destroy']);
 $router->post('/api/templates/{id}/duplicate', [Controllers\TemplateController::class, 'duplicate']);
 
+// Decision Memory
+$router->get('/api/decision-memories', [Controllers\DecisionMemoryController::class, 'index']);
+$router->get('/api/decision-memories/search', [Controllers\DecisionMemoryController::class, 'search']);
+$router->get('/api/decision-memories/similar', [Controllers\DecisionMemoryController::class, 'similar']);
+$router->get('/api/decision-memories/compact', [Controllers\DecisionMemoryController::class, 'compact']);
+$router->get('/api/decision-memories/{id}', [Controllers\DecisionMemoryController::class, 'show']);
+$router->get('/api/decision-memories/{id}/related', [Controllers\DecisionMemoryController::class, 'related']);
+$router->get('/api/decision-memories/{id}/audit', [Controllers\DecisionMemoryController::class, 'audit']);
+$router->post('/api/decision-memories/{id}/link', [Controllers\DecisionMemoryController::class, 'link']);
+$router->post('/api/decision-memories/{id}/lifecycle', [Controllers\DecisionMemoryController::class, 'lifecycle']);
+$router->delete('/api/decision-memories/{id}', [Controllers\DecisionMemoryController::class, 'destroy']);
+
+// Strategic Contexts (lightweight organization layer)
+$router->get('/api/strategic-contexts', [Controllers\StrategicContextController::class, 'index']);
+$router->post('/api/strategic-contexts', [Controllers\StrategicContextController::class, 'create']);
+$router->get('/api/strategic-contexts/{context_id}/rooms', [Controllers\DecisionRoomsController::class, 'indexByContext']);
+$router->post('/api/strategic-contexts/{context_id}/rooms', [Controllers\DecisionRoomsController::class, 'createInContext']);
+$router->get('/api/strategic-contexts/{context_id}/memory.md', [Controllers\MemoryMarkdownController::class, 'context']);
+$router->get('/api/strategic-contexts/{id}', [Controllers\StrategicContextController::class, 'show']);
+$router->put('/api/strategic-contexts/{id}', [Controllers\StrategicContextController::class, 'update']);
+$router->delete('/api/strategic-contexts/{id}', [Controllers\StrategicContextController::class, 'destroy']);
+$router->post('/api/strategic-contexts/{id}/link-memory', [Controllers\StrategicContextController::class, 'linkMemory']);
+$router->post('/api/strategic-contexts/{id}/unlink-memory', [Controllers\StrategicContextController::class, 'unlinkMemory']);
+$router->post('/api/strategic-contexts/{id}/link-session', [Controllers\StrategicContextController::class, 'linkSession']);
+$router->post('/api/strategic-contexts/{id}/unlink-session', [Controllers\StrategicContextController::class, 'unlinkSession']);
+
+// Palace-lite: decision rooms (chains inside a strategic context; join-table links only)
+$router->post('/api/decision-rooms/{room_id}/archive', [Controllers\DecisionRoomsController::class, 'archive']);
+$router->delete('/api/decision-rooms/{room_id}/memories/{memory_id}', [Controllers\DecisionRoomsController::class, 'unlinkMemory']);
+$router->post('/api/decision-rooms/{room_id}/memories', [Controllers\DecisionRoomsController::class, 'linkMemory']);
+$router->delete('/api/decision-rooms/{room_id}/sessions/{session_id}', [Controllers\DecisionRoomsController::class, 'unlinkSession']);
+$router->post('/api/decision-rooms/{room_id}/sessions', [Controllers\DecisionRoomsController::class, 'linkSession']);
+$router->get('/api/decision-rooms/{room_id}', [Controllers\DecisionRoomsController::class, 'show']);
+$router->put('/api/decision-rooms/{room_id}', [Controllers\DecisionRoomsController::class, 'update']);
+$router->get('/api/decision-rooms/{room_id}/memory.md', [Controllers\MemoryMarkdownController::class, 'room']);
+$router->delete('/api/decision-rooms/{room_id}', [Controllers\DecisionRoomsController::class, 'destroy']);
+
+if (PHP_SAPI === 'cli' && !isset($_SERVER['REQUEST_METHOD'])) {
+    return;
+}
+
 $request = new Request();
 $logger = new Infrastructure\Logging\Logger();
 try {
@@ -227,6 +272,12 @@ try {
 } catch (\Throwable $e) {}
 try {
     $response = $router->dispatch($request);
+    if ($response instanceof \Http\RawResponse) {
+        http_response_code($response->statusCode);
+        header('Content-Type: ' . $response->contentType);
+        echo $response->body;
+        exit;
+    }
     $json = json_encode($response, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
     if ($json === false) {
         http_response_code(500);

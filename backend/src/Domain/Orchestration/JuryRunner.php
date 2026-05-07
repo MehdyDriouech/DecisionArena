@@ -37,6 +37,7 @@ class JuryRunner {
     private \Domain\DecisionReliability\DecisionQualityScoreService $qualityScoreService;
     private DecisionSummaryService $summaryService;
     private PromptBuilder $promptBuilder;
+    private PlaybookRuntime $playbookRuntime;
 
     public function __construct() {
         $this->assembler        = new AgentAssembler();
@@ -57,6 +58,7 @@ class JuryRunner {
         $this->guardrailService = new \Domain\DecisionReliability\DecisionGuardrailService();
         $this->qualityScoreService = new \Domain\DecisionReliability\DecisionQualityScoreService();
         $this->summaryService = new DecisionSummaryService();
+        $this->playbookRuntime = new PlaybookRuntime();
         try {
             $pdo = \Infrastructure\Persistence\Database::getConnection();
             $pdo->exec("ALTER TABLE sessions ADD COLUMN run_status TEXT DEFAULT NULL");
@@ -88,6 +90,7 @@ class JuryRunner {
         array  $adversarialCfg = [],
         ?string $decisionDynamicsPreset = null
     ): array {
+        $playbookId = $this->playbookRuntime->resolvePlaybookId('jury', [], $objective);
         $adversarialCfg = $this->normalizeAdversarialConfig($adversarialCfg);
         $threshold = ReliabilityConfig::normalizeThreshold($threshold);
         $dynamicsPreset = \Domain\Agents\DecisionDynamicsPreset::normalizeId($decisionDynamicsPreset);
@@ -681,7 +684,18 @@ class JuryRunner {
         );
 
         $synthesizerOutput = $verdictMessages[0]['content'] ?? '';
-        $parsedVerdictBrief = VerdictParser::parse($synthesizerOutput);
+        $parsedVerdictBrief = VerdictParser::parse($synthesizerOutput, $playbookId);
+        $canonicalSynthesis = CanonicalSynthesisExtractor::extract($synthesizerOutput, $playbookId);
+        $playbookDiagnostics = $this->playbookRuntime->extractDiagnostics($synthesizerOutput, $playbookId);
+        if (!empty($playbookDiagnostics['warnings'])) {
+            $existing = isset($guardrails['warnings']) && is_array($guardrails['warnings']) ? $guardrails['warnings'] : [];
+            $guardrails['warnings'] = array_values(array_unique(array_merge($existing, $playbookDiagnostics['warnings'])));
+        }
+        $decisionOutcome = DecisionOutcomeProjector::fromCanonical($canonicalSynthesis, [
+            'playbook_runtime' => $playbookDiagnostics,
+            'risk_profile' => $riskProfile,
+            'guardrails' => $guardrails,
+        ]);
 
         // Heuristic fallback fields used by DecisionSummaryService::buildDecisionBrief when
         // the synthesizer output sections are missing or differently formatted (jury often is).
@@ -706,6 +720,9 @@ class JuryRunner {
                 'risk_profile'           => $riskProfile,
                 'evidence_report'        => $evidenceReport,
                 'verdict'                => $parsedVerdictBrief ?: null,
+                'canonical_synthesis'    => $canonicalSynthesis,
+                'playbook_runtime'        => $playbookDiagnostics,
+                'decision_outcome'        => $decisionOutcome,
             ])
         );
 
@@ -763,6 +780,9 @@ class JuryRunner {
             'auto_retry'                  => $autoRetryResult,
             'decision_quality_score'      => $qualityScore,
             'decision_brief'              => $decisionBrief,
+            'canonical_synthesis'         => $canonicalSynthesis,
+            'decision_outcome'            => $decisionOutcome,
+            'playbook_runtime'            => $playbookDiagnostics,
         ]);
     }
 
@@ -1118,6 +1138,7 @@ class JuryRunner {
         // ── Priority 2 : persona metadata (team=red, adversarial tags) ────────
         $redTeamTags   = ['adversarial', 'risk', 'criticism', 'contrarian', 'challenger', 'red-team'];
         $dissentRoleIds = ['devil_advocate', 'devil-advocate', 'critic', 'contrarian', 'challenger', 'red'];
+        $dynamicsPreset = null;
 
         foreach ($candidates as $agentId) {
             if (in_array(strtolower($agentId), $dissentRoleIds, true)) {
@@ -1235,8 +1256,10 @@ class JuryRunner {
 
         $system = "You are {$personaName}, a {$personaTitle} in a jury deliberation.{$langNote}"
             . " You are a dissenting voice. Your job is to clearly state why the majority view may be wrong or incomplete.";
+        $system .= $this->promptBuilder->buildArgumentDisciplineSystemBlock();
 
         $user = "**Objective:** {$objective}\n\n";
+        $user .= $this->promptBuilder->buildPlaybookDebateDisciplineBlock('jury', $language);
         if (!empty($allPrevMessages)) {
             $user .= "**The jury's contributions so far:**\n";
             foreach (array_slice($allPrevMessages, -6) as $msg) {
@@ -1244,6 +1267,7 @@ class JuryRunner {
                     . mb_substr((string)($msg['content'] ?? ''), 0, 400, 'UTF-8') . "\n";
             }
             $user .= "\n";
+            $user .= $this->promptBuilder->buildRepetitionReductionBlock($allPrevMessages, $language);
         }
 
         $user .= "**Minority Report task:**\n\n";
@@ -1428,7 +1452,7 @@ class JuryRunner {
         $block .= "- You MUST align your final recommendation with the aggregated_decision above.\n";
         $block .= "- If any agent dissented, you MUST include a ## Minority Report section.\n\n";
         $block .= "## Required Synthesis Structure\n";
-        $block .= "Your synthesis MUST include these exact sections:\n\n";
+        $block .= "Your synthesis should cover these sections clearly; headings may vary if the reasoning stays unambiguous:\n\n";
         $block .= "## Final Jury Judgment\n## Aggregated Vote\n## Reliability Assessment\n";
         $block .= "## Majority Position\n## Minority Report\n## Why This Is Or Is Not Reliable\n## Recommended Next Step\n";
 
@@ -1461,16 +1485,19 @@ class JuryRunner {
         $system = "You are {$personaName}, a {$personaTitle} participating in a structured adversarial jury deliberation.{$langNote}\n";
         $system .= "Your role: apply your domain expertise to evaluate the proposal rigorously.\n";
         $system .= "Be direct, evidence-based, and precise. Disagree when warranted.\n";
-        $system .= "You must directly reference at least one previous agent by id.\n";
-        $system .= "You must either challenge, support, or revise a specific claim from that agent.\n";
+        $system .= "When prior contributions exist, directly reference at least one previous agent by id.\n";
+        $system .= "Challenge, support, or revise a specific claim from that agent.\n";
         $system .= "Generic agreement without argument is not acceptable.";
         $system .= $this->promptBuilder->buildEvidenceDisciplineSystemBlock();
+        $system .= $this->promptBuilder->buildArgumentDisciplineSystemBlock();
 
         $userContent = '';
 
         $userContent .= $this->promptBuilder->buildContextDocumentContent($contextDoc, $sessionId, $objective, null);
 
         $userContent .= "**Objective under jury deliberation:** $objective\n\n";
+        $userContent .= $this->playbookRuntime->buildPromptBlock('jury', $language);
+        $userContent .= $this->promptBuilder->buildPlaybookDebateDisciplineBlock('jury', $language);
 
         if (!empty($prevMessages)) {
             $userContent .= "**Previous jury contributions:**\n";
@@ -1480,6 +1507,7 @@ class JuryRunner {
                 $userContent .= "\n**[$label]** *($phaseName)*: {$msg['content']}\n";
             }
             $userContent .= "\n";
+            $userContent .= $this->promptBuilder->buildRepetitionReductionBlock($prevMessages, $language);
         }
 
         if ($socialDynamicsBlock !== null && $socialDynamicsBlock !== '') {
@@ -1541,7 +1569,7 @@ class JuryRunner {
         } elseif ($phase === 'jury-verdict') {
             $instruction = "**Committee Verdict**: As the synthesizer, produce the final committee verdict.\n\n"
                 . "Include: vote distribution summary, majority position, minority report, automatic decision, decision confidence, reliability assessment, and recommended next action.\n\n"
-                . "You MUST follow the required synthesis structure specified in the constraints below.";
+                . "Use the synthesis structure specified in the constraints below as a clear checklist, while keeping the verdict natural and reasoned.";
 
         } elseif ($phase === 'jury-mini-challenge') {
             $effectiveTarget = $assignedTarget ?? ($targetList ? explode(', ', $targetList)[0] : null);

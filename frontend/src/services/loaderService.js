@@ -82,6 +82,15 @@ async function loadScenarioPacks() {
   }
 }
 
+async function loadStrategicContexts() {
+  try {
+    const data = await _svc().StrategicContextService.list({ status: 'active' }, 80);
+    _state().strategicContexts = { loading: false, error: null, items: data.contexts || [] };
+  } catch (err) {
+    _state().strategicContexts = { loading: false, error: String(err.message || err), items: [] };
+  }
+}
+
 async function loadInitialData() {
   await Promise.allSettled([
     loadPersonas(),
@@ -91,6 +100,7 @@ async function loadInitialData() {
     loadSouls(),
     loadTemplates(),
     loadScenarioPacks(),
+    loadStrategicContexts(),
   ]);
 }
 
@@ -103,5 +113,6 @@ export const LoaderService = {
   loadTemplates,
   loadComparisons,
   loadScenarioPacks,
+  loadStrategicContexts,
   loadInitialData,
 };

@@ -1,5 +1,6 @@
 /* Session History feature — action handlers (rerun modal + action plan + memory) */
 import { registerAction } from '../../core/events.js';
+import { isConfirmationConfirmed, requestConfirmation, uiCopy } from '../../utils/confirmationUi.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -107,6 +108,29 @@ function registerSessionHistoryHandlers() {
         block: 'start',
       });
     });
+  });
+
+  registerAction('link-session-to-strategic-context', async ({ element }) => {
+    const sessionId = element?.dataset?.sessionId;
+    if (!sessionId) return;
+    const state = window.DecisionArena.store.state;
+    const ctxId = String(state.strategicContextUi?.selectedContextId || state.decisionMemoryUi?.navStrategicContextId || '').trim();
+    if (!ctxId) {
+      state.error = 'Select a strategic context before linking a session.';
+      window.DecisionArena.render?.();
+      return;
+    }
+    try {
+      await window.DecisionArena.services.StrategicContextService.linkSession(ctxId, sessionId);
+      try {
+        const data = await window.DecisionArena.services.StrategicContextService.list({ status: state.strategicContextUi?.statusFilter || 'active' }, 120);
+        state.strategicContexts = { loading: false, error: null, items: data.contexts || [] };
+      } catch (_) {}
+      state.toast = 'Session liée au contexte.';
+    } catch (err) {
+      state.error = String(err.message || err);
+    }
+    window.DecisionArena.render?.();
   });
 
   registerAction('toggle-tradeoffs', ({ element }) => {
@@ -223,6 +247,7 @@ function registerSessionHistoryHandlers() {
             raw_decision: full.raw_decision || null,
             adjusted_decision: full.adjusted_decision || null,
             decision_brief: full.decision_brief || null,
+            decision_outcome: full.decision_outcome || full.decision_brief?.decision_outcome || null,
             guardrails: full.guardrails || null,
             decision_quality_score: full.decision_quality_score ?? null,
             premortem_summary: full.premortem_summary ?? null,
@@ -684,13 +709,28 @@ function registerSessionHistoryHandlers() {
     render();
   });
 
-  registerAction('apply-dynamics-reco-suggestion', async ({ element }) => {
+  registerAction('apply-dynamics-reco-suggestion', async (ctx = {}) => {
+    const { element } = ctx;
     const { state, render, apiFetch, t } = getCtx();
     const id = element?.dataset?.suggestionId;
     const sessionId = element?.dataset?.sessionId || '';
     const fromAdmin = element?.dataset?.source === 'admin';
     if (!id) return;
-    if (!window.confirm(t('dynamicsReco.applyConfirm'))) return;
+    if (!isConfirmationConfirmed(ctx)) {
+      requestConfirmation(state, {
+        id: `apply-dynamics-reco:${id}`,
+        mode: 'modal',
+        tone: 'warning',
+        title: t('dynamicsReco.applyConfirm'),
+        body: uiCopy('Cette recommandation ajuste la fiabilité utilisée par les prochaines analyses.', 'This recommendation adjusts reliability used by future analyses.'),
+        expertBody: uiCopy('Application manuelle: aucune suggestion n’est appliquée automatiquement.', 'Manual application: no suggestion is applied automatically.'),
+        confirmLabel: uiCopy('Appliquer l’ajustement', 'Apply adjustment'),
+        action: 'apply-dynamics-reco-suggestion',
+        payload: { suggestionId: id, sessionId, source: fromAdmin ? 'admin' : '' },
+      });
+      render();
+      return;
+    }
     try {
       await apiFetch('/api/analysis/agent-dynamics-suggestions/apply', {
         method: 'POST',
@@ -707,9 +747,9 @@ function registerSessionHistoryHandlers() {
         const res = await apiFetch('/api/analysis/agent-dynamics-suggestions');
         state.adminDynamicsReco = res;
       }
-      window.alert(t('dynamicsReco.appliedOk'));
+      state.toast = t('dynamicsReco.appliedOk');
     } catch (err) {
-      window.alert(`${t('dynamicsReco.appliedFail')} ${err.message || ''}`);
+      state.error = `${t('dynamicsReco.appliedFail')} ${err.message || ''}`;
     }
     render();
   });

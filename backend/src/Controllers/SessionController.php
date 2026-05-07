@@ -106,6 +106,9 @@ class SessionController {
         $guardrails       = $persisted['guardrails']          ?? null;
         $autoRetry        = $persisted['auto_retry']          ?? null;
         $qualityScore     = $persisted['decision_quality_score'] ?? null;
+        $canonicalSynthesis = $persisted['canonical_synthesis'] ?? null;
+        $decisionOutcome = $persisted['decision_outcome'] ?? null;
+        $playbookRuntime  = $persisted['playbook_runtime']    ?? null;
 
         $memorySummary = null;
         if (is_array($persisted) && isset($persisted['memory_summary']) && is_array($persisted['memory_summary'])) {
@@ -177,6 +180,9 @@ class SessionController {
             'auto_retry' => $autoRetry,
             'decision_quality_score' => $qualityScore,
             'decision_brief' => $decisionBrief,
+            'canonical_synthesis' => $canonicalSynthesis,
+            'decision_outcome' => $decisionOutcome,
+            'playbook_runtime' => $playbookRuntime,
             'jury_adversarial' => $juryAdversarial,
             'agent_decision_dynamics' => $agentDecisionDynamicsRows,
             'premortem_summary'      => $premortemSummary,
@@ -208,6 +214,9 @@ class SessionController {
             'decision_threshold'   => ReliabilityConfig::normalizeThreshold($data['decision_threshold'] ?? null),
             'parent_session_id'    => $data['parent_session_id'] ?? null,
             'rerun_reason'         => $data['rerun_reason'] ?? null,
+            'selected_memory_ids'  => is_array($data['selected_memory_ids'] ?? null)
+                ? json_encode($data['selected_memory_ids'], JSON_UNESCAPED_UNICODE)
+                : ($data['selected_memory_ids'] ?? '[]'),
             'created_at'           => $now,
             'updated_at'           => $now,
         ];

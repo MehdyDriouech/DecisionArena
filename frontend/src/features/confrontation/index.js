@@ -4,7 +4,7 @@
  * sessionHistory, and stressTest.
  */
 
-import { renderTooltip, renderPanelRecommendBadge, renderCardDescription, renderDecisionBrief, renderTradeoffSection, renderDecisionDynamicsSummary, renderPremortemStructuredCard, pickTradeoffs, renderTradeoffMatrix } from '../../ui/components.js';
+import { renderTooltip, renderPanelRecommendBadge, renderCardDescription, renderDecisionBrief, renderDecisionOutcomeCard, renderTradeoffSection, renderDecisionDynamicsSummary, renderPremortemStructuredCard, pickTradeoffs, renderTradeoffMatrix } from '../../ui/components.js';
 import { parseRecommendedActionForDisplay } from '../../utils/verdictUi.js';
 import { getVoteAppliedReputation, formatVoteReputationCaption } from '../../utils/decisionDynamics.js';
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
@@ -432,7 +432,7 @@ function renderSessionContextDocPanel(session) {
   const open  = state.ctxDocPanelOpen;
   const isLarge = doc && doc.character_count > 30000;
   const renderInlineContextDocEditor = (sid) => (window.DecisionArena.views.shared.renderInlineContextDocEditor || (() => ''))(sid);
-  return `<div class="card ctx-doc-history-panel" style="margin-bottom:24px;padding:0;"><div class="ctx-doc-history-header" data-action="toggle-ctx-doc-panel" style="padding:16px 20px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;"><span style="font-weight:600;font-size:13px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.05em;">${t('contextDoc.sectionTitle')} ${doc ? `<span class="badge badge-success" style="margin-left:8px;font-size:11px;text-transform:none;">${t('contextDoc.attachedBadge')}</span>` : `<span class="badge" style="margin-left:8px;font-size:11px;text-transform:none;background:var(--bg-tertiary);color:var(--text-muted);">${t('contextDoc.noneBadge')}</span>`}</span><span style="font-size:12px;color:var(--text-muted);">${open ? '▲' : '▼'}</span></div>${open ? `<div style="padding:0 20px 20px 20px;border-top:1px solid var(--border);">${doc ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:14px;margin-bottom:10px;">${doc.title ? `<strong style="font-size:14px;">${escHtml(doc.title)}</strong>` : ''}<span class="badge" style="background:var(--bg-secondary);color:var(--text-secondary);">${escHtml(doc.source_type)}</span>${doc.original_filename ? `<span class="badge" style="background:var(--bg-secondary);color:var(--text-muted);">📎 ${escHtml(doc.original_filename)}</span>` : ''}<span class="badge" style="background:var(--bg-secondary);color:var(--text-muted);">${doc.character_count.toLocaleString()} car.</span>${isLarge ? `<span class="badge badge-warning">⚠️ ${t('contextDoc.largeWarning')}</span>` : ''}</div><div class="ctx-doc-panel-content" style="margin-bottom:14px;">${escHtml(doc.content)}</div><div style="display:flex;gap:8px;"><button class="btn btn-secondary btn-sm" data-action="open-ctx-doc-editor" data-session-id="${escHtml(session.id)}">${t('contextDoc.replace')}</button><button class="btn btn-danger btn-sm" data-action="delete-ctx-doc" data-session-id="${escHtml(session.id)}">${t('contextDoc.delete')}</button></div>` : `<div style="padding-top:14px;"><div style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">${t('contextDoc.noneAttached')}</div></div>`}${renderInlineContextDocEditor(session.id)}<span id="ctx-doc-hist-status" style="font-size:12px;color:var(--accent);margin-top:8px;display:block;"></span></div>` : ''}</div>`;
+  return `<div class="card ctx-doc-history-panel" style="margin-bottom:24px;padding:0;"><div class="ctx-doc-history-header" data-action="toggle-ctx-doc-panel" style="padding:16px 20px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;"><span style="font-weight:600;font-size:13px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.05em;">${t('contextDoc.sectionTitle')} ${doc ? `<span class="badge badge-success" style="margin-left:8px;font-size:11px;text-transform:none;">${t('contextDoc.attachedBadge')}</span>` : `<span class="badge" style="margin-left:8px;font-size:11px;text-transform:none;background:var(--bg-tertiary);color:var(--text-muted);">${t('contextDoc.noneBadge')}</span>`}</span><span style="font-size:12px;color:var(--text-muted);">${open ? '▲' : '▼'}</span></div>${open ? `<div style="padding:0 20px 20px 20px;border-top:1px solid var(--border);">${doc ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:14px;margin-bottom:10px;">${doc.title ? `<strong style="font-size:14px;">${escHtml(doc.title)}</strong>` : ''}<span class="badge" style="background:var(--bg-secondary);color:var(--text-secondary);">${escHtml(doc.source_type)}</span>${doc.original_filename ? `<span class="badge" style="background:var(--bg-secondary);color:var(--text-muted);">📎 ${escHtml(doc.original_filename)}</span>` : ''}<span class="badge" style="background:var(--bg-secondary);color:var(--text-muted);">${doc.character_count.toLocaleString()} car.</span>${isLarge ? `<span class="badge badge-warning">⚠️ ${t('contextDoc.largeWarning')}</span>` : ''}</div><div class="ctx-doc-panel-content" style="margin-bottom:14px;">${escHtml(doc.content)}</div><div style="display:flex;gap:8px;"><button class="btn btn-secondary btn-sm" data-action="open-ctx-doc-editor" data-session-id="${escHtml(session.id)}">${t('contextDoc.replace')}</button><button class="btn btn-danger btn-sm" data-ui="expert-only" data-action="delete-ctx-doc" data-session-id="${escHtml(session.id)}">${t('contextDoc.delete')}</button></div>` : `<div style="padding-top:14px;"><div style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">${t('contextDoc.noneAttached')}</div></div>`}${renderInlineContextDocEditor(session.id)}<span id="ctx-doc-hist-status" style="font-size:12px;color:var(--accent);margin-top:8px;display:block;"></span></div>` : ''}</div>`;
 }
 
 /* ── Main confrontation view ── */
@@ -451,6 +451,7 @@ function renderConfrontationResults(results) {
     uiMode: state.uiMode,
     tradeoffUid: sid,
   });
+  const outcomeHtml = renderDecisionOutcomeCard(results.decision_outcome || results.decision_brief?.decision_outcome || null, { uiMode: state.uiMode });
   if (results.rounds && Object.keys(results.rounds).length > 0) {
     const roundNums = Object.keys(results.rounds).map(Number).sort((a, b) => a - b);
     const total     = results.total_rounds || roundNums.length;
@@ -465,7 +466,7 @@ function renderConfrontationResults(results) {
     }).join('');
     if (synthesis.length > 0) html += `<div class="phase-section"><div class="phase-header synthesis"><span>✨</span><span>${t('confrontation.phaseFinal')}</span></div><div class="phase-agents-grid">${synthesis.map((msg, idx) => renderConfrontationAgentCard(msg, true, `${sid}-s-${idx}`)).join('')}</div></div>`;
     html = `<details id="debate-section-${sid}" data-section="debate-details" ${state.showDebateDetails ? 'open' : ''} style="margin:0 0 16px;"><summary class="btn btn-secondary btn-sm">Voir le debat complet</summary><div style="margin-top:12px;">${html}</div></details>`;
-    html = briefHtml
+    html = outcomeHtml + briefHtml
       + renderPremortemStructuredCard(results.premortem_summary || null, t, escHtml)
       + dynamicsHtml + html;
     html += renderDebateInsightsPanels(results);
@@ -492,7 +493,7 @@ function renderConfrontationResults(results) {
     return `<div class="phase-section"><div class="phase-header ${colorClass}"><span>${icon}</span><span>${label}</span></div><div class="phase-agents-grid">${messages.map((msg, idx) => renderConfrontationAgentCard(msg, isSynthesis, `${sid2}-${key}-${idx}`)).join('')}</div></div>`;
   }).join('');
   const legacyDebate = `<details id="debate-section-${sid2}" data-section="debate-details" ${state.showDebateDetails ? 'open' : ''} style="margin:0 0 16px;"><summary class="btn btn-secondary btn-sm">Voir le debat complet</summary><div style="margin-top:12px;">${legacyHtml}</div></details>`;
-  return briefHtml
+  return outcomeHtml + briefHtml
     + renderPremortemStructuredCard(results.premortem_summary || null, t, escHtml)
     + dynamicsHtml
     + legacyDebate

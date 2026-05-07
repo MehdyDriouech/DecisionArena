@@ -2,6 +2,8 @@
  * Launch Assistant feature – view registration.
  */
 
+import { getPlaybookById, getPlaybookIdForLaunchIntent } from '../../core/playbooks.js';
+
 function getCtx() {
   const arena = window.DecisionArena;
   const state = arena.store.state;
@@ -15,16 +17,23 @@ function getCtx() {
 function renderLaunchAssistant() {
   const { state, escHtml, agentIcon, agentName, t } = getCtx();
   const la = state.launchAssistant;
+  const lang = window.i18n?.getLanguage?.() || 'fr';
+  const playbookMeta = (intentId) => {
+    const playbook = getPlaybookById(getPlaybookIdForLaunchIntent(intentId), lang);
+    if (!playbook) return null;
+    return {
+      label: playbook.intention,
+      description: playbook.tagline,
+      duration: playbook.estimated_duration,
+      depth: playbook.cognitive_load,
+    };
+  };
   const intentMeta = {
     'validate-idea': {
-      description: "Obtenir rapidement un avis structure avant d'investir plus de temps",
-      duration: '30s',
-      depth: 'Rapide',
+      ...playbookMeta('validate-idea'),
     },
     'challenge-product': {
-      description: 'Confronter votre produit a des objections pour renforcer votre plan',
-      duration: '2-3 min',
-      depth: 'Intermediaire',
+      ...playbookMeta('challenge-product'),
     },
     'review-architecture': {
       description: 'Evaluer une architecture avec plusieurs angles techniques',
@@ -32,19 +41,13 @@ function renderLaunchAssistant() {
       depth: 'Approfondi',
     },
     'find-risks': {
-      description: 'Identifier les risques majeurs avant execution',
-      duration: '1-2 min',
-      depth: 'Intermediaire',
+      ...playbookMeta('find-risks'),
     },
     'compare-options': {
-      description: 'Comparer des options et clarifier les compromis',
-      duration: '2-4 min',
-      depth: 'Approfondi',
+      ...playbookMeta('compare-options'),
     },
     'prepare-decision': {
-      description: 'Structurer les arguments pour une decision defendable',
-      duration: '2-4 min',
-      depth: 'Approfondi',
+      ...playbookMeta('prepare-decision'),
     },
     'facilitation-workshop': {
       description: '',
@@ -52,9 +55,7 @@ function renderLaunchAssistant() {
       depth: 'Approfondi',
     },
     'stress-test-idea': {
-      description: 'Tester la robustesse de votre idee sous pression',
-      duration: '3-5 min',
-      depth: 'Approfondi',
+      ...playbookMeta('stress-test-idea'),
     },
     custom: {
       description: 'Configurer manuellement le mode, les agents et le niveau de detail',
@@ -69,14 +70,14 @@ function renderLaunchAssistant() {
   });
 
   const intents = [
-    { id: 'validate-idea',       icon: '💡', label: t('la.intentValidateIdea') },
-    { id: 'challenge-product',   icon: '⚔️', label: t('la.intentChallengeProduct') },
+    { id: 'validate-idea',       icon: '💡', label: intentMeta['validate-idea']?.label || 'validate-idea' },
+    { id: 'challenge-product',   icon: '⚔️', label: intentMeta['challenge-product']?.label || 'challenge-product' },
     { id: 'review-architecture', icon: '🏗️', label: t('la.intentReviewArch') },
-    { id: 'find-risks',          icon: '⚠️', label: t('la.intentFindRisks') },
-    { id: 'compare-options',     icon: '⚖️', label: t('la.intentCompareOptions') },
-    { id: 'prepare-decision',    icon: '🎯', label: t('la.intentPrepareDecision') },
+    { id: 'find-risks',          icon: '⚠️', label: intentMeta['find-risks']?.label || 'find-risks' },
+    { id: 'compare-options',     icon: '⚖️', label: intentMeta['compare-options']?.label || 'compare-options' },
+    { id: 'prepare-decision',    icon: '🎯', label: intentMeta['prepare-decision']?.label || 'prepare-decision' },
     { id: 'facilitation-workshop', icon: '🎩', label: t('la.intentFacilitationWorkshop') },
-    { id: 'stress-test-idea',    icon: '🔥', label: t('la.intentStressTest') },
+    { id: 'stress-test-idea',    icon: '🔥', label: intentMeta['stress-test-idea']?.label || 'stress-test-idea' },
     { id: 'custom',              icon: '🔧', label: 'Configuration avancee' },
   ];
 
@@ -110,7 +111,7 @@ function renderLaunchAssistant() {
                 <div class="la-option-main">
                   <div class="la-option-icon">${i.icon}</div>
                   <div class="la-option-content">
-                    <div class="la-option-title">${i.label}</div>
+                    <div class="la-option-title">${escHtml(i.label)}</div>
                     <div class="la-option-description">${escHtml(intentMeta[i.id]?.description || '')}</div>
                   </div>
                 </div>

@@ -1,6 +1,7 @@
 /* Launch Assistant feature — action handlers */
 import { registerAction } from '../../core/events.js';
-import { _applyTemplate } from '../newSession/handlers.js';
+import { getPlaybookIdForLaunchIntent, isModeBackedPlaybook } from '../../core/playbooks.js';
+import { _applyTemplate, applyDecisionPlaybook } from '../newSession/handlers.js';
 
 const SIX_THINKING_HATS_TEMPLATE_ID = 'six-thinking-hats';
 
@@ -110,13 +111,20 @@ function registerLaunchAssistantHandlers() {
     };
     const DA = window.DecisionArena;
     const resolvedMode = modeByIntent[intent] || 'quick-decision';
+    const playbookId = getPlaybookIdForLaunchIntent(intentRaw) || getPlaybookIdForLaunchIntent(intent);
     DA.store.state.newSession = {
       ...DA.store.state.newSession,
       intent,
       mode: resolvedMode,
+      selectedPlaybookId: playbookId || (isModeBackedPlaybook(resolvedMode) ? resolvedMode : null),
+      productPreset: null,
+      productFamily: null,
       fastDecisionEnabled: intent !== 'custom',
       ...(resolvedMode === 'quick-decision' ? { rounds: 1 } : {}),
     };
+    if (playbookId) {
+      applyDecisionPlaybook(playbookId);
+    }
     if (intent === 'facilitation') applySixThinkingHatsPreset(DA.store.state);
     const laDesc = DA.store.state.launchAssistant?.description?.trim();
     if (laDesc) {
@@ -151,6 +159,9 @@ function _launchFromAssistant() {
     title:            titleEl?.value.trim() || la.description.slice(0, 60) || 'Session',
     idea:             ideaEl?.value.trim()  || la.description || '',
     mode:             rec.mode || 'decision-room',
+    selectedPlaybookId: isModeBackedPlaybook(rec.mode || 'decision-room') ? (rec.mode || 'decision-room') : null,
+    productFamily: null,
+    productPreset: null,
     selectedAgents:   rec.selected_agents || [],
     rounds:           rec.rounds || 2,
     language:         window.i18n?.getLanguage() || 'fr',

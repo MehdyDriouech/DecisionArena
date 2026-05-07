@@ -49,10 +49,20 @@ function check(string $label, bool $ok, string $detail = ''): void
 // ── Setup: create a fake session row directly in DB ──────────────────────────
 $pdo = $db->pdo();
 $sessionId = 'test-reactive-' . substr(uuid(), 0, 8);
+$now = date('c');
 try {
-    $pdo->exec("INSERT INTO sessions (id, title, mode, status, created_at) VALUES ('{$sessionId}', 'Test RC', 'chat', 'active', datetime('now'))");
+    $stmt = $pdo->prepare("
+        INSERT INTO sessions (id, title, mode, status, initial_prompt, selected_agents, created_at, updated_at)
+        VALUES (:id, 'Test RC', 'chat', 'active', '', '[]', :created_at, :updated_at)
+    ");
+    $stmt->execute([
+        ':id' => $sessionId,
+        ':created_at' => $now,
+        ':updated_at' => $now,
+    ]);
 } catch (\Throwable $e) {
-    // Session might already exist — ignore
+    echo "[FAIL] test session setup — " . $e->getMessage() . "\n";
+    exit(1);
 }
 
 $threadId = uuid();

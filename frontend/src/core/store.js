@@ -1,7 +1,18 @@
+import {
+  getPlaybookById,
+  getPlaybooks,
+  resolvePlaybookForNewSession,
+} from './playbooks.js';
+
 function normalizeUiMode(mode) {
+  // Product UX: only two UI modes exist: "basic" | "expert".
+  // Legacy compatibility:
+  // - "advanced" -> "expert"
+  // - "simple"   -> "basic"
+  // - legacy "basic"/"expert" preserved
   if (mode === 'expert' || mode === 'advanced') return 'expert';
-  if (mode === 'simple' || mode === 'basic') return 'simple';
-  return 'simple';
+  if (mode === 'basic' || mode === 'simple') return 'basic';
+  return 'basic';
 }
 
 function legacyComplexityToUiMode(level) {
@@ -12,6 +23,14 @@ function uiModeToLegacyComplexity(mode) {
   return normalizeUiMode(mode) === 'expert' ? 'expert' : 'basic';
 }
 
+function isExpertMode(uiMode) {
+  return normalizeUiMode(uiMode) === 'expert';
+}
+
+function isBasicMode(uiMode) {
+  return normalizeUiMode(uiMode) === 'basic';
+}
+
 function readInitialUiMode() {
   try {
     const savedMode = localStorage.getItem('da_ui_mode');
@@ -20,7 +39,7 @@ function readInitialUiMode() {
     const legacyComplexity = localStorage.getItem('da_ui_complexity');
     if (legacyComplexity) return legacyComplexityToUiMode(legacyComplexity);
   } catch (_) {}
-  return 'simple';
+  return 'basic';
 }
 
 /** local BYOK keys; never log or stringify for errors */
@@ -242,6 +261,20 @@ const createInitialState = () => {
   providerModelOptions: [],
   providerModelStatus: null,
   providerModelError: '',
+  personaSandbox: {
+    prompt: '',
+    personaId: '',
+    providerId: '',
+    model: '',
+    temperature: '',
+    compareMode: 'single',
+    comparePersonaIds: [],
+    compareProviderIds: [],
+    compareModelsText: '',
+    loading: false,
+    error: null,
+    results: [],
+  },
   souls: [],
   currentSession: null,
   currentMessages: [],
@@ -272,7 +305,57 @@ const createInitialState = () => {
   reactiveChatResults: null,
   snapshotStatus: null,
   error: null,
-  /** "simple" | "expert" — progressive disclosure source of truth */
+  toast: null,
+  pendingConfirmation: null,
+  strategicContexts: { loading: false, error: null, items: [] },
+  strategicContextUi: {
+    statusFilter: 'active',
+    selectedContextId: null,
+    // Inline forms (avoid browser prompt/confirm)
+    formOpen: false,
+    formMode: 'create', // "create" | "edit"
+    formContextId: null,
+    formValues: { title: '', description: '', status: 'active' },
+    formError: '',
+    linkFormOpen: false,
+    linkType: 'session', // "session" | "memory"
+    linkId: '',
+    linkError: '',
+    linkSuccess: '',
+    archiveError: '',
+    deleteConfirmContextId: null,
+    deleteError: '',
+    memoryMdOpen: false,
+    memoryMdLoading: false,
+    memoryMdError: '',
+    memoryMdContent: '',
+  },
+  decisionMemory: { loading: false, error: null, memories: null },
+  selectedMemoryIds: [],
+  memoryConfirmingSessionId: null,
+  decisionMemoryNav: {
+    contextsLoading: false,
+    contextsError: null,
+    roomsLoading: false,
+    roomsError: null,
+    contexts: [],
+    roomsByContextId: {},
+  },
+  decisionMemoryUi: {
+    mode: 'timeline', // "timeline" | "chain"
+    filters: { playbook_id: '', decision_status: '', confidence: '', has_unresolved: '', link_type: '' },
+    selectedChainId: null,
+    selectedMemoryId: null,
+    /** null = toutes les initiatives; sinon context_id stratégique */
+    navStrategicContextId: null,
+    /** null = mémoires liées au contexte (sans chaîne); sinon room_id */
+    navDecisionChainId: null,
+    roomMemoryMdOpen: false,
+    roomMemoryMdLoading: false,
+    roomMemoryMdError: '',
+    roomMemoryMdContent: '',
+  },
+  /** "basic" | "expert" — progressive disclosure source of truth */
   uiMode: initialUiMode,
   /** Legacy alias. Mapped from uiMode: simple -> basic, expert -> expert. */
   uiComplexity: uiModeToLegacyComplexity(initialUiMode),
@@ -294,6 +377,7 @@ const createInitialState = () => {
     title: '',
     idea: '',
     mode: initialExpertUi ? 'chat' : 'stress-test',
+    selectedPlaybookId: initialExpertUi ? null : 'stress-test',
     productFamily: initialExpertUi ? null : 'validate',
     productPreset: null,
     founderInterrogation: null,
@@ -324,7 +408,7 @@ const createInitialState = () => {
     /** Modèle de départ choisi sur Nouvelle session ({ type, id } | null) */
     selectedStarter: null,
     /** Replie la grille « Démarrer avec un modèle » sur Nouvelle session */
-    starterModelsCollapsed: false,
+    starterModelsCollapsed: true,
     isFork: false,
     source_session_id: null,
     forkDraftSessionId: null,
@@ -509,6 +593,10 @@ function setUiComplexity(level) {
   return setUiMode(legacyComplexityToUiMode(level));
 }
 
+function getSelectedPlaybook(language = window.i18n?.getLanguage?.() || 'fr') {
+  return resolvePlaybookForNewSession(state.newSession || {}, language);
+}
+
 export {
   createInitialState,
   state,
@@ -518,8 +606,13 @@ export {
   setUiMode,
   setUiComplexity,
   normalizeUiMode,
+  isExpertMode,
+  isBasicMode,
   legacyComplexityToUiMode,
   uiModeToLegacyComplexity,
+  getPlaybookById,
+  getPlaybooks,
+  getSelectedPlaybook,
   getProviderSettings,
   updateProviderSettings,
   deleteProviderKey,

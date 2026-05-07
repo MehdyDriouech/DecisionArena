@@ -40,6 +40,7 @@ class ConfrontationRunner {
     private \Domain\DecisionReliability\DecisionGuardrailService $guardrailService;
     private \Domain\DecisionReliability\DecisionQualityScoreService $qualityScoreService;
     private DecisionSummaryService $summaryService;
+    private PlaybookRuntime $playbookRuntime;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -61,6 +62,7 @@ class ConfrontationRunner {
         $this->guardrailService = new \Domain\DecisionReliability\DecisionGuardrailService();
         $this->qualityScoreService = new \Domain\DecisionReliability\DecisionQualityScoreService();
         $this->summaryService = new DecisionSummaryService();
+        $this->playbookRuntime = new PlaybookRuntime();
     }
 
     /**
@@ -86,6 +88,7 @@ class ConfrontationRunner {
         $rounds = min(max($rounds, 1), 15);
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($decisionThreshold);
         $dynamicsPreset    = \Domain\Agents\DecisionDynamicsPreset::normalizeId($decisionDynamicsPreset);
+        $playbookId        = $this->playbookRuntime->resolvePlaybookId('confrontation', [], $objective);
 
         // Split synthesizer out — it runs separately at the end
         $activeAgents = array_values(array_filter($selectedAgents, fn($a) => $a !== 'synthesizer'));
@@ -379,12 +382,23 @@ class ConfrontationRunner {
         }
 
         $synthesizerOutput = $synthesis[0]['content'] ?? '';
+        $canonicalSynthesis = CanonicalSynthesisExtractor::extract($synthesizerOutput, $playbookId);
+        $playbookDiagnostics = $this->playbookRuntime->extractDiagnostics($synthesizerOutput, $playbookId);
+        if (!empty($playbookDiagnostics['warnings'])) {
+            $existing = isset($guardrails['warnings']) && is_array($guardrails['warnings']) ? $guardrails['warnings'] : [];
+            $guardrails['warnings'] = array_values(array_unique(array_merge($existing, $playbookDiagnostics['warnings'])));
+        }
+        $decisionOutcome = DecisionOutcomeProjector::fromCanonical($canonicalSynthesis, [
+            'playbook_runtime' => $playbookDiagnostics,
+            'risk_profile' => $riskProfile,
+            'guardrails' => $guardrails,
+        ]);
 
         // Heuristic fallback: confrontation synthesis formatting can vary; ensure the brief has "why" content
         // even if the synthesizer section parser doesn't match expected headings.
         $heuristicBrief = [];
         try {
-            $parsedVerdictBrief = VerdictParser::parse($synthesizerOutput);
+            $parsedVerdictBrief = VerdictParser::parse($synthesizerOutput, $playbookId);
             $heuristicBrief = $this->summaryService->build(
                 ['title' => 'Confrontation'],
                 $parsedVerdictBrief ?: (is_array($verdictRow) ? $verdictRow : null),
@@ -417,6 +431,9 @@ class ConfrontationRunner {
                 'risk_profile'           => $riskProfileForBrief,
                 'evidence_report'        => $evidenceReport,
                 'verdict'                => $verdictRow,
+                'canonical_synthesis'    => $canonicalSynthesis,
+                'playbook_runtime'        => $playbookDiagnostics,
+                'decision_outcome'        => $decisionOutcome,
             ])
         );
 
@@ -451,6 +468,9 @@ class ConfrontationRunner {
             'synthesizer_output' => !empty($synthesis[0]['content']) ? $synthesis[0]['content'] : null,
             'decision_quality_score' => $qualityScore,
             'decision_brief' => $decisionBrief,
+            'canonical_synthesis' => $canonicalSynthesis,
+            'decision_outcome' => $decisionOutcome,
+            'playbook_runtime' => $playbookDiagnostics,
         ]);
     }
 
@@ -672,7 +692,7 @@ class ConfrontationRunner {
             ]);
 
             $verdict = null;
-            $parsed  = VerdictParser::parse($content);
+            $parsed  = VerdictParser::parse($content, 'confrontation');
             if ($parsed) {
                 $verdictData = array_merge($parsed, [
                     'id'         => $this->uuid(),

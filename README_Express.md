@@ -67,6 +67,34 @@ Remplacez par vos visuels sous `docs/screenshots/` :
 
 ---
 
+## Decision Memory (recherche déterministe + découverte optionnelle)
+
+Le flux principal reste la navigation:
+
+**Strategic Context → Decision Room / Chain → Decision Memory**
+
+### Recherche par défaut (production)
+
+- **SQLite FTS5 scoped search** (fallback LIKE si FTS5 indisponible)
+- **Endpoint**: `GET /api/decision-memories/search`
+- **Règle**: recherche **secondaire** à la navigation (pas d’omnibox, pas de chat search).
+
+### Similar decisions (expérimental, Expert-only)
+
+Option de découverte uniquement (jamais source de vérité):
+
+- **Endpoint**: `GET /api/decision-memories/similar`
+- **Feature flag**: `SEMANTIC_MEMORY_ENABLED=false` par défaut
+- **Warnings**: “Similarity does not imply correctness.” + “These are prior decision records, not verified facts.”
+- **Interdits**: aucune injection automatique dans les prompts, aucun auto-link, aucune “AI memory”.
+
+### Mode expert : nettoyage / suppression
+
+- **Suppression unitaire ou multiple** de décisions (Decision Memory) via sélection + confirmation (expert-only).
+- **Suppression multiple** de contextes stratégiques via sélection + confirmation (expert-only).
+
+---
+
 ## Contribuer & contact
 
 Retours, bugs, améliorations de prompts et de personas : voir la section *Contribution* du README principal.  

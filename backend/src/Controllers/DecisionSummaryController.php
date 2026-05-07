@@ -138,6 +138,9 @@ class DecisionSummaryController {
                 }
             }
         }
+        $decisionOutcome = is_array($decisionBrief['decision_outcome'] ?? null)
+            ? $decisionBrief['decision_outcome']
+            : null;
 
         return [
             'session_id'       => $id,
@@ -150,6 +153,7 @@ class DecisionSummaryController {
             'decision_reliability_summary' => $reliability['decision_reliability_summary'] ?? null,
             'context_clarification' => $reliability['context_clarification'] ?? null,
             'decision_brief' => $decisionBrief,
+            'decision_outcome' => $decisionOutcome,
         ];
     }
 }

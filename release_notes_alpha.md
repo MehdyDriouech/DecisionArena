@@ -50,6 +50,8 @@ Cette release consolide Decision Arena autour d’un positionnement clair : **De
 - **Confrontation** : robustesse parsing JSON / résultats lorsque le modèle dévie du format attendu.
 - **Decision Brief** : fallbacks lorsque le brief est partiel ou absent après run.
 - **Founder Interrogation** : persistance dans le prompt initial lorsque les champs sont renseignés.
+- **UI (dropdowns)** : le dispatcher global n’exécute plus `data-action` sur clic pour les contrôles de formulaire (`select/input/textarea`), ce qui évite des re-render qui empêchent la sélection d’options.
+- **Suppression (SQLite FK)** : suppression “hard delete” plus robuste sur les entités liées (nettoyage des dépendances avant suppression).
 
 ---
 
@@ -84,3 +86,10 @@ Cette release consolide Decision Arena autour d’un positionnement clair : **De
 | Presets Founder / CEO (UI) | `frontend/src/features/newSession/` |
 
 Merci aux personnes ayant retesté les flux critiques et signalé les incohérences UX.
+
+---
+
+## Outils expert : suppression & hygiène des données
+
+- **Contextes stratégiques** : sélection multiple + “Supprimer sélection” (expert-only).
+- **Decision Memory** : suppression d’une décision ou d’une sélection (expert-only), avec endpoint `DELETE /api/decision-memories/{id}`.

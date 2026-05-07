@@ -3,7 +3,7 @@
  */
 
 import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDoc.js';
-import { renderDecisionBrief, renderDecisionDynamicsSummary, renderPremortemStructuredCard, renderTradeoffSection } from '../../ui/components.js';
+import { renderDecisionBrief, renderDecisionDynamicsSummary, renderDecisionOutcomeCard, renderPremortemStructuredCard, renderTradeoffSection } from '../../ui/components.js';
 import { renderExportButtons, renderAgentChatPanel } from '../chat/view.js';
 import { renderWeightedVotePanel, renderDecisionReliabilityCard } from '../confrontation/index.js';
 import { renderDebateAuditPanel } from '../debateAudit/index.js';
@@ -174,7 +174,7 @@ function renderAdversarialCard(juryAdversarial) {
 
 function renderAdversarialOptionsPanel() {
   const { state, t } = getCtx();
-  const uiMode = state.uiMode || 'simple';
+  const uiMode = state.uiMode || 'basic';
   if (uiMode !== 'expert') return '';
 
   const cfg     = state.juryAdversarialConfig ?? {};
@@ -342,7 +342,8 @@ function renderJuryResults(results) {
     </div>
   ` : '';
 
-  return renderDecisionBrief(results.decision_brief || null, {
+  return renderDecisionOutcomeCard(results.decision_outcome || results.decision_brief?.decision_outcome || null, { uiMode: state.uiMode })
+    + renderDecisionBrief(results.decision_brief || null, {
     sessionId,
     agentDecisionDynamics: results.agent_decision_dynamics,
     uiMode: state.uiMode,

@@ -63,6 +63,7 @@ function buildQuickDecisionResultsFromSession(sessionPayload, verdict) {
     context_clarification: sessionPayload.context_clarification ?? null,
     decision_quality_score: sessionPayload.decision_quality_score ?? null,
     decision_brief: sessionPayload.decision_brief ?? null,
+    decision_outcome: sessionPayload.decision_outcome ?? sessionPayload.decision_brief?.decision_outcome ?? null,
     agent_decision_dynamics: sessionPayload.agent_decision_dynamics || [],
     premortem_summary: sessionPayload.premortem_summary ?? null,
     guardrails: sessionPayload.guardrails ?? null,

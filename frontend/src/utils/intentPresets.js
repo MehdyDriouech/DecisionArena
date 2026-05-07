@@ -1,26 +1,22 @@
+import { getPlaybookIdForLegacyIntent, isModeBackedPlaybook } from '../core/playbooks.js';
+
 const INTENT_PRESETS = {
   explore: {
-    label: 'Explorer une id\u00e9e',
     mode: 'chat',
     rounds: 1,
     personas: ['pm', 'ux-expert', 'analyst', 'critic'],
-    rationale: 'Explorer n\u00e9cessite diversit\u00e9 produit, utilisateur, march\u00e9 et contradiction l\u00e9g\u00e8re.',
   },
 
   decide: {
-    label: 'Prendre une d\u00e9cision',
     mode: 'quick-decision',
     rounds: 1,
     personas: ['pm', 'architect', 'critic', 'synthesizer'],
-    rationale: 'D\u00e9cider n\u00e9cessite produit, faisabilit\u00e9 technique, critique et synth\u00e8se.',
   },
 
   test: {
-    label: 'Tester une id\u00e9e',
     mode: 'stress-test',
     rounds: 3,
     personas: ['critic', 'qa', 'architect', 'pm'],
-    rationale: 'Tester n\u00e9cessite critique, qualit\u00e9, risques techniques et arbitrage produit.',
   },
 };
 
@@ -135,6 +131,7 @@ function applyIntentPreset(intent) {
     selectedIntent: intent,
     productFamily: productFamilyFromIntent,
     productPreset: null,
+    selectedPlaybookId: getPlaybookIdForLegacyIntent(intent) || (isModeBackedPlaybook(preset.mode) ? preset.mode : null),
     mode: preset.mode,
     rounds: preset.rounds,
     selectedAgents: resolvedPersonas.length > 0
@@ -146,7 +143,7 @@ function applyIntentPreset(intent) {
     selectedScenarioId: null,
     selectedTemplateId: null,
     facilitationFramework: null,
-    presetRationale: preset.rationale,
+    presetRationale: null,
   };
 
   return true;
