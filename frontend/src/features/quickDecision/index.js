@@ -42,7 +42,7 @@ function renderQuickDecision() {
           <div class="session-result-actions">
             ${!state.qdRunning ? `<button class="btn btn-primary" data-action="run-quick-decision">${t('qd.run')}</button>` : ''}
             <div class="export-actions">${renderExportButtons(session.id)}</div>
-            <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
+            <button class="btn btn-secondary btn-sm" data-nav="analyses">${t('nav.back')}</button>
           </div>
         </div>
       </div>

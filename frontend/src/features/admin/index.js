@@ -152,6 +152,14 @@ const ADMIN_ADVANCED_ITEMS = [
     descKey: 'admin.hub.short.learning',
     actionKey: 'admin.hub.action.open',
   },
+  {
+    nav: 'cognitive-governance',
+    titleKey: 'admin.cognitiveGovernance.title',
+    icon: '🧭',
+    descKey: 'admin.hub.short.cognitiveGovernance',
+    actionKey: 'admin.hub.action.open',
+    expertOnly: true,
+  },
 ];
 
 function renderAdminCard(item, t, escHtml) {

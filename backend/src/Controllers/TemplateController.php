@@ -1,6 +1,7 @@
 <?php
 namespace Controllers;
 
+use Domain\Sessions\SessionStrategicContextGuard;
 use Http\Request;
 use Http\Response;
 use Infrastructure\Persistence\TemplateRepository;
@@ -111,6 +112,17 @@ class TemplateController {
         $template = $this->templateRepo->findById($templateId);
         if (!$template) return Response::error('Template not found', 404);
 
+        $mode = (string)($template['mode'] ?? 'chat');
+        $resolved = SessionStrategicContextGuard::resolveStrategicContextForCreation(
+            $mode,
+            is_array($data) ? $data : [],
+            null
+        );
+        if ($resolved['block'] !== null) {
+            return $resolved['block'];
+        }
+        $strategicContextId = $resolved['strategic_context_id'];
+
         $now    = date('c');
         $id     = $this->uuid();
         $agents = $template['selected_agents'];
@@ -119,7 +131,7 @@ class TemplateController {
         $session = $this->sessionRepo->create([
             'id'                   => $id,
             'title'                => $title,
-            'mode'                 => $template['mode'],
+            'mode'                 => $mode,
             'initial_prompt'       => $objective ?: ($template['prompt_starter'] ?? ''),
             'selected_agents'      => json_encode($agents),
             'rounds'               => $template['rounds'] ?? 2,
@@ -131,9 +143,12 @@ class TemplateController {
             'is_favorite'          => 0,
             'is_reference'         => 0,
             'force_disagreement'   => $template['force_disagreement'] ? 1 : 0,
+            'strategic_context_id' => $strategicContextId,
             'created_at'           => $now,
             'updated_at'           => $now,
         ]);
+
+        SessionStrategicContextGuard::syncStrategicContextSessionLink($strategicContextId, $id);
 
         if (($template['id'] ?? '') === 'six-thinking-hats') {
             try {

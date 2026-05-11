@@ -26,6 +26,9 @@ async function refreshDecisionMemoryExplorerNav(state) {
   try {
     const data = await window.DecisionArena.services.StrategicContextService.list({}, 120);
     state.decisionMemoryNav.contexts = Array.isArray(data.contexts) ? data.contexts : [];
+    const active = data.active_context ?? null;
+    state.activeStrategicContext = active;
+    state.activeStrategicContextId = active?.context_id ? String(active.context_id) : null;
     state.decisionMemoryNav.contextsError = null;
     const cid = state.decisionMemoryUi?.navStrategicContextId;
     if (cid) {
@@ -704,11 +707,54 @@ function registerDecisionMemoryHandlers() {
     window.DecisionArena.render?.();
   });
 
+  registerAction('create-decision-room-chain', async ({ element }) => {
+    const state = window.DecisionArena.store.state;
+    if (state.uiMode !== 'expert') return;
+    let cid = String(element?.dataset?.contextId || '').trim();
+    if (!cid) {
+      const ui = state.decisionMemoryUi || {};
+      cid = String(
+        ui.navStrategicContextId
+        || state.activeStrategicContextId
+        || state.activeStrategicContext?.context_id
+        || '',
+      ).trim();
+    }
+    const tFn = window.i18n?.t?.bind(window.i18n) || ((k) => k);
+    if (!cid) {
+      state.error = tFn('decisionMemory.nav.newChainNeedContext');
+      window.DecisionArena.render?.();
+      return;
+    }
+    const title = window.prompt(tFn('decisionMemory.nav.newChainPrompt'), '');
+    if (!title || !String(title).trim()) return;
+    try {
+      await window.DecisionArena.services.StrategicContextService.createRoom(cid, {
+        title: String(title).trim(),
+        description: '',
+        status: 'active',
+      });
+      state.decisionMemoryUi = state.decisionMemoryUi || {};
+      state.decisionMemoryUi.navStrategicContextId = cid;
+      state.decisionMemoryUi.navDecisionChainId = null;
+      await loadRoomsForExplorer(state, cid);
+      state.toast = tFn('decisionMemory.nav.newChainDone');
+    } catch (err) {
+      state.error = String(err?.message || err);
+    }
+    window.DecisionArena.render?.();
+  });
+
   registerAction('link-memory-to-strategic-context', async ({ element }) => {
     const memoryId = element?.dataset?.memoryId;
     if (!memoryId) return;
     const state = window.DecisionArena.store.state;
-    const ctxId = String(state.decisionMemoryUi?.navStrategicContextId || state.strategicContextUi?.selectedContextId || '').trim();
+    const ctxId = String(
+      state.activeStrategicContextId
+      || state.decisionMemoryUi?.navStrategicContextId
+      || state.strategicContextUi?.selectedContextId
+      || '',
+    ).trim();
     if (!ctxId) {
       state.error = 'Select a strategic context before linking a memory.';
       window.DecisionArena.render?.();
@@ -719,6 +765,9 @@ function registerDecisionMemoryHandlers() {
       try {
         const data = await window.DecisionArena.services.StrategicContextService.list({ status: state.strategicContextUi?.statusFilter || 'active' }, 120);
         state.strategicContexts = { loading: false, error: null, items: data.contexts || [] };
+        const active = data.active_context ?? null;
+        state.activeStrategicContext = active;
+        state.activeStrategicContextId = active?.context_id ? String(active.context_id) : null;
         await refreshDecisionMemoryExplorerNav(state);
       } catch (_) {}
       state.toast = 'Memoire liee au contexte.';

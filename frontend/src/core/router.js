@@ -13,6 +13,21 @@ function navigate(view, extra = {}) {
     state.postmortemStatsAwaiting = true;
     state.postmortemStatsLoading = false;
   }
+  if (view === 'decision-memory') {
+    const nav = state.decisionMemoryNav || (state.decisionMemoryNav = {});
+    const ui = state.decisionMemoryUi || (state.decisionMemoryUi = {});
+    if (!nav.initialWorkspaceNavHydrated) {
+      const cur = ui.navStrategicContextId;
+      const empty = cur === null || cur === undefined || String(cur).trim() === '';
+      if (empty) {
+        const aid = String(state.activeStrategicContextId || state.activeStrategicContext?.context_id || '').trim();
+        if (aid) {
+          ui.navStrategicContextId = aid;
+        }
+      }
+      nav.initialWorkspaceNavHydrated = true;
+    }
+  }
   window.DecisionArena.render?.();
   scrollMainToTop();
   try {
@@ -21,6 +36,16 @@ function navigate(view, extra = {}) {
   if (view === 'retrospective') {
     queueMicrotask(() => {
       dispatchAction('load-postmortem-stats').catch(() => {});
+    });
+  }
+  if (view === 'cognitive-governance') {
+    queueMicrotask(() => {
+      dispatchAction('load-cognitive-governance').catch(() => {});
+    });
+  }
+  if (view === 'dashboard') {
+    queueMicrotask(() => {
+      dispatchAction('load-dashboard-summary').catch(() => {});
     });
   }
 }

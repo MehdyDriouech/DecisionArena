@@ -13,7 +13,8 @@
 **Pitch court :** “Ne plus demander une réponse à une IA, mais observer une décision émerger d’un système.”
 
 Pour une version plus courte et partageable : **[README_marketing.md](README_marketing.md)**.  
-Notes de version alpha : **[release_notes_alpha.md](release_notes_alpha.md)**.
+Notes de version alpha : **[release_notes_alpha.md](release_notes_alpha.md)**.  
+Synthese beta (features, forces, limites) : **[release-note-beta.md](release-note-beta.md)**.
 
 ---
 
@@ -71,6 +72,18 @@ Decision Arena ne promet pas “la bonne réponse”. Il propose :
 - **Personas en Markdown** — définitions versionnables, âmes / dynamiques de décision selon configuration.
 - **Local-first** — vos données et votre stack restent chez vous ; pas de dépendance à un SaaS fermé pour fonctionner.
 - **Mode expert : suppressions en lot** — sélection multiple et suppression groupée des **contextes stratégiques** et des entrées **Decision Memory** (actions “Tout sélectionner (vue)” + “Supprimer sélection”).
+
+---
+
+## Mises a jour recentes (Phase 2)
+
+- **Workspace Analyses consolide** — la vue `analyses` devient l'entree principale pour les sessions passees et les actions lifecycle.
+- **Lifecycle hybride unifie** — statuts persistes (`draft`, `running`, `completed`, `archived`) + overlays derives (`blocked`, `fragile`, `rerun`, `forked`) via un mapping frontend unique.
+- **Historique d'analyses en navigation** — ajout d'une entree dediee dans la sidebar pour acceder plus vite aux analyses passees.
+- **Contextes strategiques fiabilises** — bouton `Voir memory.md` fiable, colonne liste sticky sur desktop, bouton `Activer l'espace` dans chaque card.
+- **Formulaire contexte stabilise** — correction du bug "Titre obligatoire" (synchronisation DOM/state avant validation).
+- **Suppression des contextes robuste** — endpoint backend de suppression corrige avec suppression transactionnelle des dependances SQLite.
+- **Observabilite UI renforcee** — erreurs critiques harmonisees via i18n + logs frontend uniformises pour le diagnostic.
 
 ---
 
@@ -171,6 +184,28 @@ Le routage (priorité, fallback, *load balancing*) est réglable dans l’admin 
 Presets **Fast Decision** (Decision Room accéléré), **Launch Assistant**, templates et *scenario packs* orientent le paramétrage sans changer l’architecture.
 
 Référence détaillée sur les panneaux (*Deliberation Intelligence*, evidence, risk, etc.) : explorez l’UI après un run — les écrans varient selon le mode et les données persistées.
+
+---
+
+## Navigation (Phase 1 + Phase 2)
+
+Navigation unifiée autour des **analyses** :
+
+- **`analyses`** : workspace principal (liste, filtres, lifecycle, bulk actions).
+- **`analysis-history`** : entree de navigation pour l'historique d'analyses (redirige vers l'experience analyses/historique selon contexte).
+- **`new-session`** : création d’une nouvelle analyse.
+- **`session-comparisons`** : comparaison multi-analyses.
+- **`session-history`** : détail d’une analyse.
+
+Conventions frontend (cleanup Phase 1) :
+
+- `data-nav="analyses"` est la cible de retour par défaut depuis les vues de run/historique.
+- L’ancienne vue `sessions` est conservée en alias de compatibilité vers `analyses`.
+- Lifecycle UI basé sur `mapAnalysisLifecycle(session)` :
+  - **persisté** : `draft|running|completed|archived`
+  - **dérivé** : `blocked|fragile|rerun|forked`
+
+Doc détaillée UX/navigation : `docs/ux-navigation-mapping.md`.
 
 ---
 

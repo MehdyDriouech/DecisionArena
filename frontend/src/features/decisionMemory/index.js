@@ -140,7 +140,7 @@ function applyExplorerMemoryFilter(memories, state) {
   return memories.filter((m) => allow.has(String(m.memory_id)));
 }
 
-function renderMemoryExplorerBar(state, { escHtml, formatDate, t }) {
+function renderMemoryExplorerBar(state, { escHtml, formatDate, t, isExpert }) {
   const nav = state.decisionMemoryNav || {};
   const ui = state.decisionMemoryUi || {};
   const contexts = Array.isArray(nav.contexts) ? nav.contexts : [];
@@ -206,6 +206,10 @@ function renderMemoryExplorerBar(state, { escHtml, formatDate, t }) {
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <span style="font-size:11px;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em;">${escHtml(t('decisionMemory.nav.decisionChain'))}</span>
           ${roomLoading}
+          ${isExpert ? `
+          <button type="button" class="btn btn-secondary btn-sm" data-ui="expert-only" data-action="create-decision-room-chain"
+            data-context-id="${escHtml(String(selCtx))}"
+            style="margin-left:4px;">${escHtml(t('decisionMemory.nav.newChain'))}</button>` : ''}
           ${selRoom ? `
             <button type="button" class="btn btn-secondary btn-sm" data-action="toggle-room-memory-md" style="margin-left:auto;">
               ${escHtml(t('snapshots.viewMemoryMd'))}
@@ -645,7 +649,7 @@ function renderDecisionMemory() {
     `;
   }
 
-  const explorerBar = renderMemoryExplorerBar(state, { escHtml, formatDate, t });
+  const explorerBar = renderMemoryExplorerBar(state, { escHtml, formatDate, t, isExpert });
 
   const searchBar = (() => {
     const hint = ui.navDecisionChainId

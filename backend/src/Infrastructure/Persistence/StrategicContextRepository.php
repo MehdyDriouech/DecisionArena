@@ -27,7 +27,7 @@ final class StrategicContextRepository
         if ($where !== []) {
             $sql .= ' WHERE ' . implode(' AND ', $where);
         }
-        $sql .= ' ORDER BY updated_at DESC LIMIT :lim';
+        $sql .= ' ORDER BY is_workspace_active DESC, updated_at DESC LIMIT :lim';
         $stmt = $this->pdo->prepare($sql);
         foreach ($params as $k => $v) $stmt->bindValue($k, $v);
         $stmt->bindValue(':lim', $limit, \PDO::PARAM_INT);
@@ -44,6 +44,53 @@ final class StrategicContextRepository
         return $row ? $this->hydrateContext($row) : null;
     }
 
+    public function getActiveContext(): ?array
+    {
+        try {
+            $stmt = $this->pdo->query('SELECT * FROM strategic_contexts WHERE is_workspace_active = 1 LIMIT 1');
+            $row = $stmt ? $stmt->fetch(\PDO::FETCH_ASSOC) : false;
+        } catch (\Throwable) {
+            return null;
+        }
+        return $row ? $this->hydrateContext($row) : null;
+    }
+
+    /**
+     * Atomically set the global active workspace context. Idempotent if already active.
+     * Only contexts in status active|paused may be activated.
+     */
+    public function setActiveContext(string $contextId): bool
+    {
+        $contextId = trim($contextId);
+        if ($contextId === '') {
+            return false;
+        }
+        $cur = $this->find($contextId);
+        if (!$cur) {
+            return false;
+        }
+        $st = (string)($cur['status'] ?? '');
+        if (!in_array($st, ['active', 'paused'], true)) {
+            return false;
+        }
+
+        $this->pdo->beginTransaction();
+        try {
+            $this->pdo->exec('UPDATE strategic_contexts SET is_workspace_active = 0');
+            $stmt = $this->pdo->prepare(
+                'UPDATE strategic_contexts SET is_workspace_active = 1, updated_at = :u WHERE context_id = :id'
+            );
+            $stmt->execute([':u' => date('c'), ':id' => $contextId]);
+            $this->pdo->commit();
+            return true;
+        } catch (\Throwable) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            return false;
+        }
+    }
+
     /** @return array<string,mixed> */
     public function create(string $title, string $description = '', string $status = 'active'): array
     {
@@ -53,8 +100,8 @@ final class StrategicContextRepository
         $now = date('c');
         $id = $this->uuid();
         $stmt = $this->pdo->prepare('
-            INSERT INTO strategic_contexts (context_id, title, description, status, created_at, updated_at)
-            VALUES (:id, :t, :d, :s, :ca, :ua)
+            INSERT INTO strategic_contexts (context_id, title, description, status, created_at, updated_at, is_workspace_active)
+            VALUES (:id, :t, :d, :s, :ca, :ua, 0)
         ');
         $stmt->execute([
             ':id' => $id,
@@ -83,6 +130,14 @@ final class StrategicContextRepository
             WHERE context_id = :id
         ');
         $stmt->execute([':t' => $title, ':d' => $desc, ':s' => $status, ':ua' => $now, ':id' => $contextId]);
+        // Un contexte « terminé » ou « abandonné » ne doit plus être la référence workspace globale
+        // (sinon l’UI et les garde-fous session pourraient pointer vers un statut non exécutable).
+        if (in_array($status, ['completed', 'abandoned'], true)) {
+            try {
+                $this->pdo->prepare('UPDATE strategic_contexts SET is_workspace_active = 0 WHERE context_id = ?')->execute([$contextId]);
+            } catch (\Throwable) {
+            }
+        }
         return $this->find($contextId);
     }
 
@@ -136,22 +191,49 @@ final class StrategicContextRepository
     {
         if (!$this->find($contextId)) return false;
 
-        // Must delete dependents first (SQLite FK enforcement).
-        // strategic_contexts <- decision_rooms <- (decision_room_memories, decision_room_sessions)
-        $this->pdo->prepare("
-            DELETE FROM decision_room_memories
-            WHERE room_id IN (SELECT room_id FROM decision_rooms WHERE context_id = ?)
-        ")->execute([$contextId]);
-        $this->pdo->prepare("
-            DELETE FROM decision_room_sessions
-            WHERE room_id IN (SELECT room_id FROM decision_rooms WHERE context_id = ?)
-        ")->execute([$contextId]);
-        $this->pdo->prepare('DELETE FROM decision_rooms WHERE context_id = ?')->execute([$contextId]);
+        $this->pdo->beginTransaction();
+        try {
+            // Must delete dependents first (SQLite FK enforcement).
+            // strategic_contexts <- decision_rooms <- (decision_room_memories, decision_room_sessions)
+            $this->pdo->prepare("
+                DELETE FROM decision_room_memories
+                WHERE room_id IN (SELECT room_id FROM decision_rooms WHERE context_id = ?)
+            ")->execute([$contextId]);
+            $this->pdo->prepare("
+                DELETE FROM decision_room_sessions
+                WHERE room_id IN (SELECT room_id FROM decision_rooms WHERE context_id = ?)
+            ")->execute([$contextId]);
+            $this->pdo->prepare('DELETE FROM decision_rooms WHERE context_id = ?')->execute([$contextId]);
 
-        $this->pdo->prepare('DELETE FROM strategic_context_memories WHERE context_id = ?')->execute([$contextId]);
-        $this->pdo->prepare('DELETE FROM strategic_context_sessions WHERE context_id = ?')->execute([$contextId]);
-        $this->pdo->prepare('DELETE FROM strategic_contexts WHERE context_id = ?')->execute([$contextId]);
-        return true;
+            // Beliefs graph is multi-table with FK chains:
+            // beliefs <- (events, relations, agent_positions)
+            $this->pdo->prepare('DELETE FROM strategic_context_belief_events WHERE strategic_context_id = ?')->execute([$contextId]);
+            $this->pdo->prepare('DELETE FROM strategic_context_belief_relations WHERE strategic_context_id = ?')->execute([$contextId]);
+            $this->pdo->prepare('DELETE FROM strategic_context_belief_agent_positions WHERE strategic_context_id = ?')->execute([$contextId]);
+            $this->pdo->prepare('DELETE FROM strategic_context_beliefs WHERE strategic_context_id = ?')->execute([$contextId]);
+
+            // Governance events scoped by context.
+            $this->pdo->prepare('DELETE FROM strategic_context_memory_governance_events WHERE strategic_context_id = ?')->execute([$contextId]);
+
+            $this->pdo->prepare('DELETE FROM strategic_context_memories WHERE context_id = ?')->execute([$contextId]);
+            $this->pdo->prepare('DELETE FROM strategic_context_sessions WHERE context_id = ?')->execute([$contextId]);
+            $this->pdo->prepare('DELETE FROM strategic_context_narratives WHERE strategic_context_id = ?')->execute([$contextId]);
+            $this->pdo->prepare('DELETE FROM strategic_context_memory_compilations WHERE strategic_context_id = ?')->execute([$contextId]);
+            $this->pdo->prepare('DELETE FROM strategic_context_snapshots WHERE strategic_context_id = ?')->execute([$contextId]);
+            $this->pdo->prepare(
+                'DELETE FROM agent_context_chat_messages WHERE conversation_id IN '
+                . '(SELECT id FROM agent_context_conversations WHERE strategic_context_id = ?)'
+            )->execute([$contextId]);
+            $this->pdo->prepare('DELETE FROM agent_context_conversations WHERE strategic_context_id = ?')->execute([$contextId]);
+            $this->pdo->prepare('DELETE FROM strategic_contexts WHERE context_id = ?')->execute([$contextId]);
+            $this->pdo->commit();
+            return true;
+        } catch (\Throwable $e) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $e;
+        }
     }
 
     /** @return list<string> */
@@ -234,6 +316,8 @@ final class StrategicContextRepository
     /** @param array<string,mixed> $row */
     private function hydrateContext(array $row): array
     {
+        $active = (int)($row['is_workspace_active'] ?? 0);
+
         return [
             'context_id' => (string)($row['context_id'] ?? ''),
             'title' => (string)($row['title'] ?? ''),
@@ -241,6 +325,7 @@ final class StrategicContextRepository
             'status' => (string)($row['status'] ?? 'active'),
             'created_at' => (string)($row['created_at'] ?? ''),
             'updated_at' => (string)($row['updated_at'] ?? ''),
+            'is_workspace_active' => $active === 1 ? 1 : 0,
         ];
     }
 

@@ -16,6 +16,7 @@ use Domain\Providers\ProviderRouter;
 use Domain\Verdict\VerdictParser;
 use Domain\Vote\VoteAggregator;
 use Domain\Vote\VoteParser;
+use Infrastructure\Logging\Logger;
 use Infrastructure\Persistence\DebateRepository;
 use Infrastructure\Persistence\MessageRepository;
 use Infrastructure\Persistence\VerdictRepository;
@@ -41,6 +42,7 @@ class StressTestRunner {
     private DecisionQualityScoreService $qualityScoreService;
     private DecisionSummaryService $summaryService;
     private PlaybookRuntime $playbookRuntime;
+    private Logger $logger;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -62,6 +64,7 @@ class StressTestRunner {
         $this->qualityScoreService = new DecisionQualityScoreService();
         $this->summaryService      = new DecisionSummaryService();
         $this->playbookRuntime     = new PlaybookRuntime();
+        $this->logger              = new Logger();
     }
 
     public function run(
@@ -76,12 +79,14 @@ class StressTestRunner {
         float  $devilAdvocateThreshold = 0.65,
         array  $agentProviders = [],
         float  $decisionThreshold = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD,
-        ?string $decisionDynamicsPreset = null
+        ?string $decisionDynamicsPreset = null,
+        ?string $strategicContextId = null
     ): array {
         $rounds = min(max($rounds, 1), RoundPolicy::MAX_ROUNDS);
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($decisionThreshold);
         $dynamicsPreset = \Domain\Agents\DecisionDynamicsPreset::normalizeId($decisionDynamicsPreset);
         $playbookId = $this->playbookRuntime->resolvePlaybookId('stress-test', [], $objective);
+        $runtimeTraces = [];
 
         // Critic goes first if selected (risk-first posture)
         $nonSynthesizers = array_values(array_filter($selectedAgents, fn($a) => $a !== 'synthesizer'));
@@ -136,7 +141,13 @@ class StressTestRunner {
                 $maj           = SocialDynamicsService::summarizeMajority($votesSnap, $state['positions'] ?? []);
                 $socialBlock   = null;
                 if ($round > 1 && $rounds > 1 && $agentId !== 'synthesizer') {
-                    $socialBlock = $this->socialPrompt->buildUserBlock($sessionId, $agentId, $maj);
+                    $socialBlock = $this->socialPrompt->buildUserBlock(
+                        $sessionId,
+                        $agentId,
+                        $maj,
+                        $strategicContextId,
+                        false
+                    );
                 }
 
                 try {
@@ -154,8 +165,44 @@ class StressTestRunner {
                         $socialBlock,
                         $forceStrongNext && $agentId !== 'synthesizer',
                         $sessionId,
-                        null
+                        null,
+                        $strategicContextId
                     );
+                    $governed = CognitiveRuntimeGovernance::tracePromptPayload(
+                        $messages,
+                        [
+                            'session_id' => $sessionId,
+                            'strategic_context_id' => $strategicContextId,
+                            'round' => $round,
+                            'agent_id' => $agentId,
+                            'mode' => 'stress-test',
+                        ],
+                        'stress_test_user_payload',
+                        'orchestration',
+                        'stress_test_runtime_user_payload',
+                        ['synthesizer' => ($agentId === 'synthesizer')]
+                    );
+                    $messages = $governed['messages'];
+                    $promptMetaJson = $governed['meta_json'];
+                    if (is_array($governed['trace'] ?? null)) {
+                        $runtimeTraces[] = $governed['trace'];
+                    }
+                    $this->logger->logPromptBuild('prompt_built_stress_test', [
+                        'agent_id' => $agent->id,
+                        'metadata' => [
+                            'mode' => 'stress-test',
+                            'round' => $round,
+                            'total_rounds' => $rounds,
+                            'synthesizer' => ($agent->id === 'synthesizer'),
+                            'message_count' => count($messages),
+                            'character_count' => $this->countMessageChars($messages),
+                            'context_doc_injected' => !empty($contextDoc['content']),
+                            'memory_injected' => !empty(($state['argument_memory_summary'] ?? null)),
+                            'force_disagreement' => (bool)$forceDisagreement,
+                            'playbook_id' => $playbookId,
+                            'session_id' => $sessionId,
+                        ],
+                    ]);
                     $routed  = $this->providerRouter->chat($messages, $agent, null, null, $agentProviders[$agentId] ?? null);
                     $content = $routed['content'];
 
@@ -175,6 +222,7 @@ class StressTestRunner {
                         'phase'                    => $agentId === 'synthesizer' ? 'stress-synthesis' : 'stress-analysis',
                         'mode_context'             => 'stress-test',
                         'message_type'             => $agentId === 'synthesizer' ? 'synthesis' : 'analysis',
+                        'meta_json'                => $promptMetaJson,
                         'content'                  => $content,
                         'created_at'               => date('c'),
                     ]);
@@ -198,7 +246,8 @@ class StressTestRunner {
                         $targetAgentId,
                         array_values(array_filter($selectedAgents, fn($id) => $id !== 'devil_advocate')),
                         $this->voteRepo->findVotesBySession($sessionId),
-                        $state['positions'] ?? []
+                        $state['positions'] ?? [],
+                        $strategicContextId
                     );
                     if ($agentId !== 'synthesizer' && $round === $rounds) {
                         $parsedVote = $this->voteParser->parse($content);
@@ -300,6 +349,24 @@ class StressTestRunner {
                         ['role' => 'user', 'content' => $daUser],
                     ];
                     try {
+                        $governedDa = CognitiveRuntimeGovernance::tracePromptPayload(
+                            $daMessages,
+                            [
+                                'session_id' => $sessionId,
+                                'strategic_context_id' => $strategicContextId,
+                                'round' => $round,
+                                'agent_id' => 'devil_advocate',
+                                'mode' => 'stress-test',
+                            ],
+                            'stress_test_user_payload',
+                            'orchestration',
+                            'stress_test_devil_advocate_payload'
+                        );
+                        $daMessages = $governedDa['messages'];
+                        $daMetaJson = $governedDa['meta_json'];
+                        if (is_array($governedDa['trace'] ?? null)) {
+                            $runtimeTraces[] = $governedDa['trace'];
+                        }
                         $daRouted  = $this->providerRouter->chat($daMessages, null, null, null);
                         $daContent = $daRouted['content'];
                         $daMsg     = $this->messageRepo->create([
@@ -318,6 +385,7 @@ class StressTestRunner {
                             'phase'                    => 'devil-advocate',
                             'mode_context'             => 'stress-test',
                             'message_type'             => 'devil_advocate',
+                            'meta_json'                => $daMetaJson,
                             'content'                  => $daContent,
                             'created_at'               => date('c'),
                         ]);
@@ -449,7 +517,7 @@ class StressTestRunner {
             ])
         );
 
-        return StructuredRunResult::augment([
+        return StructuredRunResult::augment(array_merge([
             'rounds' => $allMessages,
             'arguments' => $state['arguments'],
             'positions' => $state['positions'],
@@ -476,7 +544,7 @@ class StressTestRunner {
             'canonical_synthesis' => $canonicalSynthesis,
             'decision_outcome' => $decisionOutcome,
             'playbook_runtime' => $playbookDiagnostics,
-        ]);
+        ], CognitiveRuntimeGovernance::summarizeTraces($runtimeTraces, 'stress-test')));
     }
 
     /**
@@ -513,6 +581,15 @@ class StressTestRunner {
         $nonSynth = array_values(array_filter($allAgentIds, fn($id) => $id !== 'synthesizer'));
         $agentIdx = (int)(array_search($agentId, $nonSynth) ?: 0);
         return $others[($agentIdx + $round) % count($others)];
+    }
+
+    private function countMessageChars(array $messages): int
+    {
+        $chars = 0;
+        foreach ($messages as $message) {
+            $chars += mb_strlen((string)($message['content'] ?? ''), 'UTF-8');
+        }
+        return $chars;
     }
 
     private function uuid(): string {

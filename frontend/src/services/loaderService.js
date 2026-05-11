@@ -15,7 +15,13 @@ async function loadPersonas() {
 
 async function loadSessions() {
   try {
-    const data = await _svc().SessionService.list();
+    const st = _state();
+    const params = new URLSearchParams();
+    if (st.sessionsListAllContexts) {
+      params.set('all_contexts', '1');
+    }
+    const qs = params.toString();
+    const data = await _svc().SessionService.list(qs ? `?${qs}` : '');
     _state().sessions = Array.isArray(data) ? data : (data.sessions || []);
   } catch (err) {
     console.warn('Could not load sessions:', err.message);
@@ -86,8 +92,13 @@ async function loadStrategicContexts() {
   try {
     const data = await _svc().StrategicContextService.list({ status: 'active' }, 80);
     _state().strategicContexts = { loading: false, error: null, items: data.contexts || [] };
+    const active = data.active_context ?? null;
+    _state().activeStrategicContext = active;
+    _state().activeStrategicContextId = active && active.context_id ? String(active.context_id) : null;
   } catch (err) {
     _state().strategicContexts = { loading: false, error: String(err.message || err), items: [] };
+    _state().activeStrategicContext = null;
+    _state().activeStrategicContextId = null;
   }
 }
 

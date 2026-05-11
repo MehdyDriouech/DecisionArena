@@ -459,7 +459,7 @@ function renderChat() {
             <button class="btn btn-secondary btn-sm" data-action="open-decision-room" data-session-id="${escHtml(session.id)}">
               ${t('chat.decisionRoom')}
             </button>
-            <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
+            <button class="btn btn-secondary btn-sm" data-nav="analyses">${t('nav.back')}</button>
           </div>
         </div>
       </div>

@@ -1,11 +1,14 @@
 <?php
 namespace Domain\Orchestration;
 
+use Domain\CognitiveGovernance\PromptInjectionRegistry;
 use Domain\Agents\Agent;
 use Domain\Agents\DecisionDynamics;
+use Domain\StrategicContext\BeliefEngineService;
+use Domain\StrategicContext\AgentContextMemoryService;
 use Infrastructure\Markdown\MarkdownFileLoader;
-use Infrastructure\Logging\Logger;
 use Infrastructure\Persistence\ContextDocumentChunkRepository;
+use Infrastructure\Persistence\StrategicContextRepository;
 
 class PromptBuilder {
     /** Upper bound aligned with ContextDocumentController (storage). */
@@ -15,8 +18,14 @@ class PromptBuilder {
 
     private string $storageDir;
     private MarkdownFileLoader $loader;
-    private Logger $logger;
     private PlaybookRuntime $playbookRuntime;
+
+    private ?AgentContextMemoryService $agentContextMemoryService = null;
+    private ?BeliefEngineService $beliefEngineService = null;
+    private ?StrategicContextRepository $strategicContextRepository = null;
+
+    /** @var array<string, string> strategic context id -> prepared prompt block */
+    private array $strategicContextPromptCache = [];
 
     /** @var array<string, mixed> Metadata from last buildContextDocumentContent FTS step (merged into prompt logs). */
     private array $lastRetrievalLogMeta = [];
@@ -29,7 +38,6 @@ class PromptBuilder {
     public function __construct() {
         $this->storageDir = __DIR__ . '/../../../storage';
         $this->loader     = new MarkdownFileLoader($this->storageDir);
-        $this->logger     = new Logger();
         $this->playbookRuntime = new PlaybookRuntime();
     }
 
@@ -205,6 +213,53 @@ TEXT;
         return $this->lastRetrievalLogMeta;
     }
 
+    /** Mémoire markdown par (strategic_context_id, agent_id) — vide si legacy ou invalide. */
+    private function agentContextMemoryBlock(?string $strategicContextUuid, string $agentId): string {
+        if ($strategicContextUuid === null || trim($strategicContextUuid) === '') {
+            return '';
+        }
+        $this->agentContextMemoryService ??= new AgentContextMemoryService();
+        return $this->agentContextMemoryService->buildPromptInjectionBlock($strategicContextUuid, $agentId);
+    }
+
+    /**
+     * Inject explicit strategic context orientation written by the user/admin.
+     * Reuses strategic_contexts.description (no extra schema).
+     */
+    private function strategicContextGuidanceBlock(?string $strategicContextId): string
+    {
+        $ctxId = is_string($strategicContextId) ? trim($strategicContextId) : '';
+        if ($ctxId === '') {
+            return '';
+        }
+        if (array_key_exists($ctxId, $this->strategicContextPromptCache)) {
+            return $this->strategicContextPromptCache[$ctxId];
+        }
+
+        $this->strategicContextRepository ??= new StrategicContextRepository();
+        $ctx = $this->strategicContextRepository->find($ctxId);
+        if (!is_array($ctx)) {
+            $this->strategicContextPromptCache[$ctxId] = '';
+            return '';
+        }
+        $title = trim((string)($ctx['title'] ?? ''));
+        $description = trim((string)($ctx['description'] ?? ''));
+        if ($description === '') {
+            $this->strategicContextPromptCache[$ctxId] = '';
+            return '';
+        }
+
+        $block = "\n\n## Strategic Context Guidance\n";
+        if ($title !== '') {
+            $block .= "Context: {$title}\n";
+        }
+        $block .= "Use this orientation as a hard decision frame unless directly contradicted by stronger evidence:\n";
+        $block .= $description . "\n";
+
+        $this->strategicContextPromptCache[$ctxId] = $block;
+        return $block;
+    }
+
     public function buildChatMessages(
         Agent $agent,
         string $sessionContext,
@@ -212,7 +267,8 @@ TEXT;
         string $userMessage,
         string $language = 'en',
         ?array $contextDoc = null,
-        ?string $retrievalSessionId = null
+        ?string $retrievalSessionId = null,
+        ?string $strategicContextIdForAgentMemory = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'chat', $language);
         $contextPrefix = $this->buildContextDocumentContent(
@@ -221,22 +277,14 @@ TEXT;
             $sessionContext,
             $userMessage
         );
-        $userContent   = $contextPrefix . $this->buildUserContent($sessionContext, $conversationHistory, $userMessage, null);
+        $memBlock = $this->agentContextMemoryBlock($strategicContextIdForAgentMemory, $agent->id);
+        $ctxBlock = $this->strategicContextGuidanceBlock($strategicContextIdForAgentMemory);
+        $userContent   = $contextPrefix . $ctxBlock . $memBlock . $this->buildUserContent($sessionContext, $conversationHistory, $userMessage, null);
 
         $msgs = [
             ['role' => 'system', 'content' => $systemContent],
             ['role' => 'user',   'content' => $userContent],
         ];
-
-        $this->logger->logPromptBuild('prompt_built_chat', [
-            'agent_id' => $agent->id,
-            'metadata' => array_merge([
-                'mode' => 'chat',
-                'message_count' => count($msgs),
-                'character_count' => mb_strlen($systemContent, 'UTF-8') + mb_strlen($userContent, 'UTF-8'),
-                'context_doc_injected' => !empty($contextDoc['content']),
-            ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
-        ]);
 
         return $msgs;
     }
@@ -256,7 +304,8 @@ TEXT;
         bool $forceStrongContradictionNext = false,
         ?string $retrievalSessionId = null,
         ?string $retrievalLastUserMessage = null,
-        string $sessionVariant = ''
+        string $sessionVariant = '',
+        ?string $strategicContextIdForAgentMemory = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'decision-room', $language);
         $playbookId = $this->playbookRuntime->resolvePlaybookId('decision-room', [], $objective);
@@ -271,51 +320,245 @@ TEXT;
         $roundPolicy      = new RoundPolicy();
         $roundInstruction = $roundPolicy->getRoundInstruction($round, $totalRounds, $forceStrongContradictionNext);
 
-        $userContent  = $this->buildContextDocumentContent(
+        $userContent = '';
+
+        $seg = $this->buildContextDocumentContent(
             $contextDoc, $retrievalSessionId, $objective, $retrievalLastUserMessage
         );
-        $userContent .= "**Objective:** $objective\n\n";
-        $userContent .= $this->playbookRuntime->buildPromptBlock($playbookId, $language);
-        $userContent .= $this->buildPlaybookDebateDisciplineBlock($playbookId, $language);
+        $this->appendDecisionRoomSegmentBudgeted(
+            $userContent,
+            'context_document',
+            'context_layer',
+            $seg,
+            'context_doc_or_fts_retrieval_policy',
+            ['playbook_id' => $playbookId],
+            true
+        );
+
+        $seg = "**Objective:** $objective\n\n";
+        $this->appendDecisionRoomSegmentBudgeted($userContent, 'objective', 'task', $seg, 'required_session_objective', [], false);
+
+        $seg = $this->strategicContextGuidanceBlock($strategicContextIdForAgentMemory);
+        if ($seg !== '') {
+            $this->appendDecisionRoomSegmentBudgeted(
+                $userContent,
+                'strategic_context_guidance',
+                'strategic_context',
+                $seg,
+                'active_or_selected_strategic_context_description',
+                [],
+                false
+            );
+        } else {
+            $this->traceDecisionRoomSkipped('strategic_context_guidance', 'strategic_context', 'no_context_or_empty_description');
+        }
+
+        $seg = $this->playbookRuntime->buildPromptBlock($playbookId, $language);
+        $this->appendDecisionRoomSegmentBudgeted($userContent, 'playbook_block', 'playbook_runtime', $seg, 'resolved_playbook_block', [], false);
+
+        $seg = $this->buildPlaybookDebateDisciplineBlock($playbookId, $language);
+        $this->appendDecisionRoomSegmentBudgeted($userContent, 'debate_discipline', 'governance_layer', $seg, 'playbook_debate_discipline', [], false);
+
         if (!empty($previousRoundMessages)) {
-            $userContent .= "**Previous Round Contributions:**\n";
+            $seg = "**Previous Round Contributions:**\n";
             foreach ($previousRoundMessages as $msg) {
                 $agentLabel = $msg['agent_id'] ?? 'Agent';
-                $userContent .= "\n**[$agentLabel]:** {$msg['content']}\n";
+                $seg .= "\n**[$agentLabel]:** {$msg['content']}\n";
             }
-            $userContent .= "\n";
-            $userContent .= $this->buildRepetitionReductionBlock($previousRoundMessages, $language);
+            $seg .= "\n";
+            $seg .= $this->buildRepetitionReductionBlock($previousRoundMessages, $language);
+            $this->appendDecisionRoomSegmentBudgeted(
+                $userContent,
+                'previous_rounds',
+                'debate_transcript',
+                $seg,
+                'prior_round_messages_and_repetition_guard',
+                [],
+                false
+            );
+        } else {
+            $this->traceDecisionRoomSkipped('previous_rounds', 'debate_transcript', 'no_prior_round_messages');
         }
+
         if (!empty($memoryContext['argument_memory_summary'])) {
-            $userContent .= "# Argument Memory (summary)\n\n";
-            $userContent .= $memoryContext['argument_memory_summary'] . "\n\n";
-            $userContent .= "Instructions:\n";
-            $userContent .= "- Do not repeat existing arguments unless refining them.\n";
-            $userContent .= "- Challenge or extend existing arguments.\n";
-            $userContent .= "- Refer explicitly to previous arguments when relevant.\n\n";
+            $seg = "# Argument Memory (summary)\n\n";
+            $seg .= $memoryContext['argument_memory_summary'] . "\n\n";
+            $seg .= "Instructions:\n";
+            $seg .= "- Do not repeat existing arguments unless refining them.\n";
+            $seg .= "- Challenge or extend existing arguments.\n";
+            $seg .= "- Refer explicitly to previous arguments when relevant.\n\n";
+            $this->appendDecisionRoomSegmentBudgeted(
+                $userContent,
+                'argument_memory',
+                'debate_memory',
+                $seg,
+                'debate_memory_state_summary_injected',
+                [],
+                true
+            );
+        } else {
+            $this->traceDecisionRoomSkipped('argument_memory', 'debate_memory', 'no_argument_memory_summary_in_state');
         }
+
         $socialPolicy = $this->loadPrompt('social-dynamics-policy') ?? '';
         if ($socialPolicy !== '') {
-            $userContent .= "---\n" . $socialPolicy . "\n---\n\n";
+            $seg = "---\n" . $socialPolicy . "\n---\n\n";
+            $this->appendDecisionRoomSegmentBudgeted(
+                $userContent,
+                'social_policy',
+                'social_governance',
+                $seg,
+                'static_prompt_file_social_dynamics_policy',
+                [],
+                false
+            );
+        } else {
+            $this->traceDecisionRoomSkipped('social_policy', 'social_governance', 'prompt_file_missing_or_empty');
         }
+
         if ($socialDynamicsBlock !== null && $socialDynamicsBlock !== '') {
-            $userContent .= $socialDynamicsBlock;
+            $this->appendDecisionRoomSegmentBudgeted(
+                $userContent,
+                'social_dynamics_block',
+                'social_runtime',
+                $socialDynamicsBlock,
+                'runner_injected_social_context_block',
+                [],
+                true
+            );
+        } else {
+            $this->traceDecisionRoomSkipped('social_dynamics_block', 'social_runtime', 'runner_passed_empty_or_null_social_block');
         }
-        $userContent .= "**Your Task:** $roundInstruction\n\n";
+
+        $seg = $this->agentContextMemoryBlock($strategicContextIdForAgentMemory, $agent->id);
+        if ($seg !== '') {
+            $this->appendDecisionRoomSegmentBudgeted(
+                $userContent,
+                'agent_context_memory',
+                'situated_memory',
+                $seg,
+                'agent_memory_md_or_service_block',
+                [],
+                false
+            );
+        } else {
+            $this->traceDecisionRoomSkipped('agent_context_memory', 'situated_memory', 'no_strategic_context_or_empty_agent_memory');
+        }
+
+        $beliefsRuntime = $this->buildBeliefsRuntimeSegments($strategicContextIdForAgentMemory, true);
+        if ($beliefsRuntime['prioritized'] !== '') {
+            $this->appendDecisionRoomSegmentBudgeted(
+                $userContent,
+                'beliefs_prioritized',
+                'beliefs',
+                $beliefsRuntime['prioritized'],
+                'runtime_beliefs_prioritized',
+                [],
+                true
+            );
+        } else {
+            $this->traceDecisionRoomSkipped('beliefs_prioritized', 'beliefs', 'no_prioritized_beliefs_or_no_context');
+        }
+        if ($beliefsRuntime['contested'] !== '') {
+            $this->appendDecisionRoomSegmentBudgeted(
+                $userContent,
+                'beliefs_contested',
+                'beliefs',
+                $beliefsRuntime['contested'],
+                'runtime_beliefs_contested',
+                [],
+                true
+            );
+        } else {
+            $this->traceDecisionRoomSkipped('beliefs_contested', 'beliefs', 'no_contested_beliefs_or_no_context');
+        }
+        if ($beliefsRuntime['fragile'] !== '') {
+            $this->appendDecisionRoomSegmentBudgeted(
+                $userContent,
+                'beliefs_fragile_assumptions',
+                'beliefs',
+                $beliefsRuntime['fragile'],
+                'runtime_beliefs_fragile_assumptions',
+                [],
+                true
+            );
+        } else {
+            $this->traceDecisionRoomSkipped('beliefs_fragile_assumptions', 'beliefs', 'no_fragile_beliefs_or_no_context');
+        }
+        if ($beliefsRuntime['invalidated'] !== '') {
+            $this->appendDecisionRoomSegmentBudgeted(
+                $userContent,
+                'beliefs_invalidated_optional',
+                'beliefs',
+                $beliefsRuntime['invalidated'],
+                'runtime_beliefs_invalidated_optional',
+                ['governance_visibility' => 'always_visible_low_priority'],
+                true
+            );
+        } else {
+            $this->traceDecisionRoomSkipped('beliefs_invalidated_optional', 'beliefs', 'no_invalidated_beliefs_or_no_context');
+        }
+
+        $seg = "**Your Task:** $roundInstruction\n\n";
+        $this->appendDecisionRoomSegmentBudgeted($userContent, 'round_instruction', 'orchestration', $seg, 'round_policy_instruction', [], false);
+
         if ($round > 1 && $agent->id !== 'synthesizer') {
-            $userContent .= $this->buildTargetAgentHint($agent->id, $previousRoundMessages, $assignedTarget);
-            $userContent .= $this->buildInteractionContractBlock($assignedTarget !== null);
+            $seg = $this->buildTargetAgentHint($agent->id, $previousRoundMessages, $assignedTarget);
+            $seg .= $this->buildInteractionContractBlock($assignedTarget !== null);
+            $this->appendDecisionRoomSegmentBudgeted(
+                $userContent,
+                'interaction_contract',
+                'orchestration',
+                $seg,
+                'target_hint_and_interaction_contract',
+                [],
+                false
+            );
+        } else {
+            $this->traceDecisionRoomSkipped('interaction_contract', 'orchestration', 'synthesizer_or_round_one');
         }
-        $userContent .= "Use your default response format.";
-        $userContent .= $this->buildWeightedOpinionInstruction();
+
+        $seg = 'Use your default response format.';
+        $seg .= $this->buildWeightedOpinionInstruction();
+        $this->appendDecisionRoomSegmentBudgeted(
+            $userContent,
+            'response_format',
+            'instruction',
+            $seg,
+            'default_format_plus_weighted_opinion',
+            [],
+            false
+        );
 
         if ($forceDisagreement) {
             $mode = $agent->id === 'synthesizer' ? 'synthesizer' : 'default';
-            $userContent .= $this->buildForcedDisagreementInstruction($mode);
+            $seg = $this->buildForcedDisagreementInstruction($mode);
+            $this->appendDecisionRoomSegmentBudgeted(
+                $userContent,
+                'forced_disagreement',
+                'governance_layer',
+                $seg,
+                'session_option_force_disagreement',
+                [],
+                false
+            );
+        } else {
+            $this->traceDecisionRoomSkipped('forced_disagreement', 'governance_layer', 'force_disagreement_false');
         }
 
         if ($agent->id !== 'synthesizer' && $round === $totalRounds) {
-            $userContent .= $this->buildFinalVoteInstruction();
+            $seg = $this->buildFinalVoteInstruction();
+            $this->appendDecisionRoomSegmentBudgeted(
+                $userContent,
+                'final_vote',
+                'vote',
+                $seg,
+                'final_round_non_synthesizer_vote_schema',
+                [],
+                false
+            );
+        } else {
+            $this->traceDecisionRoomSkipped('final_vote', 'vote', 'not_final_non_synth_agent_or_synthesizer');
         }
 
         $msgs = [
@@ -323,22 +566,152 @@ TEXT;
             ['role' => 'user',   'content' => $userContent],
         ];
 
-        $this->logger->logPromptBuild('prompt_built_decision_room', [
-            'agent_id' => $agent->id,
-            'metadata' => array_merge([
-                'mode' => 'decision-room',
-                'round' => $round,
-                'total_rounds' => $totalRounds,
-                'message_count' => count($msgs),
-                'character_count' => mb_strlen($systemContent, 'UTF-8') + mb_strlen($userContent, 'UTF-8'),
-                'context_doc_injected' => !empty($contextDoc['content']),
-                'memory_injected' => !empty($memoryContext['argument_memory_summary']),
-                'force_disagreement' => (bool)$forceDisagreement,
-                'playbook_id' => $playbookId,
-            ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
-        ]);
-
         return $msgs;
+    }
+
+    /**
+     * Append segment message utilisateur DR : CognitiveBudgetEngine (si trace active) + dédup optionnelle + trace.
+     *
+     * @param array<string, mixed> $extra
+     */
+    private function appendDecisionRoomSegmentBudgeted(
+        string &$userContent,
+        string $blockId,
+        string $cognitiveLayer,
+        string $segment,
+        string $inclusionReason,
+        array $extra = [],
+        bool $useDedup = false
+    ): void {
+        $dk = PromptInjectionRegistry::deduplicationKeyForBlockId($blockId);
+        if ($useDedup && $dk !== null && $segment !== '' && PromptInjectionTraceCollector::isDuplicateSegment($dk, $segment, $blockId, $cognitiveLayer)) {
+            return;
+        }
+        $work = $segment;
+        $budgetExtra = [];
+        if (PromptInjectionTraceCollector::active() && CognitiveBudgetEngine::active()) {
+            $b = CognitiveBudgetEngine::applySegment($blockId, $work);
+            $work = $b['content'];
+            $budgetExtra = [
+                'refused_chars' => $b['refused_chars'],
+                'pruning_decision' => $b['pruning_decision'],
+                'fallback_decision' => $b['fallback_policy'],
+                'score_breakdown' => $b['score_breakdown'],
+                'budget_layer' => $b['budget_layer'],
+                'chars_budget_allowed' => $b['chars_budget_allowed'],
+                'budget_soft_cap_registry' => $b['soft_budget'],
+                'budget_hard_cap_registry' => $b['hard_budget'],
+            ];
+        }
+        $userContent .= $work;
+        $this->traceDecisionRoomSegment($blockId, $cognitiveLayer, $work, $inclusionReason, null, array_merge($extra, $budgetExtra));
+        if ($useDedup && $dk !== null && $segment !== '') {
+            PromptInjectionTraceCollector::recordSegmentFingerprint($dk, $segment);
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $extra
+     */
+    private function traceDecisionRoomSegment(
+        string $blockId,
+        string $cognitiveLayer,
+        string $segment,
+        string $inclusionReason,
+        ?string $exclusionReason = null,
+        array $extra = []
+    ): void {
+        if (!PromptInjectionTraceCollector::active()) {
+            return;
+        }
+        PromptInjectionTraceCollector::addStep(
+            $blockId,
+            $cognitiveLayer,
+            mb_strlen($segment, 'UTF-8'),
+            $inclusionReason,
+            $exclusionReason,
+            $extra
+        );
+    }
+
+    private function traceDecisionRoomSkipped(string $blockId, string $cognitiveLayer, string $reason): void
+    {
+        if (!PromptInjectionTraceCollector::active()) {
+            return;
+        }
+        PromptInjectionTraceCollector::addStep(
+            $blockId,
+            $cognitiveLayer,
+            0,
+            'skipped',
+            $reason,
+            ['status' => 'ignored']
+        );
+    }
+
+    /** @return array{prioritized:string,contested:string,fragile:string,invalidated:string} */
+    private function buildBeliefsRuntimeSegments(?string $strategicContextId, bool $includeInvalidated = false): array
+    {
+        $empty = ['prioritized' => '', 'contested' => '', 'fragile' => '', 'invalidated' => ''];
+        $ctx = is_string($strategicContextId) ? trim($strategicContextId) : '';
+        if ($ctx === '') {
+            return $empty;
+        }
+        $this->beliefEngineService ??= new BeliefEngineService();
+        $all = $this->beliefEngineService->listBeliefsForContext($ctx, ['limit' => 180]);
+        if ($all === []) {
+            return $empty;
+        }
+        $prioritized = [];
+        $contested = [];
+        $fragile = [];
+        $invalidated = [];
+        foreach ($all as $b) {
+            $text = trim((string)($b['belief_text'] ?? ''));
+            if ($text === '') {
+                continue;
+            }
+            $conf = (float)($b['confidence'] ?? 0.5);
+            $state = (string)($b['contestation_state'] ?? 'weak');
+            $status = (string)($b['status'] ?? '');
+            $agent = (string)($b['agent_id'] ?? 'group');
+            $line = sprintf('- [%s] %s (conf %.2f, state=%s)', $agent, $text, $conf, $state);
+            $isInvalidatedOrDeprecated = in_array($state, ['invalidated'], true)
+                || in_array($status, ['invalidated', 'deprecated'], true);
+            if ($isInvalidatedOrDeprecated) {
+                $invalidated[] = $line;
+                continue;
+            }
+            if (in_array($state, ['stable', 'reinforced'], true) && !in_array($status, ['archived', 'disputed'], true)) {
+                $prioritized[] = $line;
+            }
+            if (in_array($state, ['contested', 'unstable'], true) || $status === 'disputed') {
+                $contested[] = $line;
+            }
+            if (in_array($state, ['weak', 'derived'], true) || $conf < 0.45) {
+                $fragile[] = $line;
+            }
+        }
+        $prioritized = array_slice($prioritized, 0, 8);
+        $contested = array_slice($contested, 0, 8);
+        $fragile = array_slice($fragile, 0, 8);
+        $invalidated = array_slice($invalidated, 0, 6);
+
+        $out = $empty;
+        if ($prioritized !== []) {
+            $out['prioritized'] = "\n\n## Beliefs prioritized (runtime)\n" . implode("\n", $prioritized) . "\n";
+        }
+        if ($contested !== []) {
+            $out['contested'] = "\n\n## Beliefs contested (runtime)\n" . implode("\n", $contested) . "\n";
+        }
+        if ($fragile !== []) {
+            $out['fragile'] = "\n\n## Fragile assumptions (runtime)\n" . implode("\n", $fragile) . "\n";
+        }
+        if ($includeInvalidated && $invalidated !== []) {
+            $out['invalidated'] = "\n\n## Invalidated beliefs (optional)\n" . implode("\n", $invalidated) . "\n";
+        }
+
+        return $out;
     }
 
     public function buildConfrontationMessages(
@@ -388,16 +761,6 @@ TEXT;
             ['role' => 'system', 'content' => $systemFull],
             ['role' => 'user',   'content' => $userContent],
         ];
-        $this->logger->logPromptBuild('prompt_built_confrontation_phase', [
-            'agent_id' => $agent->id,
-            'metadata' => array_merge([
-                'mode' => 'confrontation',
-                'phase' => $phaseKey,
-                'message_count' => count($msgs),
-                'character_count' => mb_strlen($systemFull, 'UTF-8') + mb_strlen($userContent, 'UTF-8'),
-                'context_doc_injected' => !empty($contextDoc['content']),
-            ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
-        ]);
         return $msgs;
     }
 
@@ -419,7 +782,8 @@ TEXT;
         ?string $socialDynamicsBlock = null,
         bool   $forceStrongContradictionNext = false,
         ?string $retrievalSessionId = null,
-        ?string $retrievalLastUserMessage = null
+        ?string $retrievalLastUserMessage = null,
+        ?string $strategicContextIdForAgentMemory = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'confrontation', $language);
         $playbookId = $this->playbookRuntime->resolvePlaybookId('confrontation', [], $objective);
@@ -433,6 +797,7 @@ TEXT;
             $contextDoc, $retrievalSessionId, $objective, $retrievalLastUserMessage
         );
         $userContent .= "**Objective under debate:** $objective\n\n";
+        $userContent .= $this->strategicContextGuidanceBlock($strategicContextIdForAgentMemory);
         $userContent .= $this->playbookRuntime->buildPromptBlock($playbookId, $language);
         $userContent .= $this->buildPlaybookDebateDisciplineBlock($playbookId, $language);
 
@@ -459,6 +824,7 @@ TEXT;
             $userContent .= $socialDynamicsBlock;
         }
 
+        $userContent .= $this->agentContextMemoryBlock($strategicContextIdForAgentMemory, $agent->id);
         $userContent .= "**Your task:** $instruction";
         if ($currentRound > 1 && ($assignedTarget !== null || $interactionStyle === 'agent-to-agent')) {
             $userContent .= $this->buildInteractionContractBlock(true);
@@ -476,22 +842,6 @@ TEXT;
             ['role' => 'system', 'content' => $systemContent],
             ['role' => 'user',   'content' => $userContent],
         ];
-
-        $this->logger->logPromptBuild('prompt_built_confrontation', [
-            'agent_id' => $agent->id,
-            'metadata' => array_merge([
-                'mode' => 'confrontation',
-                'round' => $currentRound,
-                'total_rounds' => $totalRounds,
-                'interaction_style' => $interactionStyle,
-                'message_count' => count($msgs),
-                'character_count' => mb_strlen($systemContent, 'UTF-8') + mb_strlen($userContent, 'UTF-8'),
-                'context_doc_injected' => !empty($contextDoc['content']),
-                'memory_injected' => !empty($memoryContext['argument_memory_summary']),
-                'force_disagreement' => (bool)$forceDisagreement,
-                'playbook_id' => $playbookId,
-            ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
-        ]);
 
         return $msgs;
     }
@@ -570,20 +920,6 @@ TEXT;
             ['role' => 'user',   'content' => $userContent],
         ];
 
-        $this->logger->logPromptBuild('prompt_built_confrontation_synthesis', [
-            'agent_id' => $agent->id,
-            'metadata' => array_merge([
-                'mode' => 'confrontation',
-                'synthesis' => true,
-                'message_count' => count($msgs),
-                'character_count' => mb_strlen($systemContent, 'UTF-8') + mb_strlen($userContent, 'UTF-8'),
-                'context_doc_injected' => !empty($contextDoc['content']),
-                'memory_injected' => !empty($memoryContext['weighted_analysis']),
-                'force_disagreement' => (bool)$forceDisagreement,
-                'playbook_id' => $playbookId,
-            ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
-        ]);
-
         return $msgs;
     }
 
@@ -596,7 +932,8 @@ TEXT;
         ?array $contextDoc = null,
         ?string $socialDynamicsBlock = null,
         ?string $retrievalSessionId = null,
-        ?string $retrievalLastUserMessage = null
+        ?string $retrievalLastUserMessage = null,
+        ?string $strategicContextIdForAgentMemory = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'quick-decision', $language);
         $playbookId = $this->playbookRuntime->resolvePlaybookId('quick-decision', [], $objective);
@@ -605,6 +942,7 @@ TEXT;
             $contextDoc, $retrievalSessionId, $objective, $retrievalLastUserMessage
         );
         $userContent .= "**Objective:** $objective\n\n";
+        $userContent .= $this->strategicContextGuidanceBlock($strategicContextIdForAgentMemory);
         $userContent .= $this->playbookRuntime->buildPromptBlock($playbookId, $language);
         $userContent .= $this->buildPlaybookDebateDisciplineBlock($playbookId, $language);
 
@@ -625,6 +963,8 @@ TEXT;
             $userContent .= "> **Brief contradiction pass:** Respond to another agent explicitly — cite what you endorse or contest one concrete assumption.\n";
             $userContent .= "> Keep it concise; **challenge reasoning, never the person**.\n\n";
         }
+
+        $userContent .= $this->agentContextMemoryBlock($strategicContextIdForAgentMemory, $agent->id);
 
         if ($isSynthesizer) {
             $userContent .= "**Your task:** Synthesize the analyses above into a final recommendation.\n";
@@ -647,19 +987,6 @@ TEXT;
             ['role' => 'user',   'content' => $userContent],
         ];
 
-        $this->logger->logPromptBuild('prompt_built_quick_decision', [
-            'agent_id' => $agent->id,
-            'metadata' => array_merge([
-                'mode' => 'quick-decision',
-                'synthesizer' => ($agent->id === 'synthesizer'),
-                'message_count' => count($msgs),
-                'character_count' => mb_strlen($systemContent, 'UTF-8') + mb_strlen($userContent, 'UTF-8'),
-                'context_doc_injected' => !empty($contextDoc['content']),
-                'force_disagreement' => (bool)$forceDisagreement,
-                'playbook_id' => $playbookId,
-            ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
-        ]);
-
         return $msgs;
     }
 
@@ -677,7 +1004,8 @@ TEXT;
         ?string $socialDynamicsBlock = null,
         bool   $forceStrongContradictionNext = false,
         ?string $retrievalSessionId = null,
-        ?string $retrievalLastUserMessage = null
+        ?string $retrievalLastUserMessage = null,
+        ?string $strategicContextIdForAgentMemory = null
     ): array {
         $systemContent = $this->buildSystemContent($agent, 'stress-test', $language);
         $playbookId = $this->playbookRuntime->resolvePlaybookId('stress-test', [], $objective);
@@ -688,6 +1016,7 @@ TEXT;
             $contextDoc, $retrievalSessionId, $objective, $retrievalLastUserMessage
         );
         $userContent .= "**Objective to stress-test:** $objective\n\n";
+        $userContent .= $this->strategicContextGuidanceBlock($strategicContextIdForAgentMemory);
         $userContent .= $this->playbookRuntime->buildPromptBlock($playbookId, $language);
         $userContent .= $this->buildPlaybookDebateDisciplineBlock($playbookId, $language);
 
@@ -708,6 +1037,8 @@ TEXT;
         if ($socialDynamicsBlock !== null && $socialDynamicsBlock !== '') {
             $userContent .= $socialDynamicsBlock;
         }
+
+        $userContent .= $this->agentContextMemoryBlock($strategicContextIdForAgentMemory, $agent->id);
 
         $isSynthesizer = ($agent->id === 'synthesizer');
 
@@ -761,22 +1092,6 @@ TEXT;
             ['role' => 'user',   'content' => $userContent],
         ];
 
-        $this->logger->logPromptBuild('prompt_built_stress_test', [
-            'agent_id' => $agent->id,
-            'metadata' => array_merge([
-                'mode' => 'stress-test',
-                'round' => $round,
-                'total_rounds' => $totalRounds,
-                'synthesizer' => ($agent->id === 'synthesizer'),
-                'message_count' => count($msgs),
-                'character_count' => mb_strlen($systemContent, 'UTF-8') + mb_strlen($userContent, 'UTF-8'),
-                'context_doc_injected' => !empty($contextDoc['content']),
-                'memory_injected' => !empty($memoryContext['argument_memory_summary']),
-                'force_disagreement' => (bool)$forceDisagreement,
-                'playbook_id' => $playbookId,
-            ], $this->contextPromptLogMeta($contextDoc), $this->ftsRetrievalPromptLogMeta()),
-        ]);
-
         return $msgs;
     }
 
@@ -815,15 +1130,6 @@ TEXT;
             ['role' => 'system', 'content' => $system],
             ['role' => 'user',   'content' => $user],
         ];
-
-        $this->logger->logPromptBuild('prompt_built_action_plan', [
-            'metadata' => [
-                'mode' => 'action-plan',
-                'message_count' => count($msgs),
-                'character_count' => mb_strlen($system, 'UTF-8') + mb_strlen($user, 'UTF-8'),
-                'language' => $language,
-            ],
-        ]);
 
         return $msgs;
     }

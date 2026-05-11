@@ -10,6 +10,69 @@ import {
   renderPlaybookOutputContract,
 } from '../../ui/components.js';
 
+function modesUsingStrategicWorkspace(mode) {
+  return ['chat', 'decision-room', 'quick-decision', 'confrontation', 'stress-test', 'jury'].includes(mode);
+}
+
+/** Garde-fou produit : un contexte stratégique « workspace » actif est requis pour lancer ces modes (sauf legacy expert). */
+function renderStrategicWorkspaceGuard(ns, state, escHtml, t) {
+  if (!modesUsingStrategicWorkspace(ns.mode)) return '';
+  const id = String(state.activeStrategicContextId || state.activeStrategicContext?.context_id || '').trim();
+  const active = state.activeStrategicContext;
+  const title = String(active?.title || '').trim();
+  const allContexts = Array.isArray(state.strategicContexts?.items) ? state.strategicContexts.items : [];
+  const switchableContexts = allContexts.filter((ctx) => {
+    const status = String(ctx?.status || 'active');
+    return status === 'active' || status === 'paused';
+  });
+  const selectedContextId = String(ns.pendingStrategicContextId || id || '').trim();
+  const switcherHtml = switchableContexts.length > 0
+    ? `
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:end;">
+        <div class="form-group" style="margin:0;min-width:260px;flex:1;">
+          <label for="ns-workspace-context-select" style="font-size:12px;color:var(--text-secondary);">${escHtml('Contexte actif')}</label>
+          <select id="ns-workspace-context-select" class="input" data-field="pendingStrategicContextId">
+            ${switchableContexts.map((ctx) => {
+              const cid = String(ctx?.context_id || '').trim();
+              const ctitle = String(ctx?.title || cid || 'Contexte').trim();
+              const status = String(ctx?.status || 'active').trim();
+              const statusLabel = status === 'paused' ? ' — en pause' : '';
+              return `<option value="${escHtml(cid)}" ${cid === selectedContextId ? 'selected' : ''}>${escHtml(ctitle + statusLabel)}</option>`;
+            }).join('')}
+          </select>
+        </div>
+        <button type="button" class="btn btn-secondary btn-sm" data-action="activate-new-session-strategic-context">
+          ${escHtml('Définir actif')}
+        </button>
+      </div>
+    `
+    : `
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+        <button type="button" class="btn btn-secondary btn-sm" data-nav="strategic-contexts">${escHtml(t('newSession.strategicContext.gotoContexts'))}</button>
+      </div>
+    `;
+  if (id) {
+    return `
+    <div class="card" style="margin-bottom:14px;padding:12px 14px;background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.22);">
+      <div style="font-weight:700;font-size:13px;">${escHtml(t('newSession.strategicContext.activeTitle'))}</div>
+      ${title ? `<div style="margin-top:6px;font-size:13px;color:var(--text-secondary);">${escHtml(title)}</div>` : `<div style="margin-top:6px;font-size:12px;color:var(--text-muted);"><code>${escHtml(id)}</code></div>`}
+      ${switcherHtml}
+    </div>`;
+  }
+  return `
+    <div class="card" style="margin-bottom:14px;padding:12px 14px;border-color:rgba(234,179,8,0.45);background:rgba(234,179,8,0.08);">
+      <div style="font-weight:700;">${escHtml(t('newSession.strategicContext.missingTitle'))}</div>
+      <div style="margin-top:6px;font-size:12px;line-height:1.45;color:var(--text-secondary);">${escHtml(t('newSession.strategicContext.missingBody'))}</div>
+      ${switcherHtml}
+      <div data-ui="expert-only" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+        <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:12px;color:var(--text-secondary);">
+          <input type="checkbox" ${ns.confirmLegacyNoActiveStrategicContext ? 'checked' : ''} data-field="confirmLegacyNoActiveStrategicContext" style="margin-top:2px;accent-color:var(--accent);width:16px;height:16px;">
+          <span>${escHtml(t('newSession.strategicContext.legacyCheckbox'))}</span>
+        </label>
+      </div>
+    </div>`;
+}
+
 function renderFastDecisionBadge() {
   const t = (key) => window.i18n?.t(key) ?? key;
   return `
@@ -185,6 +248,8 @@ function renderStarterCard(card, ns, { escHtml, t, agentIcon, isSimple }) {
 }
 
 function renderPlaybookSelectionSection(ns, { escHtml }) {
+  const isExpertUi = window.DecisionArena?.store?.state?.uiMode === 'expert';
+  if (isExpertUi) return '';
   const lang = window.i18n?.getLanguage?.() || ns.language || 'fr';
   const current = resolvePlaybookForNewSession(ns, lang);
   const groups = getPlaybookIntentGroups(lang).map((group) => `
@@ -397,12 +462,72 @@ function renderContextDocumentSection() {
 }
 
 function renderDecisionMemoryReuseSection(ns, { state, escHtml, t }) {
-  const mp = ns.memoryPicker || { open: false, loading: false, error: null, filters: {}, memories: null, compactPreview: null };
+  const mp = ns.memoryPicker || { loading: false, error: null, filters: {}, memories: null, compactPreview: null, query: '', scope: 'current', previewMemoryId: '' };
   const selected = Array.isArray(ns.selectedMemoryIds) ? ns.selectedMemoryIds : [];
   const preview = mp.compactPreview || null;
   const allowed = Array.isArray(preview?.allowed) ? preview.allowed : [];
   const blocked = Array.isArray(preview?.blocked) ? preview.blocked : [];
   const isExpert = state.uiMode === 'expert';
+  const activeContextId = String(state.activeStrategicContextId || state.activeStrategicContext?.context_id || '').trim();
+  const activeContextTitle = String(state.activeStrategicContext?.title || '').trim();
+  const contexts = Array.isArray(state.strategicContexts?.items) ? state.strategicContexts.items : [];
+  const sessions = Array.isArray(state.sessions) ? state.sessions : [];
+  const sessionsById = new Map(sessions.map((s) => [String(s?.id || ''), String(s?.title || '')]));
+
+  const contextByMemoryId = (() => {
+    const out = new Map();
+    contexts.forEach((ctx) => {
+      const ctxId = String(ctx?.context_id || '').trim();
+      if (!ctxId) return;
+      const ids = Array.isArray(ctx?.linked_memory_ids) ? ctx.linked_memory_ids : [];
+      ids.forEach((id) => {
+        const key = String(id || '').trim();
+        if (!key) return;
+        if (!out.has(key)) out.set(key, []);
+        out.get(key).push(ctx);
+      });
+    });
+    return out;
+  })();
+
+  const relDate = (iso) => {
+    const dt = new Date(String(iso || ''));
+    if (Number.isNaN(dt.getTime())) return '—';
+    const diffMs = Date.now() - dt.getTime();
+    const day = 24 * 60 * 60 * 1000;
+    const days = Math.floor(diffMs / day);
+    if (days < 1) return t('memoryReuse.date.today');
+    if (days < 30) return t('memoryReuse.date.days').replace('{n}', String(days));
+    const months = Math.floor(days / 30);
+    if (months < 12) return t('memoryReuse.date.months').replace('{n}', String(months));
+    const years = Math.floor(months / 12);
+    return t('memoryReuse.date.years').replace('{n}', String(years));
+  };
+
+  const playbookLabel = (id) => {
+    const pb = getPlaybookById(String(id || ''), window.i18n?.getLanguage?.() || 'fr');
+    return pb?.name ? pb.name : String(id || '—');
+  };
+
+  const statusLabel = (raw) => {
+    const map = {
+      proceed: t('decisionMemory.status.proceed'),
+      proceed_with_constraints: t('decisionMemory.status.proceedWithConstraints'),
+      validate_first: t('decisionMemory.status.validateFirst'),
+      pivot: t('decisionMemory.status.pivot'),
+      kill: t('decisionMemory.status.kill'),
+    };
+    const key = String(raw || '').trim();
+    return map[key] || key || '—';
+  };
+
+  const confidenceLabel = (raw) => {
+    const key = String(raw || '').trim().toLowerCase();
+    if (key === 'strong') return t('decisionMemory.confidence.strong');
+    if (key === 'moderate') return t('decisionMemory.confidence.moderate');
+    if (key === 'weak') return t('decisionMemory.confidence.weak');
+    return key || '—';
+  };
 
   const blockedById = (() => {
     const m = new Map();
@@ -411,6 +536,26 @@ function renderDecisionMemoryReuseSection(ns, { state, escHtml, t }) {
     });
     return m;
   })();
+
+  const renderScopeBadge = (memory) => {
+    const memoryId = String(memory?.memory_id || '');
+    const linked = contextByMemoryId.get(memoryId) || [];
+    const linkedIds = linked.map((ctx) => String(ctx?.context_id || '').trim());
+    const hasActive = activeContextId && linkedIds.includes(activeContextId);
+    if (String(memory?.memory_state || '') === 'archived') {
+      return `<span class="badge badge-muted">${escHtml(t('memoryReuse.badge.archived'))}</span>`;
+    }
+    if (String(memory?.memory_state || '') === 'invalidated') {
+      return `<span class="badge badge-danger">${escHtml(t('memoryReuse.badge.deprecated'))}</span>`;
+    }
+    if (hasActive) {
+      return `<span class="badge badge-success">${escHtml(t('memoryReuse.badge.sameContext'))}</span>`;
+    }
+    if (linked.length > 0) {
+      return `<span class="badge badge-warning">${escHtml(t('memoryReuse.badge.otherContext'))}</span>`;
+    }
+    return `<span class="badge badge-muted">${escHtml(t('memoryReuse.badge.unknownContext'))}</span>`;
+  };
 
   const warning = (() => {
     const weak = allowed.some((m) => String(m.confidence || '') === 'weak');
@@ -435,109 +580,187 @@ function renderDecisionMemoryReuseSection(ns, { state, escHtml, t }) {
     `;
   })();
 
-  const expertOverrideToggle = isExpert ? `
-    <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-      <label style="display:flex;gap:8px;align-items:center;cursor:pointer;font-size:12px;color:var(--text-secondary);">
-        <input type="checkbox" ${mp.expertOverride ? 'checked' : ''} data-action="toggle-expert-memory-override" style="accent-color:var(--accent);">
-        ${escHtml(t('memoryReuse.expertOverride'))}
-      </label>
-    </div>
-  ` : '';
-
-  const filters = mp.filters || {};
-  const filterRow = (key, label, placeholder = '') => `
-    <div class="form-group" style="margin:0;">
-      <label style="font-size:12px;">${escHtml(label)}</label>
-      <input class="input" type="text" value="${escHtml(filters[key] || '')}" placeholder="${escHtml(placeholder)}"
-        data-action="set-memory-filter" data-filter-key="${escHtml(key)}" style="padding:6px 8px;font-size:12px;">
-    </div>`;
+  const scopeWarning = mp.scope === 'all'
+    ? `<div class="alert alert-warning" style="margin:10px 0 0;">
+        ${escHtml(t('memoryReuse.scopeAllWarning'))}
+      </div>`
+    : '';
 
   const list = Array.isArray(mp.memories) ? mp.memories : [];
   const listHtml = list.length === 0
-    ? `<div style="font-size:12px;color:var(--text-muted);">${escHtml(t('memoryReuse.emptySearch'))}</div>`
+    ? (mp.searched ? `<div style="font-size:12px;color:var(--text-muted);">${escHtml(t('memoryReuse.emptySearch'))}</div>` : '')
     : list.slice(0, 80).map((m) => {
       const id = String(m.memory_id || '');
-      const checked = selected.includes(id) ? 'checked' : '';
-      const confirmed = m.user_confirmed === 1 || m.user_confirmed === true;
-      const canReuse = confirmed && String(m.contract_version || '') === 'decision_outcome.v1' && String(m.taxonomy_version || '') === 'taxonomy.v1';
-      const badge = canReuse ? `<span class="badge badge-success">${escHtml(t('memoryReuse.reusable'))}</span>` : `<span class="badge badge-warning">${escHtml(t('memoryReuse.notReusable'))}</span>`;
-      const decay = m.decay && typeof m.decay === 'object' ? m.decay : null;
-      const staleness = decay ? String(decay.staleness_level || '') : '';
-      const stateBadge = decay ? String(decay.memory_state || '') : String(m.memory_state || 'active');
-      const staleBadge = staleness ? `<span class="badge ${staleness === 'stale' ? 'badge-danger' : staleness === 'aging' ? 'badge-warning' : 'badge-muted'}">${escHtml(staleness)}</span>` : '';
-      const lifecycleBadge = stateBadge ? `<span class="badge ${stateBadge === 'invalidated' ? 'badge-danger' : stateBadge === 'archived' ? 'badge-muted' : stateBadge === 'superseded' ? 'badge-warning' : 'badge-success'}">${escHtml(stateBadge)}</span>` : '';
+      const selectedNow = selected.includes(id);
       const blockedInfo = blockedById.get(id);
-      const disablePick = !isExpert && blockedInfo && ['invalidated', 'archived'].includes(String(blockedInfo.reason || ''));
+      const linked = contextByMemoryId.get(id) || [];
+      const ctxTitle = linked.length > 0
+        ? String(linked[0]?.title || linked[0]?.context_id || t('memoryReuse.context.unknown'))
+        : (activeContextTitle || t('memoryReuse.context.unknown'));
+      const sessionTitle = sessionsById.get(String(m.session_id || '')) || t('memoryReuse.analysisFallback');
+      const unresolved = Array.isArray(m.unresolved_risks) ? m.unresolved_risks : [];
+      const nextSteps = Array.isArray(m.recommended_next_steps) ? m.recommended_next_steps : [];
+      const assumptions = Array.isArray(m.failed_assumptions) ? m.failed_assumptions : [];
+      const tags = [
+        String(m.playbook_id || ''),
+        String(m.decision_status || ''),
+        String(m.confidence || ''),
+      ].filter(Boolean).slice(0, 3);
+      const showPreview = String(mp.previewMemoryId || '') === id;
+      const stale = String(m?.decay?.staleness_level || '');
+      const lifeState = String(m?.decay?.memory_state || m.memory_state || 'active');
+      const superseded = lifeState === 'superseded';
+      const disableReuse = !isExpert && blockedInfo && ['invalidated', 'archived'].includes(String(blockedInfo.reason || ''));
+
       return `
-        <label style="display:flex;gap:10px;align-items:flex-start;padding:10px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;cursor:pointer;background:var(--bg-secondary);">
-          <input type="checkbox" ${checked} ${disablePick ? 'disabled' : ''} data-action="toggle-select-memory-for-new-session" data-memory-id="${escHtml(id)}" style="margin-top:3px;accent-color:var(--accent);">
-          <div style="flex:1;min-width:0;">
-            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-              <span class="badge badge-muted">#${escHtml(id.slice(0, 8))}</span>
-              <span class="badge badge-info">${escHtml(String(m.playbook_id || ''))}</span>
-              <span class="badge badge-muted">${escHtml(String(m.decision_status || ''))}</span>
-              <span class="badge badge-muted">${escHtml(String(m.confidence || ''))}</span>
-              ${lifecycleBadge}
-              ${staleBadge}
-              ${badge}
-            </div>
-            <div style="margin-top:6px;font-size:12px;color:var(--text-secondary);line-height:1.45;">
-              ${escHtml(String(m.decision_summary || ''))}
-            </div>
-            ${blockedInfo ? `<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">⚠ ${escHtml(t('memoryReuse.blocked'))}: <code>${escHtml(String(blockedInfo.reason || ''))}</code></div>` : ''}
+        <article class="card" style="padding:14px 16px;margin-bottom:10px;">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <span class="badge badge-info">${escHtml(playbookLabel(m.playbook_id))}</span>
+            ${renderScopeBadge(m)}
+            ${stale ? `<span class="badge ${stale === 'stale' ? 'badge-danger' : 'badge-warning'}">${escHtml(stale)}</span>` : ''}
+            ${lifeState ? `<span class="badge ${lifeState === 'invalidated' ? 'badge-danger' : lifeState === 'archived' ? 'badge-muted' : lifeState === 'superseded' ? 'badge-warning' : 'badge-success'}">${escHtml(lifeState)}</span>` : ''}
+            <span style="margin-left:auto;font-size:11px;color:var(--text-muted);">${escHtml(relDate(m.created_at))}</span>
           </div>
-        </label>
+          <div style="margin-top:8px;font-weight:700;font-size:15px;color:var(--text-primary);">${escHtml(sessionTitle)}</div>
+          <div style="margin-top:4px;font-size:13px;color:var(--text-secondary);">${escHtml(statusLabel(m.decision_status))} · ${escHtml(t('memoryReuse.confidenceLabel'))}: ${escHtml(confidenceLabel(m.confidence))}</div>
+          <div style="margin-top:2px;font-size:12px;color:var(--text-muted);">${escHtml(t('memoryReuse.contextLabel'))}: ${escHtml(ctxTitle)}</div>
+          <div style="margin-top:10px;font-size:13px;line-height:1.5;color:var(--text-secondary);">
+            <strong>${escHtml(t('memoryReuse.decisionLabel'))}</strong><br>${escHtml(String(m.decision_summary || ''))}
+          </div>
+          <div style="margin-top:10px;font-size:12px;color:var(--text-secondary);">
+            <strong>${escHtml(t('memoryReuse.risksLabel'))}</strong>
+            ${unresolved.length
+              ? `<ul style="margin:6px 0 0 18px;padding:0;">${unresolved.slice(0, 2).map((x) => `<li>${escHtml(String(x))}</li>`).join('')}</ul>`
+              : `<div style="margin-top:6px;color:var(--text-muted);">—</div>`
+            }
+          </div>
+          ${tags.length ? `<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">${tags.map((tag) => `<span class="badge badge-muted">#${escHtml(tag)}</span>`).join('')}</div>` : ''}
+          ${superseded ? `<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">⚠ ${escHtml(t('memoryReuse.supersededHint'))}</div>` : ''}
+          ${blockedInfo ? `<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">⚠ ${escHtml(t('memoryReuse.blocked'))}: <code>${escHtml(String(blockedInfo.reason || ''))}</code></div>` : ''}
+          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-secondary btn-sm" type="button" data-action="preview-memory-for-new-session" data-memory-id="${escHtml(id)}">
+              ${escHtml(t('memoryReuse.previewButton'))}
+            </button>
+            <button class="btn ${selectedNow ? 'btn-secondary' : 'btn-primary'} btn-sm" type="button" ${disableReuse ? 'disabled' : ''} data-action="toggle-select-memory-for-new-session" data-memory-id="${escHtml(id)}">
+              ${selectedNow ? escHtml(t('memoryReuse.removeReuseButton')) : escHtml(t('memoryReuse.reuseButton'))}
+            </button>
+          </div>
+          ${showPreview ? `
+            <div style="margin-top:12px;padding:12px;border:1px dashed var(--border);border-radius:8px;background:var(--bg-secondary);">
+              <div style="font-weight:700;font-size:12px;color:var(--text-primary);margin-bottom:8px;">${escHtml(t('memoryReuse.previewTitle'))}</div>
+              <div style="font-size:12px;color:var(--text-secondary);line-height:1.5;">
+                <div><strong>${escHtml(t('memoryReuse.injectedLabel'))}</strong></div>
+                <ul style="margin:6px 0 10px 18px;padding:0;">
+                  <li>${escHtml(t('memoryReuse.injected.decision'))}</li>
+                  <li>${escHtml(t('memoryReuse.injected.risks'))}</li>
+                  <li>${escHtml(t('memoryReuse.injected.objections'))}</li>
+                  <li>${escHtml(t('memoryReuse.injected.nextSteps'))}</li>
+                </ul>
+                <div><strong>${escHtml(t('memoryReuse.notInjectedLabel'))}</strong></div>
+                <ul style="margin:6px 0 0 18px;padding:0;">
+                  <li>${escHtml(t('memoryReuse.notInjected.history'))}</li>
+                  <li>${escHtml(t('memoryReuse.notInjected.runtime'))}</li>
+                  <li>${escHtml(t('memoryReuse.notInjected.debates'))}</li>
+                  <li>${escHtml(t('memoryReuse.notInjected.reasoning'))}</li>
+                </ul>
+                ${assumptions.length ? `<div style="margin-top:8px;"><strong>${escHtml(t('memoryReuse.objectionsDetected'))}</strong>: ${escHtml(assumptions.slice(0, 2).join(' | '))}</div>` : ''}
+                ${nextSteps.length ? `<div style="margin-top:6px;"><strong>${escHtml(t('memoryReuse.nextStepsDetected'))}</strong>: ${escHtml(nextSteps.slice(0, 2).join(' | '))}</div>` : ''}
+              </div>
+            </div>
+          ` : ''}
+        </article>
       `;
     }).join('');
+
+  const expertFilters = mp.filters || {};
+  const filterRow = (key, label, placeholder = '') => `
+    <div class="form-group" style="margin:0;">
+      <label style="font-size:12px;">${escHtml(label)}</label>
+      <input class="input" type="text" value="${escHtml(expertFilters[key] || '')}" placeholder="${escHtml(placeholder)}"
+        data-action="set-memory-filter" data-filter-key="${escHtml(key)}" style="padding:6px 8px;font-size:12px;">
+    </div>`;
 
   const previewJson = preview ? escHtml(JSON.stringify({ allowed, blocked }, null, 2)) : '';
 
   return `
-    <details class="ns-collapsible" style="max-width:1100px;width:100%;margin-top:14px;">
+    <details class="ns-collapsible" open style="max-width:1100px;width:100%;margin-top:14px;">
       <summary class="ns-collapsible-summary">
-        <span>＋ ${escHtml(t('memoryReuse.title'))}</span>
-        <span class="ns-collapsible-hint">${escHtml(t('memoryReuse.subtitle'))}</span>
+        <span>${escHtml(t('memoryReuse.titleHuman'))}</span>
+        <span class="ns-collapsible-hint">${escHtml(t('memoryReuse.subtitleHuman'))}</span>
       </summary>
       <div class="ns-collapsible-body">
         <div class="card" style="max-width:1100px;width:100%;">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-            <div style="font-weight:600;font-size:14px;color:var(--text-primary);">🗂️ ${escHtml(t('memoryReuse.title'))}</div>
-            <button class="btn btn-secondary btn-sm" type="button" data-action="toggle-memory-picker">
-              ${mp.open ? escHtml(t('memoryReuse.hide')) : escHtml(t('memoryReuse.browse'))}
-            </button>
+          <div style="font-weight:700;font-size:16px;color:var(--text-primary);">${escHtml(t('memoryReuse.titleHuman'))}</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">${escHtml(t('memoryReuse.subtitleHuman'))}</div>
+          <div class="form-group" style="margin-top:12px;">
+            <input class="input" type="text" value="${escHtml(String(mp.query || ''))}" placeholder="${escHtml(t('memoryReuse.queryPlaceholder'))}" data-action="set-memory-query">
           </div>
-          ${selected.length ? `
-            <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-              <span class="badge badge-info">${escHtml(t('memoryReuse.selected'))}: ${selected.length}/5</span>
-              <button class="btn btn-secondary btn-sm" type="button" data-action="clear-selected-memories-new-session">${escHtml(t('memoryReuse.clear'))}</button>
-            </div>
-          ` : ''}
+          <div style="font-size:12px;color:var(--text-muted);line-height:1.5;margin-top:2px;">
+            ${escHtml(t('memoryReuse.examplesLabel'))}: ${escHtml(t('memoryReuse.examples'))}
+          </div>
+          <div style="margin-top:12px;">
+            <div style="font-size:12px;font-weight:700;color:var(--text-secondary);margin-bottom:6px;">${escHtml(t('memoryReuse.scopeLabel'))}</div>
+            <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--text-secondary);margin-bottom:6px;">
+              <input type="radio" name="memory-scope" value="current" ${mp.scope === 'current' ? 'checked' : ''} data-action="set-memory-scope" style="margin-top:2px;accent-color:var(--accent);">
+              <span>${escHtml(t('memoryReuse.scope.current'))}${activeContextTitle ? ` — ${escHtml(activeContextTitle)}` : ''}</span>
+            </label>
+            <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--text-secondary);margin-bottom:6px;">
+              <input type="radio" name="memory-scope" value="all" ${mp.scope === 'all' ? 'checked' : ''} data-action="set-memory-scope" style="margin-top:2px;accent-color:var(--accent);">
+              <span>${escHtml(t('memoryReuse.scope.all'))}</span>
+            </label>
+            <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--text-secondary);">
+              <input type="radio" name="memory-scope" value="all_with_archives" ${mp.scope === 'all_with_archives' ? 'checked' : ''} data-action="set-memory-scope" style="margin-top:2px;accent-color:var(--accent);">
+              <span>${escHtml(t('memoryReuse.scope.archives'))}</span>
+            </label>
+            ${scopeWarning}
+          </div>
+          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <button class="btn btn-secondary btn-sm" type="button" data-action="search-memory-picker" ${mp.loading ? 'disabled' : ''}>
+              ${mp.loading ? '<span class="spinner"></span>' : '↺'} ${escHtml(t('memoryReuse.searchButton'))}
+            </button>
+            ${mp.error ? `<span style="font-size:12px;color:var(--danger);">⚠️ ${escHtml(mp.error)}</span>` : ''}
+            ${selected.length ? `<span class="badge badge-info">${escHtml(t('memoryReuse.selected'))}: ${selected.length}/5</span>` : ''}
+            ${selected.length ? `<button class="btn btn-secondary btn-sm" type="button" data-action="clear-selected-memories-new-session">${escHtml(t('memoryReuse.clear'))}</button>` : ''}
+          </div>
           ${warning}
           ${staleConfirmCta}
-          ${expertOverrideToggle}
-          ${mp.open ? `
-            <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
-              <div data-ui="expert-only" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:10px;">
-                ${filterRow('playbook_id', t('memoryReuse.filter.playbook'), 'founder-sprint')}
-                ${filterRow('decision_status', t('memoryReuse.filter.status'), 'proceed')}
-                ${filterRow('confidence', t('memoryReuse.filter.confidence'), 'moderate')}
-                ${filterRow('from', t('memoryReuse.filter.from'), '2026-01-01')}
-                ${filterRow('to', t('memoryReuse.filter.to'), '2026-12-31')}
-                ${filterRow('link_type', t('memoryReuse.filter.linkType'), 'pivot')}
-                ${filterRow('q', t('memoryReuse.filter.search'), t('memoryReuse.filter.searchHint'))}
+          <div style="margin-top:14px;">
+            ${listHtml}
+          </div>
+
+          ${isExpert ? `
+            <details data-ui="expert-only" class="ns-collapsible" style="margin-top:14px;">
+              <summary class="ns-collapsible-summary">
+                <span>${escHtml(t('memoryReuse.expertPanelTitle'))}</span>
+                <span class="ns-collapsible-hint">${escHtml(t('memoryReuse.expertPanelSubtitle'))}</span>
+              </summary>
+              <div class="ns-collapsible-body">
+                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+                  <label style="display:flex;gap:8px;align-items:center;cursor:pointer;font-size:12px;color:var(--text-secondary);">
+                    <input type="checkbox" ${mp.expertOverride ? 'checked' : ''} data-action="toggle-expert-memory-override" style="accent-color:var(--accent);">
+                    ${escHtml(t('memoryReuse.expertOverride'))}
+                  </label>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:10px;">
+                  ${filterRow('playbook_id', t('memoryReuse.filter.playbook'), 'founder-sprint')}
+                  ${filterRow('decision_status', t('memoryReuse.filter.status'), 'proceed')}
+                  ${filterRow('confidence', t('memoryReuse.filter.confidence'), 'moderate')}
+                  ${filterRow('from', t('memoryReuse.filter.from'), '2026-01-01')}
+                  ${filterRow('to', t('memoryReuse.filter.to'), '2026-12-31')}
+                  ${filterRow('link_type', t('memoryReuse.filter.linkType'), 'pivot')}
+                  ${filterRow('q', t('memoryReuse.filter.search'), t('memoryReuse.filter.searchHint'))}
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+                  <button class="btn btn-secondary btn-sm" type="button" data-action="load-memory-picker" ${mp.loading ? 'disabled' : ''}>
+                    ${mp.loading ? '<span class="spinner"></span>' : '↺'} ${escHtml(t('memoryReuse.search'))}
+                  </button>
+                </div>
+                <details style="margin-top:12px;">
+                  <summary style="cursor:pointer;color:var(--text-muted);">${escHtml(t('memoryReuse.previewInjected'))}</summary>
+                  <pre style="margin:10px 0 0;white-space:pre-wrap;font-size:11px;color:var(--text-secondary);">${previewJson}</pre>
+                </details>
               </div>
-              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
-                <button class="btn btn-secondary btn-sm" type="button" data-action="load-memory-picker" ${mp.loading ? 'disabled' : ''}>
-                  ${mp.loading ? '<span class="spinner"></span>' : '↺'} ${escHtml(t('memoryReuse.search'))}
-                </button>
-                ${mp.error ? `<span style="font-size:12px;color:var(--danger);">⚠️ ${escHtml(mp.error)}</span>` : ''}
-              </div>
-              ${listHtml}
-              <details data-ui="expert-only" style="margin-top:12px;">
-                <summary style="cursor:pointer;color:var(--text-muted);">${escHtml(t('memoryReuse.previewInjected'))}</summary>
-                <pre style="margin:10px 0 0;white-space:pre-wrap;font-size:11px;color:var(--text-secondary);">${previewJson}</pre>
-              </details>
-            </div>
+            </details>
           ` : ''}
         </div>
       </div>
@@ -681,6 +904,8 @@ function renderNewSession() {
                 <button type="button" class="language-option ${ns.language === 'fr' ? 'active' : ''}" data-action="select-language" data-lang="fr">Français</button>
               </div>
             </div>
+
+            ${renderStrategicWorkspaceGuard(ns, state, escHtml, t)}
 
             <div class="simple-submit-row">
               <button class="btn btn-primary btn-lg" data-action="launch-session" ${state.isLoading ? 'disabled' : ''}>
@@ -872,6 +1097,7 @@ function renderNewSession() {
       ` : ''}
 
       </div>
+      ${renderStrategicWorkspaceGuard(ns, state, escHtml, t)}
       <button class="btn btn-primary" data-action="launch-session" ${state.isLoading ? 'disabled' : ''}>
         ${state.isLoading ? '<span class="spinner"></span>' : ''}
         ${continueLabel}

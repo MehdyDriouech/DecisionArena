@@ -80,20 +80,29 @@ class StressTestController {
         $daThreshold    = (float)($session['devil_advocate_threshold'] ?? 0.65);
         $agentProviders = (new \Infrastructure\Persistence\SessionAgentProvidersRepository())->findBySession($sessionId);
 
-        $result = $this->runner->run(
-            $sessionId,
-            $objective,
-            $selectedAgents,
-            $rounds,
-            $language,
-            $forceDisagree,
-            $contextDoc,
-            $daEnabled,
-            $daThreshold,
-            $agentProviders,
-            $decisionThreshold,
-            $session['decision_dynamics_preset'] ?? null
-        );
+        $strategicCtx = isset($session['strategic_context_id']) && (string)$session['strategic_context_id'] !== ''
+            ? (string)$session['strategic_context_id'] : null;
+        $this->sessionRepo->update($sessionId, ['status' => 'running']);
+        try {
+            $result = $this->runner->run(
+                $sessionId,
+                $objective,
+                $selectedAgents,
+                $rounds,
+                $language,
+                $forceDisagree,
+                $contextDoc,
+                $daEnabled,
+                $daThreshold,
+                $agentProviders,
+                $decisionThreshold,
+                $session['decision_dynamics_preset'] ?? null,
+                $strategicCtx
+            );
+        } catch (\Throwable $e) {
+            $this->sessionRepo->update($sessionId, ['status' => 'draft']);
+            return Response::error('Stress test run failed: ' . $e->getMessage(), 500);
+        }
 
         $memoryReuse = [
             'reuse_mode' => $injectInfo ? 'manual' : null,

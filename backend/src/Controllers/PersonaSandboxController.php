@@ -7,16 +7,19 @@ use Domain\Orchestration\PromptBuilder;
 use Domain\Providers\ProviderRouter;
 use Http\Request;
 use Http\Response;
+use Infrastructure\Logging\Logger;
 
 class PersonaSandboxController {
     private AgentAssembler $assembler;
     private PromptBuilder $promptBuilder;
     private ProviderRouter $providerRouter;
+    private Logger $logger;
 
     public function __construct() {
         $this->assembler      = new AgentAssembler();
         $this->promptBuilder  = new PromptBuilder();
         $this->providerRouter = new ProviderRouter();
+        $this->logger         = new Logger();
     }
 
     public function test(Request $req): array {
@@ -93,8 +96,22 @@ class PersonaSandboxController {
                 'Persona Sandbox',
                 [],
                 $prompt,
-                $language
+                $language,
+                null,
+                null,
+                null
             );
+            $this->logger->logPromptBuild('prompt_built_chat', [
+                'agent_id' => $agent->id,
+                'metadata' => [
+                    'mode' => 'chat',
+                    'message_count' => count($messages),
+                    'character_count' => $this->countMessageChars($messages),
+                    'context_doc_injected' => false,
+                    'session_id' => null,
+                    'source' => 'persona_sandbox',
+                ],
+            ]);
 
             $systemPrompt = (string)($messages[0]['content'] ?? '');
             $userPrompt = (string)($messages[1]['content'] ?? $prompt);

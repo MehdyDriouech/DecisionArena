@@ -87,13 +87,21 @@ class DecisionRoomController {
             'auto_retry_on_weak_debate' => (bool)($data['auto_retry_on_weak_debate'] ?? $session['auto_retry_on_weak_debate'] ?? false),
             'decision_dynamics_preset'   => $session['decision_dynamics_preset'] ?? 'balanced',
             'session_variant'             => $session['session_variant'] ?? null,
+            'strategic_context_id'        => isset($session['strategic_context_id']) && (string)$session['strategic_context_id'] !== ''
+                ? (string)$session['strategic_context_id'] : null,
         ];
 
-        $result = $this->runner->run(
-            $sessionId, $objective, $selectedAgents, $rounds, $language,
-            $forceDisagreement, $contextDoc,
-            $daEnabled, $daThreshold, $agentProviders, $decisionThreshold, $sessionOptions
-        );
+        $this->sessionRepo->update($sessionId, ['status' => 'running']);
+        try {
+            $result = $this->runner->run(
+                $sessionId, $objective, $selectedAgents, $rounds, $language,
+                $forceDisagreement, $contextDoc,
+                $daEnabled, $daThreshold, $agentProviders, $decisionThreshold, $sessionOptions
+            );
+        } catch (\Throwable $e) {
+            $this->sessionRepo->update($sessionId, ['status' => 'draft']);
+            return Response::error('Decision Room run failed: ' . $e->getMessage(), 500);
+        }
 
         // Traceability: record what was injected (manual reuse only)
         $memoryReuse = [

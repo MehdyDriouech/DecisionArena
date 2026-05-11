@@ -90,18 +90,27 @@ class JuryController {
                 ? (string)$data['minority_reporter_agent_id'] : null,
         ], fn($v) => $v !== null);
 
-        $result = $this->runner->run(
-            $sessionId,
-            $objective,
-            $selectedAgents,
-            $rounds,
-            $forceDisagreement,
-            $threshold,
-            $language,
-            $contextDoc,
-            $adversarialCfg,
-            $session['decision_dynamics_preset'] ?? null
-        );
+        $strategicCtx = isset($session['strategic_context_id']) && (string)$session['strategic_context_id'] !== ''
+            ? (string)$session['strategic_context_id'] : null;
+        $this->sessionRepo->update($sessionId, ['status' => 'running']);
+        try {
+            $result = $this->runner->run(
+                $sessionId,
+                $objective,
+                $selectedAgents,
+                $rounds,
+                $forceDisagreement,
+                $threshold,
+                $language,
+                $contextDoc,
+                $adversarialCfg,
+                $session['decision_dynamics_preset'] ?? null,
+                $strategicCtx
+            );
+        } catch (\Throwable $e) {
+            $this->sessionRepo->update($sessionId, ['status' => 'draft']);
+            return Response::error('Jury run failed: ' . $e->getMessage(), 500);
+        }
 
         $memoryReuse = [
             'reuse_mode' => $injectInfo ? 'manual' : null,

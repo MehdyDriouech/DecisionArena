@@ -15,6 +15,7 @@ use Domain\Providers\ProviderRouter;
 use Domain\Verdict\VerdictParser;
 use Domain\Vote\VoteAggregator;
 use Domain\Vote\VoteParser;
+use Infrastructure\Logging\Logger;
 use Infrastructure\Persistence\DebateRepository;
 use Infrastructure\Persistence\MessageRepository;
 use Infrastructure\Persistence\VerdictRepository;
@@ -41,6 +42,7 @@ class DecisionRoomRunner {
     private \Domain\DecisionReliability\DecisionQualityScoreService $qualityScoreService;
     private DecisionSummaryService $summaryService;
     private PlaybookRuntime $playbookRuntime;
+    private Logger $logger;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -63,6 +65,7 @@ class DecisionRoomRunner {
         $this->qualityScoreService = new \Domain\DecisionReliability\DecisionQualityScoreService();
         $this->summaryService = new DecisionSummaryService();
         $this->playbookRuntime = new PlaybookRuntime();
+        $this->logger = new Logger();
         // Ensure run_status column exists for auto-retry progress signaling
         try {
             $pdo = \Infrastructure\Persistence\Database::getConnection();
@@ -100,6 +103,8 @@ class DecisionRoomRunner {
         $rounds              = min(max($rounds, 1), RoundPolicy::MAX_ROUNDS);
         $decisionThreshold   = ReliabilityConfig::normalizeThreshold($decisionThreshold);
         $dynamicsPreset      = \Domain\Agents\DecisionDynamicsPreset::normalizeId($sessionOptions['decision_dynamics_preset'] ?? null);
+        $socialStrategicCtx  = isset($sessionOptions['strategic_context_id']) && (string)$sessionOptions['strategic_context_id'] !== ''
+            ? (string)$sessionOptions['strategic_context_id'] : null;
         $playbookId          = $this->playbookRuntime->resolvePlaybookId('decision-room', $sessionOptions, $objective);
         $allMessages         = [];
         $previousRoundMessages = [];
@@ -149,10 +154,23 @@ class DecisionRoomRunner {
                 $maj            = SocialDynamicsService::summarizeMajority($votesSnap, $state['positions'] ?? []);
                 $socialDynamicsBlock = null;
                 if ($round > 1 && $rounds > 1 && $agentId !== 'synthesizer') {
-                    $socialDynamicsBlock = $this->socialPrompt->buildUserBlock($sessionId, $agentId, $maj);
+                    $socialDynamicsBlock = $this->socialPrompt->buildUserBlock(
+                        $sessionId,
+                        $agentId,
+                        $maj,
+                        $socialStrategicCtx,
+                        false
+                    );
                 }
 
                 try {
+                    PromptInjectionTraceCollector::begin([
+                        'session_id' => $sessionId,
+                        'strategic_context_id' => $socialStrategicCtx,
+                        'round' => $round,
+                        'agent_id' => $agentId,
+                        'mode' => 'decision-room',
+                    ]);
                     $messages = $this->promptBuilder->buildDecisionRoomMessages(
                         $agent,
                         $objective,
@@ -168,8 +186,24 @@ class DecisionRoomRunner {
                         $forceStrongNext && $agentId !== 'synthesizer',
                         $sessionId,
                         null,
-                        $sessionOptions['session_variant'] ?? ''
+                        $sessionOptions['session_variant'] ?? '',
+                        $socialStrategicCtx
                     );
+                    $this->logger->logPromptBuild('prompt_built_decision_room', [
+                        'agent_id' => $agent->id,
+                        'metadata' => [
+                            'mode' => 'decision-room',
+                            'round' => $round,
+                            'total_rounds' => $rounds,
+                            'message_count' => count($messages),
+                            'character_count' => $this->countMessageChars($messages),
+                            'context_doc_injected' => !empty($contextDoc['content']),
+                            'memory_injected' => !empty(($state['argument_memory_summary'] ?? null)),
+                            'force_disagreement' => (bool)$forceDisagreement,
+                            'playbook_id' => $playbookId,
+                            'session_id' => $sessionId,
+                        ],
+                    ]);
 
                     // Inject synthesizer constraints on the final round
                     if ($agentId === 'synthesizer' && $round === $rounds) {
@@ -218,7 +252,44 @@ class DecisionRoomRunner {
                             }
                             foreach ($messages as &$msg) {
                                 if ($msg['role'] === 'user') {
-                                    $msg['content'] .= $constraintBlock . $formatInstruction;
+                                    $bConstraints = CognitiveBudgetEngine::applySegment('synthesizer_constraints', $constraintBlock);
+                                    $bFormat = CognitiveBudgetEngine::applySegment('synthesizer_output_format', $formatInstruction);
+                                    $msg['content'] .= $bConstraints['content'] . $bFormat['content'];
+                                    if (PromptInjectionTraceCollector::active()) {
+                                        $beC = [
+                                            'computed_by' => 'DecisionRoomRunner::synthesizer_injection',
+                                            'refused_chars' => $bConstraints['refused_chars'],
+                                            'pruning_decision' => $bConstraints['pruning_decision'],
+                                            'fallback_decision' => $bConstraints['fallback_policy'],
+                                            'score_breakdown' => $bConstraints['score_breakdown'],
+                                            'budget_layer' => $bConstraints['budget_layer'],
+                                        ];
+                                        $beF = [
+                                            'computed_by' => 'DecisionRoomRunner::synthesizer_injection',
+                                            'refused_chars' => $bFormat['refused_chars'],
+                                            'pruning_decision' => $bFormat['pruning_decision'],
+                                            'fallback_decision' => $bFormat['fallback_policy'],
+                                            'score_breakdown' => $bFormat['score_breakdown'],
+                                            'budget_layer' => $bFormat['budget_layer'],
+                                            'playbook_id' => $playbookId,
+                                        ];
+                                        PromptInjectionTraceCollector::addStep(
+                                            'synthesizer_constraints',
+                                            'reliability_envelope',
+                                            mb_strlen($bConstraints['content'], 'UTF-8'),
+                                            'pre_model_aggregate_votes_guardrails_evidence',
+                                            null,
+                                            $beC
+                                        );
+                                        PromptInjectionTraceCollector::addStep(
+                                            'synthesizer_output_format',
+                                            'instruction',
+                                            mb_strlen($bFormat['content'], 'UTF-8'),
+                                            'playbook_output_schema_and_optional_premortem_addendum',
+                                            null,
+                                            $beF
+                                        );
+                                    }
                                     break;
                                 }
                             }
@@ -227,6 +298,11 @@ class DecisionRoomRunner {
                             error_log('[DecisionRoomRunner] Synthesizer constraint injection failed: ' . $e->getMessage());
                         }
                     }
+
+                    $promptTrace = PromptInjectionTraceCollector::finish();
+                    $promptMetaJson = $promptTrace !== null
+                        ? json_encode(['prompt_injection_trace' => $promptTrace], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE)
+                        : null;
 
                     $routed  = $this->providerRouter->chat($messages, $agent, null, null, $agentProviders[$agentId] ?? null);
                     $content = $routed['content'];
@@ -247,6 +323,7 @@ class DecisionRoomRunner {
                         'phase'                    => $agentId === 'synthesizer' ? 'synthesis' : 'analysis',
                         'mode_context'             => 'decision-room',
                         'message_type'             => $agentId === 'synthesizer' ? 'synthesis' : 'analysis',
+                        'meta_json'                => $promptMetaJson,
                         'content'                  => $content,
                         'created_at'               => date('c'),
                     ]);
@@ -270,7 +347,8 @@ class DecisionRoomRunner {
                         $targetAgentId,
                         array_values(array_filter($selectedAgents, fn($id) => $id !== 'devil_advocate')),
                         $this->voteRepo->findVotesBySession($sessionId),
-                        $state['positions'] ?? []
+                        $state['positions'] ?? [],
+                        $socialStrategicCtx
                     );
                     if ($agentId !== 'synthesizer' && $round === $rounds) {
                         $parsedVote = $this->voteParser->parse($content);
@@ -307,6 +385,7 @@ class DecisionRoomRunner {
                     }
 
                 } catch (\Throwable $e) {
+                    PromptInjectionTraceCollector::cancel();
                     $msg = $this->messageRepo->create([
                         'id'                       => $this->uuid(),
                         'session_id'               => $sessionId,
@@ -377,6 +456,21 @@ class DecisionRoomRunner {
                         ['role' => 'user', 'content' => $daUser],
                     ];
                     try {
+                        $governedDa = CognitiveRuntimeGovernance::tracePromptPayload(
+                            $daMessages,
+                            [
+                                'session_id' => $sessionId,
+                                'strategic_context_id' => $socialStrategicCtx,
+                                'round' => $round,
+                                'agent_id' => 'devil_advocate',
+                                'mode' => 'decision-room',
+                            ],
+                            'chat_user_payload',
+                            'orchestration',
+                            'decision_room_devil_advocate_payload'
+                        );
+                        $daMessages = $governedDa['messages'];
+                        $daMetaJson = $governedDa['meta_json'];
                         $daRouted  = $this->providerRouter->chat($daMessages, null, null, null);
                         $daContent = $daRouted['content'];
                         $daMsg     = $this->messageRepo->create([
@@ -395,6 +489,7 @@ class DecisionRoomRunner {
                             'phase'                    => 'devil-advocate',
                             'mode_context'             => 'decision-room',
                             'message_type'             => 'devil_advocate',
+                            'meta_json'                => $daMetaJson,
                             'content'                  => $daContent,
                             'created_at'               => date('c'),
                         ]);
@@ -478,6 +573,7 @@ class DecisionRoomRunner {
         }
 
         $autoRetryResult = ['triggered' => false];
+        $retryRuntimeTraces = [];
 
         if (($guardrails['should_auto_retry'] ?? false) === true) {
             $initialScore = $debateQualityProxy;
@@ -489,21 +585,43 @@ class DecisionRoomRunner {
 
             $retryInstruction = $this->promptBuilder->buildAutoRetryAdversarialPrompt($initialScore);
 
+            $existingMessages = $this->messageRepo->findBySession($sessionId);
+            $historyText = implode("\n\n", array_map(
+                fn($m) => "[{$m['agent_id']}]: {$m['content']}",
+                $existingMessages
+            ));
+            $userMsg = $retryInstruction . "\n\nPrevious debate:\n\n" . $historyText;
+
             foreach ($selectedAgents as $agentId) {
                 if ($agentId === 'synthesizer') continue;
                 $agent = $this->assembler->assemble($agentId, null, null, $dynamicsPreset);
                 if (!$agent) continue;
-
-                $existingMessages = $this->messageRepo->findBySession($sessionId);
-                $historyText = implode("\n\n", array_map(
-                    fn($m) => "[{$m['agent_id']}]: {$m['content']}",
-                    $existingMessages
-                ));
-
-                $userMsg  = $retryInstruction . "\n\nPrevious debate:\n\n" . $historyText;
                 try {
+                    $retryMessages = [
+                        ['role' => 'system', 'content' => $agent->systemPrompt ?? ''],
+                        ['role' => 'user', 'content' => $userMsg],
+                    ];
+                    $governedRetry = CognitiveRuntimeGovernance::tracePromptPayload(
+                        $retryMessages,
+                        [
+                            'session_id' => $sessionId,
+                            'strategic_context_id' => $socialStrategicCtx,
+                            'round' => $rounds + 1,
+                            'agent_id' => $agentId,
+                            'mode' => 'decision-room',
+                        ],
+                        'chat_user_payload',
+                        'orchestration',
+                        'decision_room_retry_round_payload',
+                        ['phase' => 'retry-round']
+                    );
+                    $retryMessages = $governedRetry['messages'];
+                    $retryMetaJson = $governedRetry['meta_json'];
+                    if (is_array($governedRetry['trace'] ?? null)) {
+                        $retryRuntimeTraces[] = $governedRetry['trace'];
+                    }
                     $routed = $this->providerRouter->chat(
-                        [['role' => 'system', 'content' => $agent->systemPrompt ?? ''], ['role' => 'user', 'content' => $userMsg]],
+                        $retryMessages,
                         $agent, null, null, $agentProviders[$agentId] ?? null
                     );
                     $this->messageRepo->create([
@@ -515,6 +633,7 @@ class DecisionRoomRunner {
                         'phase'        => 'retry-round',
                         'mode_context' => 'decision-room',
                         'message_type' => 'retry-round',
+                        'meta_json'    => $retryMetaJson,
                         'content'      => $routed['content'] ?? '',
                         'created_at'   => date('c'),
                     ]);
@@ -632,7 +751,12 @@ class DecisionRoomRunner {
             $premortemSummary = PremortemSummaryExtractor::fromSynthesizerOutput($synthesizerOutput);
         }
 
-        return StructuredRunResult::augment([
+        $runtimeTraces = array_merge(
+            CognitiveRuntimeGovernance::collectTracesFromRounds($allMessages),
+            $retryRuntimeTraces
+        );
+
+        return StructuredRunResult::augment(array_merge([
             'rounds' => $allMessages,
             'arguments' => $state['arguments'],
             'positions' => $state['positions'],
@@ -662,7 +786,7 @@ class DecisionRoomRunner {
             'decision_outcome' => $decisionOutcome,
             'playbook_runtime' => $playbookDiagnostics,
             'premortem_summary' => $premortemSummary,
-        ]);
+        ], CognitiveRuntimeGovernance::summarizeTraces($runtimeTraces, 'decision-room')));
     }
 
     /**
@@ -706,6 +830,15 @@ class DecisionRoomRunner {
         $nonSynth = array_values(array_filter($allAgentIds, fn($id) => $id !== 'synthesizer'));
         $agentIdx = (int)(array_search($agentId, $nonSynth) ?: 0);
         return $others[($agentIdx + $round) % count($others)];
+    }
+
+    private function countMessageChars(array $messages): int
+    {
+        $chars = 0;
+        foreach ($messages as $message) {
+            $chars += mb_strlen((string)($message['content'] ?? ''), 'UTF-8');
+        }
+        return $chars;
     }
 
     private function uuid(): string {

@@ -69,16 +69,25 @@ class QuickDecisionController {
         $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt($rawDoc);
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($session['decision_threshold'] ?? null);
 
-        $result = $this->runner->run(
-            $sessionId,
-            $objective,
-            $selectedAgents,
-            $language,
-            $forceDisagreement,
-            $contextDoc,
-            $decisionThreshold,
-            $session['decision_dynamics_preset'] ?? null
-        );
+        $strategicCtx = isset($session['strategic_context_id']) && (string)$session['strategic_context_id'] !== ''
+            ? (string)$session['strategic_context_id'] : null;
+        $this->sessionRepo->update($sessionId, ['status' => 'running']);
+        try {
+            $result = $this->runner->run(
+                $sessionId,
+                $objective,
+                $selectedAgents,
+                $language,
+                $forceDisagreement,
+                $contextDoc,
+                $decisionThreshold,
+                $session['decision_dynamics_preset'] ?? null,
+                $strategicCtx
+            );
+        } catch (\Throwable $e) {
+            $this->sessionRepo->update($sessionId, ['status' => 'draft']);
+            return Response::error('Quick decision run failed: ' . $e->getMessage(), 500);
+        }
 
         $memoryReuse = [
             'reuse_mode' => $injectInfo ? 'manual' : null,

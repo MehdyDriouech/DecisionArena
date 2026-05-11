@@ -13,6 +13,7 @@ use Domain\Providers\ProviderRouter;
 use Domain\Verdict\VerdictParser;
 use Domain\Vote\VoteAggregator;
 use Domain\Vote\VoteParser;
+use Infrastructure\Logging\Logger;
 use Infrastructure\Persistence\MessageRepository;
 use Infrastructure\Persistence\VerdictRepository;
 use Infrastructure\Persistence\VoteRepository;
@@ -34,6 +35,7 @@ class QuickDecisionRunner {
     private DecisionQualityScoreService $qualityScoreService;
     private DecisionSummaryService $summaryService;
     private PlaybookRuntime $playbookRuntime;
+    private Logger $logger;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -52,6 +54,7 @@ class QuickDecisionRunner {
         $this->qualityScoreService = new DecisionQualityScoreService();
         $this->summaryService      = new DecisionSummaryService();
         $this->playbookRuntime     = new PlaybookRuntime();
+        $this->logger              = new Logger();
     }
 
     public function run(
@@ -62,10 +65,12 @@ class QuickDecisionRunner {
         bool   $forceDisagreement = false,
         ?array $contextDoc        = null,
         float  $decisionThreshold = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD,
-        ?string $decisionDynamicsPreset = null
+        ?string $decisionDynamicsPreset = null,
+        ?string $strategicContextId = null
     ): array {
         $warning = null;
         $guardrails = [];
+        $runtimeTraces = [];
         $playbookId = $this->playbookRuntime->resolvePlaybookId('quick-decision', [], $objective);
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($decisionThreshold);
         $dynamicsPreset = \Domain\Agents\DecisionDynamicsPreset::normalizeId($decisionDynamicsPreset);
@@ -92,13 +97,51 @@ class QuickDecisionRunner {
                 $maj         = SocialDynamicsService::summarizeMajority($votesSnap, []);
                 $socialBlock = null;
                 if (count($roundMessages) >= 1) {
-                    $socialBlock = $this->socialPrompt->buildUserBlock($sessionId, $agentId, $maj);
+                    $socialBlock = $this->socialPrompt->buildUserBlock(
+                        $sessionId,
+                        $agentId,
+                        $maj,
+                        $strategicContextId,
+                        false
+                    );
                 }
 
                 $messages = $this->promptBuilder->buildQuickDecisionMessages(
                     $agent, $objective, $roundMessages, $language, $forceDisagreement, $contextDoc, $socialBlock,
-                    $sessionId, null
+                    $sessionId, null, $strategicContextId
                 );
+                $governed = CognitiveRuntimeGovernance::tracePromptPayload(
+                    $messages,
+                    [
+                        'session_id' => $sessionId,
+                        'strategic_context_id' => $strategicContextId,
+                        'round' => 1,
+                        'agent_id' => $agentId,
+                        'mode' => 'quick-decision',
+                    ],
+                    'quick_decision_user_payload',
+                    'orchestration',
+                    'quick_decision_runtime_user_payload',
+                    ['synthesizer' => false]
+                );
+                $messages = $governed['messages'];
+                $promptMetaJson = $governed['meta_json'];
+                if (is_array($governed['trace'] ?? null)) {
+                    $runtimeTraces[] = $governed['trace'];
+                }
+                $this->logger->logPromptBuild('prompt_built_quick_decision', [
+                    'agent_id' => $agent->id,
+                    'metadata' => [
+                        'mode' => 'quick-decision',
+                        'synthesizer' => false,
+                        'message_count' => count($messages),
+                        'character_count' => $this->countMessageChars($messages),
+                        'context_doc_injected' => !empty($contextDoc['content']),
+                        'force_disagreement' => (bool)$forceDisagreement,
+                        'playbook_id' => $playbookId,
+                        'session_id' => $sessionId,
+                    ],
+                ]);
 
                 $routed  = $this->providerRouter->chat($messages, $agent);
                 $content = $routed['content'];
@@ -119,6 +162,7 @@ class QuickDecisionRunner {
                     'phase'                    => 'analysis',
                     'mode_context'             => 'quick-decision',
                     'message_type'             => 'analysis',
+                    'meta_json'                => $promptMetaJson,
                     'content'                  => $content,
                     'created_at'               => date('c'),
                 ]);
@@ -150,7 +194,8 @@ class QuickDecisionRunner {
                     null,
                     $nonSynth,
                     $this->voteRepo->findVotesBySession($sessionId),
-                    []
+                    [],
+                    $strategicContextId
                 );
 
             } catch (\Throwable $e) {
@@ -186,8 +231,40 @@ class QuickDecisionRunner {
             try {
                 $messages = $this->promptBuilder->buildQuickDecisionMessages(
                     $synthAgent, $objective, $roundMessages, $language, $forceDisagreement, $contextDoc, null,
-                    $sessionId, null
+                    $sessionId, null, $strategicContextId
                 );
+                $governed = CognitiveRuntimeGovernance::tracePromptPayload(
+                    $messages,
+                    [
+                        'session_id' => $sessionId,
+                        'strategic_context_id' => $strategicContextId,
+                        'round' => 2,
+                        'agent_id' => 'synthesizer',
+                        'mode' => 'quick-decision',
+                    ],
+                    'quick_decision_user_payload',
+                    'orchestration',
+                    'quick_decision_runtime_user_payload',
+                    ['synthesizer' => true]
+                );
+                $messages = $governed['messages'];
+                $promptMetaJson = $governed['meta_json'];
+                if (is_array($governed['trace'] ?? null)) {
+                    $runtimeTraces[] = $governed['trace'];
+                }
+                $this->logger->logPromptBuild('prompt_built_quick_decision', [
+                    'agent_id' => $synthAgent->id,
+                    'metadata' => [
+                        'mode' => 'quick-decision',
+                        'synthesizer' => true,
+                        'message_count' => count($messages),
+                        'character_count' => $this->countMessageChars($messages),
+                        'context_doc_injected' => !empty($contextDoc['content']),
+                        'force_disagreement' => (bool)$forceDisagreement,
+                        'playbook_id' => $playbookId,
+                        'session_id' => $sessionId,
+                    ],
+                ]);
                 $routed  = $this->providerRouter->chat($messages, $synthAgent);
                 $content = $routed['content'];
 
@@ -207,6 +284,7 @@ class QuickDecisionRunner {
                     'phase'                    => 'synthesis',
                     'mode_context'             => 'quick-decision',
                     'message_type'             => 'synthesis',
+                    'meta_json'                => $promptMetaJson,
                     'content'                  => $content,
                     'created_at'               => date('c'),
                 ]);
@@ -342,7 +420,7 @@ class QuickDecisionRunner {
             ])
         );
 
-        return [
+        return array_merge([
             'round'     => $roundMessages,
             'synthesis' => $synthesis,
             'verdict'   => $verdict,
@@ -366,7 +444,7 @@ class QuickDecisionRunner {
             'canonical_synthesis' => $canonicalSynthesis,
             'decision_outcome' => $decisionOutcome,
             'playbook_runtime' => $playbookDiagnostics,
-        ];
+        ], CognitiveRuntimeGovernance::summarizeTraces($runtimeTraces, 'quick-decision'));
     }
 
     private function uuid(): string {
@@ -378,5 +456,14 @@ class QuickDecisionRunner {
             mt_rand(0, 0x3fff) | 0x8000,
             mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
         );
+    }
+
+    private function countMessageChars(array $messages): int
+    {
+        $chars = 0;
+        foreach ($messages as $message) {
+            $chars += mb_strlen((string)($message['content'] ?? ''), 'UTF-8');
+        }
+        return $chars;
     }
 }

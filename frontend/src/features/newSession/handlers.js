@@ -114,10 +114,11 @@ function resetNewSessionState() {
     source_session_id: null,
     forkDraftSessionId: null,
     decisionDynamicsPreset: 'balanced',
+    confirmLegacyNoActiveStrategicContext: false,
+    pendingStrategicContextId: '',
     // Decision Memory reuse (manual selection only; no auto injection)
     selectedMemoryIds: [],
     memoryPicker: {
-      open: false,
       loading: false,
       error: null,
       filters: { playbook_id: '', decision_status: '', confidence: '', from: '', to: '', link_type: '', q: '' },
@@ -125,6 +126,10 @@ function resetNewSessionState() {
       compactPreview: null, // { allowed, blocked }
       allowStaleConfirmed: false,
       expertOverride: false,
+      query: '',
+      scope: 'current', // current | all | all_with_archives
+      searched: false,
+      previewMemoryId: '',
     },
   };
 }
@@ -242,6 +247,38 @@ function _debouncedContextCheck(text, state) {
 }
 
 function registerNewSessionHandlers() {
+  registerAction('activate-new-session-strategic-context', async () => {
+    const { state, render } = getCtx();
+    const ns = state.newSession || {};
+    const selectedFromState = String(ns.pendingStrategicContextId || '').trim();
+    const selectedFromDom = String(document.getElementById('ns-workspace-context-select')?.value || '').trim();
+    const contextId = selectedFromState || selectedFromDom;
+    if (!contextId) return;
+
+    try {
+      const res = await window.DecisionArena.services.StrategicContextService.activate(contextId);
+      const ac = res?.active_context ?? null;
+      state.activeStrategicContext = ac;
+      state.activeStrategicContextId = ac?.context_id ? String(ac.context_id) : null;
+      ns.pendingStrategicContextId = state.activeStrategicContextId || '';
+      ns.confirmLegacyNoActiveStrategicContext = false;
+
+      const items = Array.isArray(state.strategicContexts?.items) ? state.strategicContexts.items : [];
+      if (items.length) {
+        state.strategicContexts.items = items.map((ctx) => {
+          const cid = String(ctx?.context_id || '').trim();
+          const isActive = cid !== '' && cid === state.activeStrategicContextId;
+          return { ...ctx, is_workspace_active: isActive ? 1 : 0 };
+        });
+      }
+
+      state.toast = window.i18n?.t('contexts.activateToast') ?? 'Contexte activé.';
+    } catch (err) {
+      state.error = String(err?.message || err);
+    }
+    render();
+  });
+
   registerAction('toggle-starter-models', () => {
     const { state, render } = getCtx();
     state.newSession.starterModelsCollapsed = !state.newSession.starterModelsCollapsed;
@@ -251,10 +288,79 @@ function registerNewSessionHandlers() {
   /* ══════════════════════════════════════════════════════════════════════
      Decision Memory reuse (manual selection + compact preview)
   ═══════════════════════════════════════════════════════════════════════ */
-  registerAction('toggle-memory-picker', () => {
-    const { state, render } = getCtx();
+  const applyMemoryScopeFilter = (state, memories, scope) => {
+    const list = Array.isArray(memories) ? memories : [];
+    const strategicContexts = Array.isArray(state.strategicContexts?.items) ? state.strategicContexts.items : [];
+    const activeContextId = String(state.activeStrategicContextId || state.activeStrategicContext?.context_id || '').trim();
+    if (scope !== 'current') return list;
+    if (!activeContextId) return [];
+    const active = strategicContexts.find((ctx) => String(ctx?.context_id || '').trim() === activeContextId);
+    const linkedIds = new Set((Array.isArray(active?.linked_memory_ids) ? active.linked_memory_ids : []).map((x) => String(x)));
+    return list.filter((m) => linkedIds.has(String(m?.memory_id || '')));
+  };
+
+  const runBasicMemorySearch = async (state) => {
+    const ns = state.newSession || {};
+    const mp = ns.memoryPicker || (ns.memoryPicker = {});
+    const scope = String(mp.scope || 'current');
+    const queryInput = document.querySelector('input[data-action="set-memory-query"]');
+    const query = String(queryInput?.value ?? mp.query ?? '').trim();
+    mp.query = query;
+    mp.loading = true;
+    mp.error = null;
+    window.DecisionArena.render?.();
+    try {
+      if (scope === 'current') {
+        const activeContextId = String(state.activeStrategicContextId || state.activeStrategicContext?.context_id || '').trim();
+        if (!activeContextId) {
+          mp.memories = [];
+          mp.error = window.i18n?.t('newSession.strategicContext.blockedLaunch') || 'Activez un contexte stratégique avant de rechercher dans le contexte courant.';
+          mp.searched = true;
+          return;
+        }
+      }
+      const includeArchived = scope === 'all_with_archives' ? '1' : '';
+      const data = await window.DecisionArena.services.DecisionMemoryService.list(180, {
+        q: query,
+        include_archived: includeArchived,
+      });
+      const memories = Array.isArray(data?.memories) ? data.memories : [];
+      mp.memories = applyMemoryScopeFilter(state, memories, scope);
+      mp.searched = true;
+    } catch (err) {
+      mp.error = String(err?.message || err);
+      mp.memories = [];
+      mp.searched = true;
+    } finally {
+      mp.loading = false;
+      window.DecisionArena.render?.();
+    }
+  };
+
+  registerAction('set-memory-query', ({ element }) => {
+    const { state } = getCtx();
     const mp = state.newSession.memoryPicker || (state.newSession.memoryPicker = {});
-    mp.open = !mp.open;
+    mp.query = String(element?.value || '');
+  });
+
+  registerAction('set-memory-scope', async ({ element }) => {
+    const { state } = getCtx();
+    const mp = state.newSession.memoryPicker || (state.newSession.memoryPicker = {});
+    mp.scope = String(element?.value || 'current');
+    await runBasicMemorySearch(state);
+  });
+
+  registerAction('search-memory-picker', async () => {
+    const { state } = getCtx();
+    await runBasicMemorySearch(state);
+  });
+
+  registerAction('preview-memory-for-new-session', ({ element }) => {
+    const { state, render } = getCtx();
+    const id = String(element?.dataset?.memoryId || '').trim();
+    if (!id) return;
+    const mp = state.newSession.memoryPicker || (state.newSession.memoryPicker = {});
+    mp.previewMemoryId = String(mp.previewMemoryId || '') === id ? '' : id;
     render();
   });
 
@@ -278,6 +384,7 @@ function registerNewSessionHandlers() {
     try {
       const data = await window.DecisionArena.services.DecisionMemoryService.list(150, mp.filters || {});
       mp.memories = data.memories || [];
+      mp.searched = true;
     } catch (err) {
       mp.error = String(err.message || err);
     } finally {
@@ -313,6 +420,7 @@ function registerNewSessionHandlers() {
     state.newSession.selectedMemoryIds = [];
     try {
       state.newSession.memoryPicker.compactPreview = { allowed: [], blocked: [] };
+      state.newSession.memoryPicker.previewMemoryId = '';
     } catch (_) {}
     render();
   });
@@ -545,6 +653,15 @@ function registerNewSessionHandlers() {
       render(); return;
     }
 
+    const modesNeedingWorkspace = ['chat', 'decision-room', 'quick-decision', 'confrontation', 'stress-test', 'jury'];
+    const needsWorkspace = modesNeedingWorkspace.includes(ns.mode);
+    const activeCtxId = String(state.activeStrategicContextId || state.activeStrategicContext?.context_id || '').trim();
+    if (needsWorkspace && !activeCtxId && !ns.confirmLegacyNoActiveStrategicContext) {
+      state.error = window.i18n?.t('newSession.strategicContext.blockedLaunch') ?? 'Activez un contexte stratégique (vue Contextes stratégiques) avant de lancer, ou cochez la confirmation legacy en mode expert.';
+      render();
+      return;
+    }
+
     try {
       state.isLoading = true;
       state.error     = null;
@@ -644,6 +761,10 @@ function registerNewSessionHandlers() {
           debate_intensity: 'high',
         } : {}),
         selected_memory_ids: Array.isArray(ns.selectedMemoryIds) ? ns.selectedMemoryIds : [],
+        ...(needsWorkspace && !activeCtxId && ns.confirmLegacyNoActiveStrategicContext
+          ? { confirm_legacy_no_active_strategic_context: true }
+          : {}),
+        ...(activeCtxId ? { strategic_context_id: activeCtxId } : {}),
       };
 
       const session = await SessionService.create(body);
@@ -792,6 +913,10 @@ function registerNewSessionHandlers() {
       }
     } else if (field === 'forceDisagreement') {
       state.newSession.forceDisagreement = e.target.checked;
+    } else if (field === 'confirmLegacyNoActiveStrategicContext') {
+      state.newSession.confirmLegacyNoActiveStrategicContext = !!e.target.checked;
+    } else if (field === 'pendingStrategicContextId') {
+      state.newSession.pendingStrategicContextId = String(e.target.value || '').trim();
     } else if (field === 'title') {
       state.newSession.title = e.target.value;
     } else if (field === 'idea') {

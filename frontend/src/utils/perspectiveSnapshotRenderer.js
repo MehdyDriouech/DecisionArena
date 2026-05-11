@@ -49,6 +49,14 @@ const PERSPECTIVE_LABEL_KEYS = {
   legal: 'snapshots.perspective.legal',
 };
 
+function humanizePerspectiveKey(key) {
+  const raw = String(key || '').trim();
+  if (!raw) return 'Default';
+  const words = raw.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+  if (!words.length) return raw;
+  return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
 function defaultEsc(s) {
   const arena = (typeof window !== 'undefined') ? window.DecisionArena : null;
   const fn = arena?.utils?.escHtml;
@@ -302,7 +310,14 @@ function renderPerspectiveSnapshot(markdown, options = {}) {
   const titleHtml = parsed.title ? `<h2 class="ps-doc-title">${esc(parsed.title)}</h2>` : '';
   const perspective = String(options.perspective || 'default').toLowerCase();
   const labelKey = PERSPECTIVE_LABEL_KEYS[perspective] || PERSPECTIVE_LABEL_KEYS.default;
-  const perspectiveLabel = t(labelKey);
+  const perspectiveLabels = (options.perspectiveLabels && typeof options.perspectiveLabels === 'object')
+    ? options.perspectiveLabels
+    : null;
+  const override = perspectiveLabels && typeof perspectiveLabels[perspective] === 'string'
+    ? perspectiveLabels[perspective].trim()
+    : '';
+  const translated = t(labelKey);
+  const perspectiveLabel = override || (translated !== labelKey ? translated : humanizePerspectiveKey(perspective));
   const tagHtml = (perspective && perspective !== 'default')
     ? `<span class="ps-perspective-tag" aria-label="${esc(t('snapshots.perspective'))}">
          <span class="ps-perspective-tag-key">${esc(t('snapshots.perspective'))}</span>
@@ -356,11 +371,26 @@ function renderPerspectiveSegmentedControl(opts = {}) {
   const t = opts.t || defaultT;
   const action = String(opts.action || '');
   const selected = String(opts.selected || 'default').toLowerCase();
-  const items = ['default', 'ceo', 'cto', 'cfo', 'product', 'growth', 'legal'];
-  const buttons = items.map((p) => {
+  const baseItems = ['default', 'ceo', 'cto', 'cfo', 'product', 'growth', 'legal']
+    .map((key) => ({ key, label: '' }));
+  const provided = Array.isArray(opts.items) ? opts.items : [];
+  const usedKeys = new Set();
+  const items = (provided.length ? provided : baseItems)
+    .map((it) => {
+      const key = String((it && it.key) || '').trim().toLowerCase();
+      const label = String((it && it.label) || '').trim();
+      if (!key || usedKeys.has(key)) return null;
+      usedKeys.add(key);
+      return { key, label };
+    })
+    .filter(Boolean);
+  const safeItems = items.length ? items : baseItems;
+  const buttons = safeItems.map((it) => {
+    const p = it.key;
     const pressed = (p === selected) ? 'true' : 'false';
     const labelKey = PERSPECTIVE_LABEL_KEYS[p] || PERSPECTIVE_LABEL_KEYS.default;
-    const label = t(labelKey);
+    const translated = t(labelKey);
+    const label = it.label || (translated !== labelKey ? translated : humanizePerspectiveKey(p));
     const cls = `ps-segment ${p === selected ? 'ps-segment--active' : ''}`.trim();
     return `<button type="button"
       class="${cls}"

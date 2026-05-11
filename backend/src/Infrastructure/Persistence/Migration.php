@@ -46,6 +46,7 @@ class Migration {
         $this->createSessionAgentProvidersTable();
         $this->addMissingColumnsV2();
         $this->createSocialDynamicsTables();
+        $this->ensureSocialDynamicsStrategicContextColumns();
         $this->createEvidenceTables();
         $this->extendEvidenceClaimsPhase3Columns();
         $this->createRiskProfileTable();
@@ -56,6 +57,16 @@ class Migration {
         $this->createDecisionMemoryFts();
         $this->createDecisionMemoryEmbeddingsTable();
         $this->createStrategicContextTables();
+        $this->ensureStrategicContextWorkspaceActive();
+        $this->createStrategicContextNarrativesTable();
+        $this->createStrategicContextBeliefsTable();
+        $this->createStrategicContextBeliefEventsTable();
+        $this->createStrategicContextBeliefRelationsTable();
+        $this->createStrategicContextBeliefAgentPositionsTable();
+        $this->createStrategicContextMemoryCompilationsTable();
+        $this->createStrategicContextSnapshotsTable();
+        $this->createStrategicContextMemoryGovernanceEventsTable();
+        $this->createAgentContextChatTables();
         $this->createDecisionRoomTables();
         $this->seedDefaultTemplates();
         $this->seedStressTestTemplate();
@@ -235,6 +246,291 @@ class Migration {
             $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_memories_memory ON strategic_context_memories(memory_id)');
             $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_sessions_session ON strategic_context_sessions(session_id)');
         } catch (\Throwable) {}
+    }
+
+    /** Narrative stratégique dérivée (une ligne par contexte, recalcul explicite uniquement). */
+    private function createStrategicContextNarrativesTable(): void
+    {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS strategic_context_narratives (
+                id TEXT PRIMARY KEY,
+                strategic_context_id TEXT NOT NULL UNIQUE,
+                current_direction TEXT NOT NULL DEFAULT '',
+                major_risks_json TEXT NOT NULL DEFAULT '[]',
+                unresolved_conflicts_json TEXT NOT NULL DEFAULT '[]',
+                confidence_trend TEXT NOT NULL DEFAULT '',
+                key_assumptions_json TEXT NOT NULL DEFAULT '[]',
+                recent_shifts_json TEXT NOT NULL DEFAULT '[]',
+                source_summary_json TEXT NOT NULL DEFAULT '{}',
+                computed_at TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (strategic_context_id) REFERENCES strategic_contexts(context_id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_narratives_context ON strategic_context_narratives(strategic_context_id)');
+        } catch (\Throwable) {
+        }
+    }
+
+    /** Beliefs Engine MVP : croyances explicites par contexte (aucune génération automatique). */
+    private function createStrategicContextBeliefsTable(): void
+    {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS strategic_context_beliefs (
+                id TEXT PRIMARY KEY,
+                strategic_context_id TEXT NOT NULL,
+                agent_id TEXT NULL,
+                belief_type TEXT NOT NULL,
+                belief_text TEXT NOT NULL,
+                confidence REAL NOT NULL DEFAULT 0.5,
+                status TEXT NOT NULL DEFAULT 'active',
+                evidence_sources_json TEXT NOT NULL DEFAULT '[]',
+                supporting_agents_json TEXT NOT NULL DEFAULT '[]',
+                disagreeing_agents_json TEXT NOT NULL DEFAULT '[]',
+                related_session_ids_json TEXT NOT NULL DEFAULT '[]',
+                source_type TEXT NULL,
+                source_reference_id TEXT NULL,
+                created_by TEXT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_reviewed_at TEXT NULL,
+                FOREIGN KEY (strategic_context_id) REFERENCES strategic_contexts(context_id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_beliefs_context ON strategic_context_beliefs(strategic_context_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_beliefs_ctx_agent ON strategic_context_beliefs(strategic_context_id, agent_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_beliefs_ctx_status ON strategic_context_beliefs(strategic_context_id, status)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_beliefs_ctx_updated ON strategic_context_beliefs(strategic_context_id, updated_at)');
+        } catch (\Throwable) {
+        }
+        $this->addColumnIfMissing('strategic_context_beliefs', 'parent_belief_id', 'TEXT NULL');
+        $this->addColumnIfMissing('strategic_context_beliefs', 'supersedes_belief_id', 'TEXT NULL');
+        $this->addColumnIfMissing('strategic_context_beliefs', 'invalidated_by', 'TEXT NULL');
+        $this->addColumnIfMissing('strategic_context_beliefs', 'invalidation_reason', 'TEXT NULL');
+        $this->addColumnIfMissing('strategic_context_beliefs', 'confidence_history_json', "TEXT NOT NULL DEFAULT '[]'");
+        $this->addColumnIfMissing('strategic_context_beliefs', 'drift_score', 'REAL NOT NULL DEFAULT 0.0');
+        $this->addColumnIfMissing('strategic_context_beliefs', 'consensus_score', 'REAL NOT NULL DEFAULT 0.0');
+        $this->addColumnIfMissing('strategic_context_beliefs', 'contested_by_agents_json', "TEXT NOT NULL DEFAULT '[]'");
+        $this->addColumnIfMissing('strategic_context_beliefs', 'contestation_state', "TEXT NOT NULL DEFAULT 'weak'");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_beliefs_ctx_contestation ON strategic_context_beliefs(strategic_context_id, contestation_state, status)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_beliefs_parent ON strategic_context_beliefs(parent_belief_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_beliefs_supersedes ON strategic_context_beliefs(supersedes_belief_id)');
+        } catch (\Throwable) {
+        }
+    }
+
+    /** Beliefs timeline append-only : audit complet et réversible. */
+    private function createStrategicContextBeliefEventsTable(): void
+    {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS strategic_context_belief_events (
+                event_id TEXT PRIMARY KEY,
+                strategic_context_id TEXT NOT NULL,
+                belief_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                actor_id TEXT NULL,
+                reason TEXT NULL,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                occurred_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (strategic_context_id) REFERENCES strategic_contexts(context_id),
+                FOREIGN KEY (belief_id) REFERENCES strategic_context_beliefs(id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_belief_events_ctx_belief_time ON strategic_context_belief_events(strategic_context_id, belief_id, occurred_at)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_belief_events_ctx_time ON strategic_context_belief_events(strategic_context_id, occurred_at)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_belief_events_type ON strategic_context_belief_events(event_type)');
+        } catch (\Throwable) {
+        }
+    }
+
+    /** Graphe déterministe des relations cognitives belief↔*. */
+    private function createStrategicContextBeliefRelationsTable(): void
+    {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS strategic_context_belief_relations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategic_context_id TEXT NOT NULL,
+                from_belief_id TEXT NOT NULL,
+                relation_type TEXT NOT NULL,
+                to_entity_type TEXT NOT NULL,
+                to_entity_id TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (strategic_context_id, from_belief_id, relation_type, to_entity_type, to_entity_id),
+                FOREIGN KEY (strategic_context_id) REFERENCES strategic_contexts(context_id),
+                FOREIGN KEY (from_belief_id) REFERENCES strategic_context_beliefs(id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_belief_rel_from ON strategic_context_belief_relations(from_belief_id, relation_type)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_belief_rel_target ON strategic_context_belief_relations(to_entity_type, to_entity_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_belief_rel_ctx ON strategic_context_belief_relations(strategic_context_id)');
+        } catch (\Throwable) {
+        }
+    }
+
+    /** Positionnement agent↔belief pour consensus/désaccord déterministe. */
+    private function createStrategicContextBeliefAgentPositionsTable(): void
+    {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS strategic_context_belief_agent_positions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategic_context_id TEXT NOT NULL,
+                belief_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                position TEXT NOT NULL, -- support|disagree|neutral
+                reason TEXT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (strategic_context_id, belief_id, agent_id),
+                FOREIGN KEY (strategic_context_id) REFERENCES strategic_contexts(context_id),
+                FOREIGN KEY (belief_id) REFERENCES strategic_context_beliefs(id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_belief_agent_pos_ctx ON strategic_context_belief_agent_positions(strategic_context_id, belief_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_belief_agent_pos_agent ON strategic_context_belief_agent_positions(agent_id)');
+        } catch (\Throwable) {
+        }
+    }
+
+    /** Memory Compiler : consolidations dérivées, auditables, scoped par strategic context. */
+    private function createStrategicContextMemoryCompilationsTable(): void
+    {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS strategic_context_memory_compilations (
+                id TEXT PRIMARY KEY,
+                strategic_context_id TEXT NOT NULL,
+                compilation_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                compiled_memory_markdown TEXT NOT NULL,
+                source_snapshot_json TEXT,
+                compilation_metadata_json TEXT,
+                confidence REAL NOT NULL DEFAULT 0.5,
+                stability_score REAL NOT NULL DEFAULT 0.5,
+                status TEXT NOT NULL DEFAULT 'active',
+                source_hash TEXT NULL,
+                created_by TEXT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (strategic_context_id) REFERENCES strategic_contexts(context_id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_memcomp_context ON strategic_context_memory_compilations(strategic_context_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_memcomp_ctx_type ON strategic_context_memory_compilations(strategic_context_id, compilation_type)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_memcomp_ctx_status ON strategic_context_memory_compilations(strategic_context_id, status)');
+        } catch (\Throwable) {
+        }
+    }
+
+    /** Context Snapshots : captures immuables (INSERT uniquement) par strategic context. */
+    private function createStrategicContextSnapshotsTable(): void
+    {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS strategic_context_snapshots (
+                id TEXT PRIMARY KEY,
+                strategic_context_id TEXT NOT NULL,
+                snapshot_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NULL,
+                snapshot_markdown TEXT NOT NULL,
+                strategic_narrative_json TEXT,
+                beliefs_snapshot_json TEXT,
+                risks_snapshot_json TEXT,
+                evidence_snapshot_json TEXT,
+                social_snapshot_json TEXT,
+                timeline_snapshot_json TEXT,
+                memory_compilations_json TEXT,
+                source_summary_json TEXT,
+                metadata_json TEXT,
+                snapshot_hash TEXT NULL,
+                created_by TEXT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (strategic_context_id) REFERENCES strategic_contexts(context_id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_snap_context ON strategic_context_snapshots(strategic_context_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_snap_ctx_created ON strategic_context_snapshots(strategic_context_id, created_at)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_snap_ctx_type ON strategic_context_snapshots(strategic_context_id, snapshot_type)');
+        } catch (\Throwable) {
+        }
+    }
+
+    /** Gouvernance cognitive persistante : journal append-only cross-artifacts. */
+    private function createStrategicContextMemoryGovernanceEventsTable(): void
+    {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS strategic_context_memory_governance_events (
+                event_id TEXT PRIMARY KEY,
+                strategic_context_id TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                agent_id TEXT NULL,
+                event_type TEXT NOT NULL,
+                governance_status TEXT NOT NULL DEFAULT 'pending',
+                provenance_level TEXT NOT NULL DEFAULT 'explicit',
+                trust_level REAL NOT NULL DEFAULT 0.5,
+                actor_id TEXT NULL,
+                reason TEXT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                occurred_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (strategic_context_id) REFERENCES strategic_contexts(context_id)
+            )
+        ");
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_mgov_ctx_time ON strategic_context_memory_governance_events(strategic_context_id, occurred_at)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_mgov_entity ON strategic_context_memory_governance_events(strategic_context_id, entity_type, entity_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sc_mgov_event_type ON strategic_context_memory_governance_events(event_type)');
+        } catch (\Throwable) {
+        }
+    }
+
+    /**
+     * Single global “active workspace” strategic context (runtime root), persisted in SQLite.
+     * Partial unique index: at most one row may have is_workspace_active = 1.
+     */
+    private function ensureStrategicContextWorkspaceActive(): void
+    {
+        $this->addColumnIfMissing('strategic_contexts', 'is_workspace_active', 'INTEGER NOT NULL DEFAULT 0');
+        try {
+            // Avant index UNIQUE partiel : si plusieurs lignes ont is_workspace_active=1 (édition manuelle),
+            // CREATE INDEX échouerait. On conserve une seule ligne « gagnante » (la plus récente parmi les actives).
+            $cntStmt = $this->pdo->query('SELECT COUNT(*) FROM strategic_contexts WHERE is_workspace_active = 1');
+            $cnt = $cntStmt ? (int)$cntStmt->fetchColumn() : 0;
+            if ($cnt > 1) {
+                $keepStmt = $this->pdo->query(
+                    'SELECT context_id FROM strategic_contexts WHERE is_workspace_active = 1 '
+                    . 'ORDER BY updated_at DESC, context_id DESC LIMIT 1'
+                );
+                $keepId = $keepStmt ? $keepStmt->fetchColumn() : false;
+                $this->pdo->exec('UPDATE strategic_contexts SET is_workspace_active = 0');
+                if ($keepId !== false && $keepId !== null && (string)$keepId !== '') {
+                    $u = $this->pdo->prepare('UPDATE strategic_contexts SET is_workspace_active = 1 WHERE context_id = ?');
+                    $u->execute([(string)$keepId]);
+                }
+            }
+        } catch (\Throwable) {
+            // best-effort
+        }
+        try {
+            $this->pdo->exec(
+                'CREATE UNIQUE INDEX IF NOT EXISTS idx_strategic_contexts_unique_workspace_active '
+                . 'ON strategic_contexts(is_workspace_active) WHERE is_workspace_active = 1'
+            );
+        } catch (\Throwable) {
+            // Older SQLite ou nom d’index déjà présent avec définition incompatible — le repository reste la source d’atomicité
+        }
     }
 
     /**
@@ -609,6 +905,7 @@ class Migration {
         $this->addColumnIfMissing('sessions', 'follow_up_notes', 'TEXT NULL');
         $this->addColumnIfMissing('sessions', 'force_disagreement', 'INTEGER DEFAULT 0');
         $this->addColumnIfMissing('sessions', 'parent_session_id', 'TEXT NULL');
+        $this->addColumnIfMissing('sessions', 'strategic_context_id', 'TEXT NULL');
         $this->addColumnIfMissing('sessions', 'rerun_reason', 'TEXT NULL');
         $this->addColumnIfMissing('sessions', 'session_variant', 'TEXT NULL');
         $this->addColumnIfMissing('sessions', 'facilitation_framework', 'TEXT NULL');
@@ -640,6 +937,11 @@ class Migration {
         // Providers (routing + ordering)
         $this->addColumnIfMissing('providers', 'priority', 'INTEGER DEFAULT 100');
         $this->addColumnIfMissing('providers', 'is_local', 'INTEGER DEFAULT 0');
+
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_sessions_strategic_context_id ON sessions(strategic_context_id)');
+        } catch (\Throwable) {
+        }
     }
 
     private function createSessionTemplatesTable(): void {
@@ -1296,6 +1598,69 @@ class Migration {
             $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_agent_rel_sessions ON agent_relationships(session_id)');
             $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_rel_events_session ON relationship_events(session_id)');
         } catch (\Throwable $e) {
+        }
+    }
+
+    /**
+     * Scoping social dynamics par Strategic Context (colonnes nullable + backfill depuis sessions).
+     */
+    private function createAgentContextChatTables(): void
+    {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS agent_context_conversations (
+                id                    TEXT PRIMARY KEY,
+                strategic_context_id  TEXT NOT NULL,
+                agent_id              TEXT NOT NULL,
+                link_session_id       TEXT NULL,
+                created_at            TEXT NOT NULL,
+                updated_at            TEXT NOT NULL
+            )
+        ");
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS agent_context_chat_messages (
+                id               TEXT PRIMARY KEY,
+                conversation_id  TEXT NOT NULL,
+                role               TEXT NOT NULL,
+                content            TEXT NOT NULL,
+                created_at         TEXT NOT NULL
+            )
+        ");
+        try {
+            $this->pdo->exec(
+                'CREATE INDEX IF NOT EXISTS idx_ac_conv_context_agent ON agent_context_conversations(strategic_context_id, agent_id)'
+            );
+            $this->pdo->exec(
+                'CREATE INDEX IF NOT EXISTS idx_ac_msg_conv_created ON agent_context_chat_messages(conversation_id, created_at)'
+            );
+        } catch (\Throwable) {
+        }
+    }
+
+    private function ensureSocialDynamicsStrategicContextColumns(): void {
+        $this->addColumnIfMissing('agent_relationships', 'strategic_context_id', 'TEXT NULL');
+        $this->addColumnIfMissing('relationship_events', 'strategic_context_id', 'TEXT NULL');
+        try {
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_agent_rel_strategic_ctx ON agent_relationships(strategic_context_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_agent_rel_ctx_session ON agent_relationships(strategic_context_id, session_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_rel_events_strategic_ctx ON relationship_events(strategic_context_id)');
+            $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_rel_events_ctx_created ON relationship_events(strategic_context_id, created_at)');
+        } catch (\Throwable) {
+        }
+        try {
+            $this->pdo->exec('
+                UPDATE agent_relationships SET strategic_context_id = (
+                    SELECT s.strategic_context_id FROM sessions s WHERE s.id = agent_relationships.session_id
+                ) WHERE strategic_context_id IS NULL
+            ');
+        } catch (\Throwable) {
+        }
+        try {
+            $this->pdo->exec('
+                UPDATE relationship_events SET strategic_context_id = (
+                    SELECT s.strategic_context_id FROM sessions s WHERE s.id = relationship_events.session_id
+                ) WHERE strategic_context_id IS NULL
+            ');
+        } catch (\Throwable) {
         }
     }
 

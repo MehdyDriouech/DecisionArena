@@ -159,6 +159,68 @@ a {
   flex-shrink: 0;
 }
 
+.nav-group {
+  margin-bottom: 4px;
+}
+
+.nav-group-header {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.nav-item-group-main {
+  flex: 1;
+}
+
+.nav-group-toggle {
+  width: 32px;
+  min-width: 32px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.nav-group-toggle:hover {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+.nav-group-chevron {
+  font-size: 12px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.nav-group.closed .nav-group-chevron {
+  transform: rotate(-90deg);
+}
+
+.nav-submenu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 8px 26px;
+  padding-left: 8px;
+  border-left: 1px dashed var(--border);
+}
+
+.nav-submenu.is-collapsed {
+  display: none;
+}
+
+.nav-item-sub {
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
 /* ===== MAIN CONTENT ===== */
 #main-content {
   flex: 1;
@@ -1154,6 +1216,62 @@ a {
 
 .persona-modal-close:hover {
   color: var(--text-primary);
+}
+
+/* Dashboard detail drawer (phase 2.2b) */
+.dashboard-detail-drawer-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: 230;
+}
+
+.dashboard-detail-drawer-overlay {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: rgba(5, 10, 20, 0.58);
+  cursor: pointer;
+}
+
+.dashboard-detail-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: min(540px, 94vw);
+  background: var(--bg-card);
+  border-left: 1px solid var(--border-light);
+  box-shadow: -16px 0 40px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  animation: dashboard-drawer-enter 180ms ease-out;
+}
+
+.dashboard-detail-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dashboard-detail-drawer-body {
+  padding: 12px;
+  overflow-y: auto;
+}
+
+@keyframes dashboard-drawer-enter {
+  from {
+    transform: translateX(18px);
+    opacity: 0.86;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }
 
 /* ===== PROVIDERS VIEW ===== */

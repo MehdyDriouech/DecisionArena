@@ -15,6 +15,7 @@ use Domain\Providers\ProviderRouter;
 use Domain\Verdict\VerdictParser;
 use Domain\Vote\VoteAggregator;
 use Domain\Vote\VoteParser;
+use Infrastructure\Logging\Logger;
 use Infrastructure\Persistence\DebateRepository;
 use Infrastructure\Persistence\MessageRepository;
 use Infrastructure\Persistence\VerdictRepository;
@@ -41,6 +42,7 @@ class ConfrontationRunner {
     private \Domain\DecisionReliability\DecisionQualityScoreService $qualityScoreService;
     private DecisionSummaryService $summaryService;
     private PlaybookRuntime $playbookRuntime;
+    private Logger $logger;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -63,6 +65,7 @@ class ConfrontationRunner {
         $this->qualityScoreService = new \Domain\DecisionReliability\DecisionQualityScoreService();
         $this->summaryService = new DecisionSummaryService();
         $this->playbookRuntime = new PlaybookRuntime();
+        $this->logger = new Logger();
     }
 
     /**
@@ -83,7 +86,8 @@ class ConfrontationRunner {
         float  $devilAdvocateThreshold = 0.65,
         array  $agentProviders         = [],
         float  $decisionThreshold      = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD,
-        ?string $decisionDynamicsPreset = null
+        ?string $decisionDynamicsPreset = null,
+        ?string $strategicContextId = null
     ): array {
         $rounds = min(max($rounds, 1), 15);
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($decisionThreshold);
@@ -126,6 +130,7 @@ class ConfrontationRunner {
                 $agentProviders,
                 $contextQuality,
                 $dynamicsPreset,
+                $strategicContextId,
                 $forceStrongNext
             );
 
@@ -172,6 +177,21 @@ class ConfrontationRunner {
                         ['role' => 'user', 'content' => $daUser],
                     ];
                     try {
+                        $governedDa = CognitiveRuntimeGovernance::tracePromptPayload(
+                            $daMessages,
+                            [
+                                'session_id' => $sessionId,
+                                'strategic_context_id' => $strategicContextId,
+                                'round' => $round,
+                                'agent_id' => 'devil_advocate',
+                                'mode' => 'confrontation',
+                            ],
+                            'confrontation_user_payload',
+                            'orchestration',
+                            'confrontation_devil_advocate_payload'
+                        );
+                        $daMessages = $governedDa['messages'];
+                        $daMetaJson = $governedDa['meta_json'];
                         $daRouted  = $this->providerRouter->chat($daMessages, null, null, null);
                         $daContent = $daRouted['content'];
                         $daMsg     = $this->messageRepo->create([
@@ -190,6 +210,7 @@ class ConfrontationRunner {
                             'phase'                    => 'devil-advocate',
                             'mode_context'             => 'confrontation',
                             'message_type'             => 'devil_advocate',
+                            'meta_json'                => $daMetaJson,
                             'content'                  => $daContent,
                             'created_at'               => date('c'),
                         ]);
@@ -437,7 +458,12 @@ class ConfrontationRunner {
             ])
         );
 
-        return StructuredRunResult::augment([
+        $runtimeTraces = CognitiveRuntimeGovernance::collectTracesFromMessageBuckets(array_merge(
+            array_values($allRounds),
+            [$synthesis]
+        ));
+
+        return StructuredRunResult::augment(array_merge([
             'rounds'            => $allRounds,
             'synthesis'         => $synthesis,
             'verdict'           => $verdict,
@@ -471,7 +497,7 @@ class ConfrontationRunner {
             'canonical_synthesis' => $canonicalSynthesis,
             'decision_outcome' => $decisionOutcome,
             'playbook_runtime' => $playbookDiagnostics,
-        ]);
+        ], CognitiveRuntimeGovernance::summarizeTraces($runtimeTraces, 'confrontation')));
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -493,6 +519,7 @@ class ConfrontationRunner {
         array  $agentProviders,
         array  $contextQuality,
         ?string $dynamicsPreset,
+        ?string $strategicContextIdForAgentMemory,
         bool   &$forceStrongNextFlag
     ): array {
         $roundMessages = [];
@@ -510,7 +537,13 @@ class ConfrontationRunner {
             $maj          = SocialDynamicsService::summarizeMajority($votesSnap, $state['positions'] ?? []);
             $socialBlock  = null;
             if ($currentRound > 1 && $totalRounds > 1) {
-                $socialBlock = $this->socialPrompt->buildUserBlock($sessionId, $agentId, $maj);
+                $socialBlock = $this->socialPrompt->buildUserBlock(
+                    $sessionId,
+                    $agentId,
+                    $maj,
+                    $strategicContextIdForAgentMemory,
+                    false
+                );
             }
 
             try {
@@ -522,8 +555,41 @@ class ConfrontationRunner {
                     $socialBlock,
                     $forceStrongNextFlag,
                     $sessionId,
-                    null
+                    null,
+                    $strategicContextIdForAgentMemory
                 );
+                $governed = CognitiveRuntimeGovernance::tracePromptPayload(
+                    $messages,
+                    [
+                        'session_id' => $sessionId,
+                        'strategic_context_id' => $strategicContextIdForAgentMemory,
+                        'round' => $currentRound,
+                        'agent_id' => $agentId,
+                        'mode' => 'confrontation',
+                    ],
+                    'confrontation_user_payload',
+                    'orchestration',
+                    'confrontation_runtime_user_payload',
+                    ['interaction_style' => $interactionStyle]
+                );
+                $messages = $governed['messages'];
+                $promptMetaJson = $governed['meta_json'];
+                $this->logger->logPromptBuild('prompt_built_confrontation', [
+                    'agent_id' => $agent->id,
+                    'metadata' => [
+                        'mode' => 'confrontation',
+                        'round' => $currentRound,
+                        'total_rounds' => $totalRounds,
+                        'interaction_style' => $interactionStyle,
+                        'message_count' => count($messages),
+                        'character_count' => $this->countMessageChars($messages),
+                        'context_doc_injected' => !empty($contextDoc['content']),
+                        'memory_injected' => !empty(($memoryContext['argument_memory_summary'] ?? null)),
+                        'force_disagreement' => (bool)$forceDisagreement,
+                        'playbook_id' => 'confrontation',
+                        'session_id' => $sessionId,
+                    ],
+                ]);
 
                 $routed        = $this->providerRouter->chat($messages, $agent, null, null, $agentProviders[$agentId] ?? null);
                 $content       = $routed['content'];
@@ -551,6 +617,7 @@ class ConfrontationRunner {
                     'target_agent_id'          => $targetAgentId,
                     'mode_context'             => 'confrontation',
                     'message_type'             => $msgType,
+                    'meta_json'                => $promptMetaJson,
                     'content'                  => $content,
                     'created_at'               => date('c'),
                 ]);
@@ -572,7 +639,8 @@ class ConfrontationRunner {
                     $targetAgentId,
                     $agents,
                     $this->voteRepo->findVotesBySession($sessionId),
-                    $state['positions'] ?? []
+                    $state['positions'] ?? [],
+                    $strategicContextIdForAgentMemory
                 );
                 if ($currentRound === $totalRounds) {
                     $parsedVote = $this->voteParser->parse($content);
@@ -657,6 +725,20 @@ class ConfrontationRunner {
                 $sessionId,
                 null
             );
+            $this->logger->logPromptBuild('prompt_built_confrontation_synthesis', [
+                'agent_id' => $agent->id,
+                'metadata' => [
+                    'mode' => 'confrontation',
+                    'synthesis' => true,
+                    'message_count' => count($messages),
+                    'character_count' => $this->countMessageChars($messages),
+                    'context_doc_injected' => !empty($contextDoc['content']),
+                    'memory_injected' => !empty(($memoryContext['weighted_analysis'] ?? null)),
+                    'force_disagreement' => (bool)$forceDisagreement,
+                    'playbook_id' => 'confrontation',
+                    'session_id' => $sessionId,
+                ],
+            ]);
 
             if ($extraUserContent !== null) {
                 foreach ($messages as &$msg) {
@@ -667,6 +749,21 @@ class ConfrontationRunner {
                 }
                 unset($msg);
             }
+            $governed = CognitiveRuntimeGovernance::tracePromptPayload(
+                $messages,
+                [
+                    'session_id' => $sessionId,
+                    'strategic_context_id' => null,
+                    'round' => $synthRound,
+                    'agent_id' => 'synthesizer',
+                    'mode' => 'confrontation',
+                ],
+                'confrontation_synthesis_payload',
+                'orchestration',
+                'confrontation_runtime_synthesis_payload'
+            );
+            $messages = $governed['messages'];
+            $promptMetaJson = $governed['meta_json'];
 
             $routed  = $this->providerRouter->chat($messages, $agent);
             $content = $routed['content'];
@@ -687,6 +784,7 @@ class ConfrontationRunner {
                 'phase'                    => 'synthesis',
                 'mode_context'             => 'confrontation',
                 'message_type'             => 'synthesis',
+                'meta_json'                => $promptMetaJson,
                 'content'                  => $content,
                 'created_at'               => date('c'),
             ]);
@@ -819,6 +917,15 @@ class ConfrontationRunner {
         $nonSynth = array_values(array_filter($allAgentIds, fn($id) => $id !== 'synthesizer'));
         $agentIdx = (int)(array_search($agentId, $nonSynth) ?: 0);
         return $others[($agentIdx + $round) % count($others)];
+    }
+
+    private function countMessageChars(array $messages): int
+    {
+        $chars = 0;
+        foreach ($messages as $message) {
+            $chars += mb_strlen((string)($message['content'] ?? ''), 'UTF-8');
+        }
+        return $chars;
     }
 
     private function uuid(): string {

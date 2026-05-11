@@ -56,6 +56,31 @@ final class DecisionMemoryRepository
     }
 
     /**
+     * Mémoires Decision Memory liées au contexte stratégique (join strategic_context_memories), les plus récentes d’abord.
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function findLinkedMemoriesForStrategicContext(string $contextId, int $limit = 12): array
+    {
+        $contextId = trim($contextId);
+        if ($contextId === '') {
+            return [];
+        }
+        $limit = max(1, min(30, $limit));
+        $stmt = $this->pdo->prepare(
+            'SELECT m.* FROM decision_memories m
+             INNER JOIN strategic_context_memories scm ON scm.memory_id = m.memory_id AND scm.context_id = ?
+             WHERE m.user_confirmed = 1
+               AND (m.memory_state IS NULL OR m.memory_state NOT IN (\'invalidated\',\'archived\',\'stale\'))
+             ORDER BY m.created_at DESC, m.memory_id DESC
+             LIMIT ' . $limit
+        );
+        $stmt->execute([$contextId]);
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC) ?: [];
+        return array_map([$this, 'hydrateRow'], $rows);
+    }
+
+    /**
      * Persist automatically only when outcome is memory-safe.
      * Returns created memory row when persisted; null otherwise.
      *

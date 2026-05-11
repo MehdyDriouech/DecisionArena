@@ -112,6 +112,25 @@ function registerGlobalHandlers() {
     } catch (_) {}
     window.DecisionArena.render?.();
   });
+
+  registerAction('toggle-analyses-submenu', () => {
+    const state = window.DecisionArena.store.state;
+    const current = typeof state.analysesSidebarOpen === 'boolean'
+      ? state.analysesSidebarOpen
+      : (() => {
+        try {
+          return localStorage.getItem('da_nav_analyses_open') !== '0';
+        } catch (_) {
+          return true;
+        }
+      })();
+    const next = !current;
+    state.analysesSidebarOpen = next;
+    try {
+      localStorage.setItem('da_nav_analyses_open', next ? '1' : '0');
+    } catch (_) {}
+    window.DecisionArena.render?.();
+  });
 }
 
 export { registerGlobalHandlers };

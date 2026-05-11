@@ -19,11 +19,17 @@ use Infrastructure\Persistence\SnapshotRepository;
 use Infrastructure\Persistence\DebateRepository;
 use Infrastructure\Persistence\JuryAdversarialReportRepository;
 use Infrastructure\Persistence\PersonaDecisionDynamicsRepository;
+use Domain\Sessions\SessionStrategicContextGuard;
 use Domain\Orchestration\PromptBuilder;
 use Domain\Vote\VoteAggregator;
 use Infrastructure\Persistence\VoteRepository;
+use Infrastructure\Persistence\StrategicContextRepository;
 
 class SessionController {
+    private const LIFECYCLE_ALLOWED = ['draft', 'running', 'completed', 'archived'];
+    private const LIFECYCLE_ALIASES = [
+        'active' => 'running',
+    ];
     private SessionRepository               $sessionRepo;
     private MessageRepository               $messageRepo;
     private SnapshotRepository              $snapshotRepo;
@@ -55,7 +61,17 @@ class SessionController {
     }
 
     public function index(Request $req): array {
-        return $this->sessionRepo->findAll();
+        if (trim((string)$req->query('all_contexts', '')) === '1') {
+            return $this->sessionRepo->findAll('all');
+        }
+        $active = (new StrategicContextRepository())->getActiveContext();
+        $aid = ($active['context_id'] ?? null) !== null && (string)$active['context_id'] !== ''
+            ? (string)$active['context_id']
+            : null;
+        if ($aid !== null) {
+            return $this->sessionRepo->findAll($aid);
+        }
+        return $this->sessionRepo->findAll('all');
     }
 
     public function show(Request $req): array {
@@ -194,6 +210,18 @@ class SessionController {
         if (empty($data['title'])) {
             return Response::error('title required', 400);
         }
+
+        $mode = (string)($data['mode'] ?? 'chat');
+        $resolved = SessionStrategicContextGuard::resolveStrategicContextForCreation(
+            $mode,
+            is_array($data) ? $data : [],
+            null
+        );
+        if ($resolved['block'] !== null) {
+            return $resolved['block'];
+        }
+        $strategicContextId = $resolved['strategic_context_id'];
+
         $now = date('c');
         $id  = $this->uuid();
         $session = [
@@ -214,6 +242,7 @@ class SessionController {
             'decision_threshold'   => ReliabilityConfig::normalizeThreshold($data['decision_threshold'] ?? null),
             'parent_session_id'    => $data['parent_session_id'] ?? null,
             'rerun_reason'         => $data['rerun_reason'] ?? null,
+            'strategic_context_id' => $strategicContextId,
             'selected_memory_ids'  => is_array($data['selected_memory_ids'] ?? null)
                 ? json_encode($data['selected_memory_ids'], JSON_UNESCAPED_UNICODE)
                 : ($data['selected_memory_ids'] ?? '[]'),
@@ -229,6 +258,8 @@ class SessionController {
         }
 
         $created = $this->sessionRepo->create($session);
+
+        SessionStrategicContextGuard::syncStrategicContextSessionLink($strategicContextId, $id);
 
         // Convert team_provider_assignments to agent_providers if present
         $agentProviders = is_array($data['agent_providers'] ?? null) ? $data['agent_providers'] : [];
@@ -372,13 +403,20 @@ class SessionController {
     public function updateStatus(Request $req): array {
         $id     = $req->param('id');
         $data   = $req->body();
-        $status = $data['status'] ?? 'completed';
+        $rawStatus = strtolower(trim((string)($data['status'] ?? 'completed')));
+        if ($rawStatus === '') {
+            $rawStatus = 'completed';
+        }
+        $status = self::LIFECYCLE_ALIASES[$rawStatus] ?? $rawStatus;
+        if (!in_array($status, self::LIFECYCLE_ALLOWED, true)) {
+            return Response::error('Invalid status. Allowed: draft|running|completed|archived', 400);
+        }
         $this->pdo()->exec(
             "UPDATE sessions SET status = " . $this->pdo()->quote($status) .
             ", updated_at = " . $this->pdo()->quote(date('c')) .
             " WHERE id = " . $this->pdo()->quote($id)
         );
-        return ['success' => true];
+        return ['success' => true, 'status' => $status];
     }
 
     public function runStatus(Request $req): array {

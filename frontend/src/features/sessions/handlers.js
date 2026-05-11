@@ -16,8 +16,6 @@ function getCtx() {
     navigate:        (v, ex) => a.router.navigate(v, ex),
     SessionService:  a.services.SessionService,
     apiFetch:        a.services.apiFetch,
-    ComparisonService: a.services.ComparisonService,
-    LoaderService:   a.services.LoaderService,
     t:               (key) => window.i18n?.t(key) ?? key,
   };
 }
@@ -148,34 +146,33 @@ function registerSessionsHandlers() {
           premortem_summary:   data.premortem_summary ?? null,
           jury_adversarial:    data.jury_adversarial || null,
         };
-        try {
-          const vd = await SessionService.getVerdict(sessionId);
-          if (state.sessionHistory) state.sessionHistory.verdict = vd.verdict;
-        } catch (_) {}
-        try {
-          const ap = await SessionService.getActionPlan(sessionId);
-          if (state.sessionHistory) state.sessionHistory.actionPlan = ap.action_plan || null;
-        } catch (_) {}
-        try {
-          const ds = await SessionService.getDecisionSummary(sessionId);
+        const [verdictRes, actionPlanRes, summaryRes] = await Promise.allSettled([
+          SessionService.getVerdict(sessionId),
+          SessionService.getActionPlan(sessionId),
+          SessionService.getDecisionSummary(sessionId),
+        ]);
+        if (state.sessionHistory && verdictRes.status === 'fulfilled') {
+          state.sessionHistory.verdict = verdictRes.value?.verdict;
+        }
+        if (state.sessionHistory && actionPlanRes.status === 'fulfilled') {
+          state.sessionHistory.actionPlan = actionPlanRes.value?.action_plan || null;
+        }
+        if (state.sessionHistory && summaryRes.status === 'fulfilled') {
+          const ds = summaryRes.value;
           const sum = ds?.decision_summary ?? null;
-          if (state.sessionHistory) {
-            state.sessionHistory.decisionSummary  = sum;
-            state.sessionHistory.panelHighlights = Array.isArray(sum?.highlights) ? sum.highlights : [];
-            state.sessionHistory.context_quality = ds?.context_quality ?? state.sessionHistory.context_quality;
-            state.sessionHistory.reliability_cap = ds?.reliability_cap ?? state.sessionHistory.reliability_cap;
-            state.sessionHistory.adjusted_decision = ds?.adjusted_decision ?? state.sessionHistory.adjusted_decision;
-            state.sessionHistory.false_consensus_risk = ds?.false_consensus_risk ?? state.sessionHistory.false_consensus_risk;
-            state.sessionHistory.reliability_warnings = ds?.reliability_warnings ?? state.sessionHistory.reliability_warnings;
-            state.sessionHistory.decision_reliability_summary = ds?.decision_reliability_summary ?? state.sessionHistory.decision_reliability_summary;
-            state.sessionHistory.context_clarification = ds?.context_clarification ?? state.sessionHistory.context_clarification;
-            state.sessionHistory.decision_outcome = ds?.decision_outcome ?? state.sessionHistory.decision_outcome;
-          }
-        } catch (_) {
-          if (state.sessionHistory) {
-            state.sessionHistory.decisionSummary  = null;
-            state.sessionHistory.panelHighlights = [];
-          }
+          state.sessionHistory.decisionSummary = sum;
+          state.sessionHistory.panelHighlights = Array.isArray(sum?.highlights) ? sum.highlights : [];
+          state.sessionHistory.context_quality = ds?.context_quality ?? state.sessionHistory.context_quality;
+          state.sessionHistory.reliability_cap = ds?.reliability_cap ?? state.sessionHistory.reliability_cap;
+          state.sessionHistory.adjusted_decision = ds?.adjusted_decision ?? state.sessionHistory.adjusted_decision;
+          state.sessionHistory.false_consensus_risk = ds?.false_consensus_risk ?? state.sessionHistory.false_consensus_risk;
+          state.sessionHistory.reliability_warnings = ds?.reliability_warnings ?? state.sessionHistory.reliability_warnings;
+          state.sessionHistory.decision_reliability_summary = ds?.decision_reliability_summary ?? state.sessionHistory.decision_reliability_summary;
+          state.sessionHistory.context_clarification = ds?.context_clarification ?? state.sessionHistory.context_clarification;
+          state.sessionHistory.decision_outcome = ds?.decision_outcome ?? state.sessionHistory.decision_outcome;
+        } else if (state.sessionHistory) {
+          state.sessionHistory.decisionSummary  = null;
+          state.sessionHistory.panelHighlights = [];
         }
         navigate('session-history');
       }
@@ -280,12 +277,6 @@ function registerSessionsHandlers() {
       state.error = 'Export failed: ' + err.message;
       render();
     }
-  });
-
-  registerAction('set-session-filter', ({ element }) => {
-    const { state, render } = getCtx();
-    state.sessionFilter = element.dataset.filter;
-    render();
   });
 
   registerAction('toggle-compare-session', ({ element }) => {
