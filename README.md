@@ -153,6 +153,14 @@ Base URL  : http://localhost:11434
 Model     : (modèle installé localement, ex. qwen2.5:14b)
 ```
 
+### Modèles Ollama supportés et testés
+
+- **Supportés (backend/provider routing)** : tout modèle servi par Ollama et sélectionné via `default_model` / override session.
+- **Testés dans ce projet** :
+  - `qwen2.5:14b`
+  - `gemma4:26b`
+- **Note** : le modèle effectivement utilisé dépend du routing et des overrides de session/agent. Vérifiez le panneau **LLM utilisés** après un run.
+
 ### LM Studio (exemple)
 
 ```

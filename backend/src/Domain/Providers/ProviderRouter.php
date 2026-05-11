@@ -67,7 +67,12 @@ class ProviderRouter {
                 if (!$providerData) {
                     throw new \RuntimeException('Override provider not eligible or not found: ' . $requestedProviderId);
                 }
-                $model = $this->resolveModel($requestedModel ?? $explicitModel, $agent, $providerData);
+                $model = $this->resolveModel(
+                    $requestedModel ?? $explicitModel,
+                    $agent,
+                    $providerData,
+                    false
+                );
                 $provider = ProviderFactory::create($providerData);
 
                 $start = (int)floor(microtime(true) * 1000);
@@ -135,7 +140,7 @@ class ProviderRouter {
             if (!$providerData) {
                 throw new \RuntimeException('Selected provider is not enabled or does not exist.');
             }
-            $model = $this->resolveModel($explicitModel, $agent, $providerData);
+            $model = $this->resolveModel($explicitModel, $agent, $providerData, false);
             $provider = ProviderFactory::create($providerData);
 
             $start = (int)floor(microtime(true) * 1000);
@@ -207,7 +212,8 @@ class ProviderRouter {
             $start = (int)floor(microtime(true) * 1000);
             $model = '';
             try {
-                $model = $this->resolveModel($explicitModel, $agent, $providerData);
+                $preferAgentModel = ($routingMode === 'agent-default');
+                $model = $this->resolveModel($explicitModel, $agent, $providerData, $preferAgentModel);
                 $provider = ProviderFactory::create($providerData);
 
                 $this->logger->logLlmRequest([
@@ -294,8 +300,13 @@ class ProviderRouter {
         return $sum;
     }
 
-    private function resolveModel(?string $explicitModel, ?Agent $agent, array $providerData): string {
-        $model = $explicitModel ?: ($agent?->model ?: (string)($providerData['default_model'] ?? ''));
+    private function resolveModel(?string $explicitModel, ?Agent $agent, array $providerData, bool $preferAgentModel = true): string {
+        $providerDefault = (string)($providerData['default_model'] ?? '');
+        $agentModel = (string)($agent?->model ?? '');
+        $model = $explicitModel
+            ?: ($preferAgentModel
+                ? ($agentModel ?: $providerDefault)
+                : ($providerDefault ?: $agentModel));
         $model = trim((string)$model);
         if ($model === '') {
             throw new \RuntimeException('No model configured for this call.');

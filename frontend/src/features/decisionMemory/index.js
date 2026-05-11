@@ -4,7 +4,7 @@
 
 import { deriveChains, deriveEventsForChain, summarizeChainChange, groupTimeline, toDateKey } from './timeline.js';
 import { getPlaybookById } from '../../core/playbooks.js';
-import { renderPendingConfirmation } from '../../ui/components.js';
+import { renderPendingConfirmation, renderDecisionOutcomeCard, renderDecisionBrief } from '../../ui/components.js';
 import {
   renderPerspectiveSnapshot,
   renderPerspectiveSegmentedControl,
@@ -617,6 +617,92 @@ function renderDecisionMemory() {
   const searchQ = String(ui.searchQ || '').trim();
   const semanticEnabled = state.semanticMemoryEnabled; // undefined until first call; false when disabled
   const similarState = state.decisionMemorySimilar || {};
+  const parseSessionResult = (raw) => {
+    if (!raw) return null;
+    if (typeof raw === 'object') return raw;
+    if (typeof raw !== 'string') return null;
+    try {
+      return JSON.parse(raw);
+    } catch (_) {
+      return null;
+    }
+  };
+  const renderPastAnalysesFallback = () => {
+    const sessions = Array.isArray(state.sessions) ? state.sessions : [];
+    const sorted = sessions.slice().sort((a, b) => String(b?.created_at || '').localeCompare(String(a?.created_at || '')));
+    const cards = [];
+    for (const session of sorted) {
+      const sid = String(session?.id || '').trim();
+      if (!sid) continue;
+      const payload = parseSessionResult(session?.result);
+      const outcome = session?.decision_outcome || payload?.decision_outcome || payload?.decision_brief?.decision_outcome || null;
+      const brief = payload?.decision_brief || null;
+      if (!outcome && !brief) continue;
+      const ps = (outcome && typeof outcome.persistence_safety === 'object') ? outcome.persistence_safety : {};
+      const autoPersistSafe = ps?.safe_to_persist === true;
+      const needsConfirm = ps?.requires_user_confirmation === true;
+      const missingCritical = Array.isArray(ps?.missing_critical_fields) ? ps.missing_critical_fields : [];
+      const persistReason = String(ps?.reason || '').trim();
+      const canConfirmPersist = needsConfirm && missingCritical.length === 0;
+      const miniStatus = String(outcome?.status || brief?.decision || '').trim() || '—';
+      const miniConfidence = String(outcome?.confidence || brief?.confidence || '').trim() || '—';
+      const miniRisk = String(outcome?.execution_risk_level || '').trim() || '—';
+      const miniSummary = String(outcome?.decision_summary || brief?.why || brief?.nextStep || brief?.next_step || '').trim() || '—';
+      cards.push(`
+        <article class="card" style="padding:14px 16px;margin-bottom:10px;">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <span class="badge badge-info">${escHtml(String(session?.mode || 'session'))}</span>
+            <span style="margin-left:auto;font-size:11px;color:var(--text-muted);">${escHtml(formatDate(session?.created_at || ''))}</span>
+          </div>
+          <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <span class="badge ${badgeForStatus(String(outcome?.status || '').trim())}">${escHtml(miniStatus)}</span>
+            <span class="badge ${badgeForConfidence(String(outcome?.confidence || '').trim())}">${escHtml(miniConfidence)}</span>
+            <span class="badge badge-muted">${escHtml(t('decisionMemory.mini.risk'))}: ${escHtml(miniRisk)}</span>
+          </div>
+          <div style="margin-top:8px;font-size:13px;color:var(--text-secondary);line-height:1.5;">
+            <strong>${escHtml(t('decisionMemory.mini.summary'))}:</strong> ${escHtml(miniSummary)}
+          </div>
+          ${!autoPersistSafe ? `
+            <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <span class="badge badge-warning">${escHtml(t('decisionMemory.mini.autoPersistNo'))}</span>
+              ${persistReason ? `<span style="font-size:12px;color:var(--text-muted);">${escHtml(persistReason)}</span>` : ''}
+            </div>
+          ` : ''}
+          ${missingCritical.length ? `
+            <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">
+              ${escHtml(t('decisionMemory.mini.persistBlocked'))}: ${escHtml(missingCritical.join(', '))}
+            </div>
+          ` : ''}
+          <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-secondary btn-sm" data-action="open-session" data-session-id="${escHtml(sid)}" data-mode="session-history">${escHtml(t('decisionMemory.openSession'))}</button>
+            ${canConfirmPersist ? `
+              <button class="btn btn-primary btn-sm"
+                data-action="confirm-decision-memory"
+                data-session-id="${escHtml(sid)}"
+                ${state.memoryConfirmingSessionId === sid ? 'disabled' : ''}>
+                ${state.memoryConfirmingSessionId === sid ? '<span class="spinner"></span>' : '✅'} ${escHtml(t('decisionMemory.mini.confirmPersist'))}
+              </button>
+            ` : ''}
+          </div>
+          <details style="margin-top:10px;">
+            <summary style="cursor:pointer;color:var(--text-secondary);font-weight:600;">${escHtml(t('decisionMemory.mini.expand'))}</summary>
+            <div style="margin-top:10px;">
+              ${outcome ? renderDecisionOutcomeCard(outcome, { uiMode: 'basic', sessionId: sid }) : ''}
+              ${brief ? `<div style="margin-top:10px;">${renderDecisionBrief(brief, { uiMode: 'basic' })}</div>` : ''}
+            </div>
+          </details>
+        </article>
+      `);
+      if (cards.length >= 20) break;
+    }
+    if (!cards.length) return '';
+    return `
+      <div class="card" style="padding:14px 16px;margin-top:14px;">
+        <div style="font-weight:700;font-size:14px;margin-bottom:8px;">${escHtml(t('decisionMemory.pastAnalysesFallback'))}</div>
+        ${cards.join('')}
+      </div>
+    `;
+  };
 
   const topBar = `
     <div class="page-header" style="flex-direction:row;justify-content:space-between;align-items:flex-start;gap:12px;">
@@ -697,11 +783,13 @@ function renderDecisionMemory() {
   })();
 
   if (memories.length === 0) {
+    const fallback = renderPastAnalysesFallback();
     return topBar + explorerBar + searchBar + `
       <div class="empty-state">
         <div class="empty-state-icon">🗂️</div>
         <div class="empty-state-text">${escHtml(t('decisionMemory.empty'))}</div>
       </div>
+      ${fallback}
     `;
   }
 

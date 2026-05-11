@@ -11,6 +11,8 @@ import {
   renderEmptyState,
   renderAlert,
   renderByokProviderConnectModal,
+  renderDecisionOutcomeCard,
+  renderDecisionBrief,
 } from '../../ui/components.js';
 import { maskProviderKey } from '../../core/store.js';
 import { getAvailableProviders, formatRoutingOptionLabel } from '../../core/providerRouting.js';
@@ -97,6 +99,13 @@ const ADMIN_SIMPLE_HUB_CARDS = [
     actionKey: 'admin.hub.action.open',
   },
   {
+    nav: 'memories',
+    icon: '🧠',
+    titleKey: 'admin.memories',
+    descKey: 'admin.hub.short.memories',
+    actionKey: 'admin.hub.action.open',
+  },
+  {
     nav: 'sessions',
     icon: '📁',
     titleKey: 'sessions.title',
@@ -124,6 +133,13 @@ const ADMIN_RUN_ANALYZE_ITEMS = [
 ];
 
 const ADMIN_ADVANCED_ITEMS = [
+  {
+    nav: 'memories',
+    titleKey: 'admin.memories',
+    icon: '🧠',
+    descKey: 'admin.hub.short.memories',
+    actionKey: 'admin.hub.action.open',
+  },
   {
     nav: 'persona-builder',
     titleKey: 'admin.personaBuilder',
@@ -1578,6 +1594,281 @@ function renderProviders() {
   `;
 }
 
+function renderMemories() {
+  const { state, escHtml, t } = getCtx();
+  const formatDate = window.DecisionArena?.utils?.formatDate || ((x) => String(x || ''));
+  const pkg = state.decisionMemory || { loading: false, error: null, memories: null };
+  const list = Array.isArray(pkg.memories)
+    ? pkg.memories.slice().sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+    : [];
+  const selectedIds = Array.isArray(state.selectedMemoryIds) ? state.selectedMemoryIds.map(String) : [];
+  const selectedSet = new Set(selectedIds);
+  const sessionsById = new Map((Array.isArray(state.sessions) ? state.sessions : []).map((s) => [String(s?.id || ''), s]));
+
+  const badgeStatus = (status) => {
+    const s = String(status || '');
+    if (s === 'proceed') return 'badge-success';
+    if (s === 'proceed_with_constraints' || s === 'validate_first' || s === 'pivot') return 'badge-warning';
+    if (s === 'kill') return 'badge-danger';
+    return 'badge-muted';
+  };
+  const badgeConfidence = (confidence) => {
+    const c = String(confidence || '').toLowerCase();
+    if (c === 'strong') return 'badge-success';
+    if (c === 'moderate') return 'badge-warning';
+    if (c === 'weak') return 'badge-danger';
+    return 'badge-muted';
+  };
+  const badgeLifecycle = (memoryState) => {
+    const s = String(memoryState || 'active').toLowerCase();
+    if (s === 'active') return 'badge-success';
+    if (s === 'superseded' || s === 'stale') return 'badge-warning';
+    if (s === 'invalidated') return 'badge-danger';
+    if (s === 'archived') return 'badge-muted';
+    return 'badge-default';
+  };
+  const parseJson = (raw) => {
+    if (!raw) return null;
+    if (typeof raw === 'object') return raw;
+    if (typeof raw !== 'string') return null;
+    try {
+      return JSON.parse(raw);
+    } catch (_) {
+      return null;
+    }
+  };
+  const parseSessionResultPayload = (resultRaw) => {
+    if (!resultRaw) return null;
+    if (typeof resultRaw === 'object') return resultRaw;
+    if (typeof resultRaw !== 'string') return null;
+    try {
+      return JSON.parse(resultRaw);
+    } catch (_) {
+      return null;
+    }
+  };
+  const extractOutcomeForMemory = (memory) => {
+    const sid = String(memory?.session_id || '');
+    const session = sessionsById.get(sid);
+    if (!session) return null;
+    if (session.decision_outcome && typeof session.decision_outcome === 'object') return session.decision_outcome;
+    const parsed = parseJson(session.result);
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (parsed.decision_outcome && typeof parsed.decision_outcome === 'object') return parsed.decision_outcome;
+    if (parsed.decision_brief?.decision_outcome && typeof parsed.decision_brief.decision_outcome === 'object') return parsed.decision_brief.decision_outcome;
+    return null;
+  };
+  const renderOutcomeMini = (outcome) => {
+    if (!outcome || typeof outcome !== 'object') {
+      return `<div style="margin-top:6px;font-size:11px;color:var(--text-muted);">—</div>`;
+    }
+    const status = String(outcome.status || '').trim().toLowerCase() || 'validate_first';
+    const confidence = String(outcome.confidence || '').trim().toLowerCase() || 'weak';
+    const risk = String(outcome.execution_risk_level || '').trim().toLowerCase() || 'unknown';
+    const summary = String(outcome.decision_summary || '').trim() || 'Outcome incomplet';
+    const nextActions = Array.isArray(outcome.required_next_actions) ? outcome.required_next_actions.filter(Boolean).slice(0, 2) : [];
+    const unknowns = Array.isArray(outcome.blocking_unknowns) ? outcome.blocking_unknowns.filter(Boolean).slice(0, 2) : [];
+    return `
+      <div style="margin-top:8px;padding:8px 10px;border:1px solid rgba(16,185,129,0.18);border-radius:8px;background:rgba(16,185,129,0.05);font-size:12px;line-height:1.4;">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+          <span class="badge ${badgeStatus(status)}">${escHtml(status.replace(/_/g, ' '))}</span>
+          <span class="badge ${badgeConfidence(confidence)}">${escHtml(confidence)}</span>
+          <span class="badge badge-warning">${escHtml(`risk: ${risk}`)}</span>
+        </div>
+        <div style="font-size:12px;color:var(--text-primary);margin-bottom:6px;">${escHtml(summary)}</div>
+        ${nextActions.length ? `<div style="font-size:11px;color:var(--text-secondary);"><strong>Next:</strong> ${escHtml(nextActions.join(' | '))}</div>` : ''}
+        ${unknowns.length ? `<div style="font-size:11px;color:var(--text-secondary);margin-top:4px;"><strong>Unknowns:</strong> ${escHtml(unknowns.join(' | '))}</div>` : ''}
+      </div>
+    `;
+  };
+  const contextByMemoryId = (() => {
+    const out = new Map();
+    const contexts = Array.isArray(state.decisionMemoryNav?.contexts) ? state.decisionMemoryNav.contexts : [];
+    contexts.forEach((ctx) => {
+      const label = String(ctx?.title || ctx?.context_id || '').trim();
+      if (!label) return;
+      const ids = Array.isArray(ctx?.linked_memory_ids) ? ctx.linked_memory_ids : [];
+      ids.forEach((id) => {
+        const key = String(id || '').trim();
+        if (!key) return;
+        if (!out.has(key)) out.set(key, []);
+        out.get(key).push(label);
+      });
+    });
+    return out;
+  })();
+  const contextTitleById = (() => {
+    const out = new Map();
+    const contexts = Array.isArray(state.decisionMemoryNav?.contexts) ? state.decisionMemoryNav.contexts : [];
+    contexts.forEach((ctx) => {
+      const id = String(ctx?.context_id || '').trim();
+      const title = String(ctx?.title || id || '').trim();
+      if (id && title) out.set(id, title);
+    });
+    return out;
+  })();
+
+  const pastAnalysisCards = (() => {
+    const sessions = Array.isArray(state.sessions) ? state.sessions : [];
+    const sorted = sessions.slice().sort((a, b) => String(b?.created_at || '').localeCompare(String(a?.created_at || '')));
+    const cards = [];
+    for (const session of sorted.slice(0, 80)) {
+      const payload = parseSessionResultPayload(session?.result);
+      const outcome = session?.decision_outcome || payload?.decision_outcome || payload?.decision_brief?.decision_outcome || null;
+      const brief = payload?.decision_brief || null;
+      if (!outcome && !brief) continue;
+      const sid = String(session?.id || '').trim();
+      const mem = list.find((x) => String(x?.session_id || '').trim() === sid) || null;
+      const linkedCtx = String(session?.strategic_context_id || '').trim();
+      const linkedCtxTitle = linkedCtx ? (contextTitleById.get(linkedCtx) || linkedCtx) : '';
+      cards.push(`
+        <article class="card" style="padding:14px 16px;margin-bottom:12px;">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+            <span class="badge badge-info">${escHtml(String(session?.mode || 'session'))}</span>
+            ${mem ? `<span class="badge badge-success">${escHtml(t('admin.memories.linkedMemory'))}</span>` : `<span class="badge badge-muted">${escHtml(t('admin.memories.unlinkedMemory'))}</span>`}
+            ${linkedCtxTitle ? `<span class="badge badge-muted">${escHtml(linkedCtxTitle)}</span>` : ''}
+            <span style="margin-left:auto;font-size:11px;color:var(--text-muted);">${escHtml(formatDate(session?.created_at))}</span>
+          </div>
+          ${outcome ? renderDecisionOutcomeCard(outcome, { uiMode: 'basic', sessionId: sid }) : ''}
+          ${brief ? `<div style="margin-top:10px;">${renderDecisionBrief(brief, { uiMode: 'basic' })}</div>` : ''}
+          <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-secondary btn-sm" data-action="open-session" data-session-id="${escHtml(sid)}" data-mode="${escHtml(String(session?.mode || 'chat'))}">
+              ${escHtml(t('decisionMemory.openSession'))}
+            </button>
+            ${mem ? `<button class="btn btn-danger btn-sm" data-action="request-delete-decision-memory" data-memory-id="${escHtml(String(mem.memory_id || ''))}">🗑️ ${escHtml(t('decisionMemory.deleteOne'))}</button>` : ''}
+          </div>
+        </article>
+      `);
+      if (cards.length >= 20) break;
+    }
+    return cards;
+  })();
+
+  const rows = list.slice(0, 200).map((m) => {
+    const id = String(m.memory_id || '');
+    const lifeState = String(m?.decay?.memory_state || m?.memory_state || 'active');
+    const outcome = extractOutcomeForMemory(m);
+    const linkedContexts = contextByMemoryId.get(id) || [];
+    const extraContexts = Math.max(0, linkedContexts.length - 2);
+    const contextCell = linkedContexts.length
+      ? `
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          ${linkedContexts.slice(0, 2).map((label) => `<span class="badge badge-muted">${escHtml(label)}</span>`).join('')}
+          ${extraContexts > 0 ? `<span class="badge badge-info">+${extraContexts}</span>` : ''}
+        </div>
+      `
+      : `<span style="font-size:12px;color:var(--text-muted);">—</span>`;
+    return `
+      <tr>
+        <td>
+          <input
+            type="checkbox"
+            data-action="toggle-memory-selection"
+            data-memory-id="${escHtml(id)}"
+            ${selectedSet.has(id) ? 'checked' : ''}
+            style="accent-color:var(--accent);"
+          >
+        </td>
+        <td style="white-space:nowrap;font-size:11px;color:var(--text-muted);"><code>${escHtml(id.slice(0, 10))}</code></td>
+        <td style="font-size:11px;color:var(--text-muted);">${escHtml(formatDate(m.created_at))}</td>
+        <td><span class="badge badge-info">${escHtml(String(m.playbook_id || '—'))}</span></td>
+        <td><span class="badge ${badgeStatus(m.decision_status)}">${escHtml(String(m.decision_status || '—'))}</span></td>
+        <td><span class="badge ${badgeConfidence(m.confidence)}">${escHtml(String(m.confidence || '—'))}</span></td>
+        <td><span class="badge ${badgeLifecycle(lifeState)}">${escHtml(lifeState || 'active')}</span></td>
+        <td>${contextCell}</td>
+        <td style="max-width:360px;">
+          <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(String(m.decision_summary || '—'))}</div>
+          ${renderOutcomeMini(outcome)}
+        </td>
+        <td style="min-width:280px;">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-start;">
+            <button class="btn btn-secondary btn-sm" data-action="open-session" data-session-id="${escHtml(String(m.session_id || ''))}" data-mode="session-history">${escHtml(t('decisionMemory.openSession'))}</button>
+            <button class="btn btn-secondary btn-sm" data-action="decision-memory-lifecycle" data-memory-id="${escHtml(id)}" data-lifecycle-action="review">${escHtml(t('memoryLifecycle.review'))}</button>
+            ${lifeState === 'archived'
+              ? `<button class="btn btn-secondary btn-sm" data-action="decision-memory-lifecycle" data-memory-id="${escHtml(id)}" data-lifecycle-action="restore">${escHtml(t('memoryLifecycle.restore'))}</button>`
+              : `<button class="btn btn-secondary btn-sm" data-action="decision-memory-lifecycle" data-memory-id="${escHtml(id)}" data-lifecycle-action="archive">${escHtml(t('memoryLifecycle.archive'))}</button>`
+            }
+            <button class="btn btn-secondary btn-sm" data-action="decision-memory-lifecycle" data-memory-id="${escHtml(id)}" data-lifecycle-action="supersede">${escHtml(t('memoryLifecycle.supersede'))}</button>
+            <button class="btn btn-secondary btn-sm" data-action="decision-memory-lifecycle" data-memory-id="${escHtml(id)}" data-lifecycle-action="invalidate">${escHtml(t('memoryLifecycle.invalidate'))}</button>
+            <button class="btn btn-danger btn-sm" data-action="request-delete-decision-memory" data-memory-id="${escHtml(id)}">🗑️</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  return `
+    <div class="page-header">
+      <div class="page-title">${escHtml(t('admin.memories'))}</div>
+      <div class="page-subtitle">${escHtml(t('admin.memories.subtitle'))}</div>
+      <button class="btn btn-secondary btn-sm" style="margin-top:8px;" data-nav="administration">${t('nav.backAdmin')}</button>
+    </div>
+
+    <div class="card" style="padding:14px 16px;margin-bottom:14px;">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button class="btn btn-primary btn-sm" data-action="load-admin-memories-data">${escHtml(t('admin.memories.refresh'))}</button>
+        <button class="btn btn-secondary btn-sm" data-nav="decision-memory">${escHtml(t('admin.memories.openWorkspace'))}</button>
+        <button class="btn btn-secondary btn-sm" data-action="select-all-visible-memories">${escHtml(t('decisionMemory.selectAllVisible'))}</button>
+        <button class="btn btn-secondary btn-sm" data-action="clear-selected-memories" ${selectedIds.length ? '' : 'disabled'}>${escHtml(t('decisionMemory.clearSelection'))}</button>
+        <button class="btn btn-danger btn-sm" data-action="request-delete-selected-memories" ${selectedIds.length ? '' : 'disabled'}>
+          🗑️ ${escHtml(t('decisionMemory.deleteSelected'))}
+        </button>
+        <span style="font-size:12px;color:var(--text-muted);">
+          ${pkg.loading ? `<span class="spinner"></span> ${escHtml(t('loading'))}` : `${list.length} ${escHtml(t('admin.memories.countLabel'))}`}
+        </span>
+        ${selectedIds.length ? `<span class="badge badge-info">${escHtml(t('decisionMemory.selected'))}: ${selectedIds.length}</span>` : ''}
+      </div>
+      ${pkg.error ? `<div class="error-banner" style="margin-top:10px;">⚠️ ${escHtml(pkg.error)}</div>` : ''}
+    </div>
+
+    <div class="card" style="padding:14px 16px;margin-bottom:14px;">
+      <div style="font-weight:700;font-size:14px;margin-bottom:8px;">${escHtml(t('admin.memories.pastAnalyses'))}</div>
+      ${pastAnalysisCards.length
+        ? pastAnalysisCards.join('')
+        : `<div class="empty-state"><div class="empty-state-icon">🧠</div><div class="empty-state-text">${escHtml(t('admin.memories.noPastAnalyses'))}</div></div>`
+      }
+    </div>
+
+    ${!Array.isArray(pkg.memories) ? `
+      <div class="empty-state">
+        <div class="empty-state-icon">🧠</div>
+        <div class="empty-state-text">${escHtml(t('admin.memories.emptyUnloaded'))}</div>
+      </div>
+    ` : list.length === 0 ? `
+      <div class="empty-state">
+        <div class="empty-state-icon">🧠</div>
+        <div class="empty-state-text">${escHtml(t('admin.memories.empty'))}</div>
+      </div>
+    ` : `
+      <div class="card" style="padding:0;">
+        <div class="data-table-wrap" style="overflow-x:auto;overflow-y:hidden;">
+        <table class="data-table" style="min-width:1560px;">
+          <thead>
+            <tr>
+              <th style="width:44px;">
+                <button class="btn btn-secondary btn-sm" data-action="select-all-visible-memories" title="${escHtml(t('decisionMemory.selectAllVisible'))}">✓</button>
+              </th>
+              <th>ID</th>
+              <th>${escHtml(t('logs.col.time'))}</th>
+              <th>Playbook</th>
+              <th>${escHtml(t('decisionMemory.filters.status'))}</th>
+              <th>${escHtml(t('decisionMemory.filters.confidence'))}</th>
+              <th>Lifecycle</th>
+              <th>${escHtml(t('memoryReuse.contextLabel'))}</th>
+              <th>${escHtml(t('memoryReuse.decisionLabel'))}</th>
+              <th>${escHtml(t('admin.memories.actions'))}</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows}
+          </tbody>
+        </table>
+        </div>
+      </div>
+    `}
+  `;
+}
+
 /* ── Logs (admin) ── */
 
 function renderLogs() {
@@ -2369,6 +2660,7 @@ function registerAdminFeature() {
   window.DecisionArena.views.personas        = renderPersonas;
   window.DecisionArena.views.souls           = renderSouls;
   window.DecisionArena.views.providers       = renderProviders;
+  window.DecisionArena.views.memories        = renderMemories;
   window.DecisionArena.views.logs            = renderLogs;
   window.DecisionArena.views.templates       = renderTemplates;
   window.DecisionArena.views['template-maker']  = renderTemplateMaker;

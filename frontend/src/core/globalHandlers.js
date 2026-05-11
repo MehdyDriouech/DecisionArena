@@ -61,6 +61,11 @@ function registerGlobalHandlers() {
     state.error = null;
     window.DecisionArena.render?.();
   });
+  registerAction('clear-toast', () => {
+    const state = window.DecisionArena.store.state;
+    state.toast = null;
+    window.DecisionArena.render?.();
+  });
 
   registerAction('set-language', ({ element }) => {
     const lang = element.dataset.lang;

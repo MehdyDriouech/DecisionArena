@@ -306,7 +306,7 @@ final class DecisionMemoryRepository
             $this->pdo->prepare('UPDATE decision_memories SET superseded_by = NULL WHERE superseded_by = ?')->execute([$memoryId]);
     
             // Supprimer explicitement l’index FTS.
-            $this->pdo->prepare('DELETE FROM decision_memories_fts WHERE memory_id = ?')->execute([$memoryId]);
+            $this->pdo->prepare('DELETE FROM decision_memory_fts WHERE memory_id = ?')->execute([$memoryId]);
     
             $this->pdo->prepare('DELETE FROM decision_memories WHERE memory_id = ?')->execute([$memoryId]);
     

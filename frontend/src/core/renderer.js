@@ -134,6 +134,12 @@ function renderMain() {
       <button data-action="clear-error">${t('error.clear')}</button>
     </div>
   ` : '';
+  const toastBanner = state.toast ? `
+    <div class="success-banner">
+      ✅ ${escHtml(String(state.toast))}
+      <button data-action="clear-toast">${t('error.clear')}</button>
+    </div>
+  ` : '';
 
   const views  = window.DecisionArena.views || {};
   const viewFn = views[state.view] || views.dashboard;
@@ -143,7 +149,7 @@ function renderMain() {
   });
 
   if (!viewFn) {
-    main.innerHTML = errorBanner + `<div class="view-container"><p>View "${escHtml(state.view)}" not found.</p></div>`;
+    main.innerHTML = errorBanner + toastBanner + `<div class="view-container"><p>View "${escHtml(state.view)}" not found.</p></div>`;
     return;
   }
 
@@ -151,9 +157,9 @@ function renderMain() {
   const plainViews      = ['persona-builder', 'persona-maker', 'session-history', 'template-maker', 'launch-assistant', 'session-comparisons', 'session-comparison'];
 
   if (fullHeightViews.includes(state.view) || plainViews.includes(state.view)) {
-    main.innerHTML = errorBanner + viewFn() + confirmationOverlay;
+    main.innerHTML = errorBanner + toastBanner + viewFn() + confirmationOverlay;
   } else {
-    main.innerHTML = `<div class="view-container">${errorBanner}${viewFn()}</div>${confirmationOverlay}`;
+    main.innerHTML = `<div class="view-container">${errorBanner}${toastBanner}${viewFn()}</div>${confirmationOverlay}`;
   }
 
   main.dataset.renderedView = state.view;

@@ -1,5 +1,5 @@
 /* Admin feature — action handlers and change/input listeners for providers, personas, templates */
-import { registerAction, registerChangeListener, registerInputListener, registerSubmit } from '../../core/events.js';
+import { registerAction, registerChangeListener, registerInputListener, registerSubmit, dispatchAction } from '../../core/events.js';
 import { normalizeDecisionDynamics } from '../../utils/decisionDynamics.js';
 import { updateProviderSettings, deleteProviderKey, maskProviderKey } from '../../core/store.js';
 import { withProviderRuntime } from '../../core/providerRuntime.js';
@@ -14,6 +14,7 @@ function getCtx() {
     render:         () => a.render?.(),
     navigate:       (v) => a.router.navigate(v),
     apiFetch:       a.services.apiFetch,
+    LoaderService:  a.services.LoaderService,
     PersonaService: a.services.PersonaService,
     escHtml:        a.utils.escHtml,
     t:              (key) => window.i18n?.t(key) ?? key,
@@ -336,6 +337,21 @@ function mountLocalServerProviderIntoModal(provider) {
 }
 
 function registerAdminHandlers() {
+  registerAction('load-admin-memories-data', async () => {
+    const { state, render, LoaderService } = getCtx();
+    try {
+      await LoaderService.loadSessions();
+    } catch (_) {}
+    try {
+      await dispatchAction('load-decision-memories', {});
+    } catch (err) {
+      state.error = String(err?.message || err);
+      render();
+      return;
+    }
+    render();
+  });
+
   /* ── Persona ──────────────────────────────────────────────────────────── */
   registerAction('show-persona', ({ element }) => {
     const fn = getViews().showPersonaModal;

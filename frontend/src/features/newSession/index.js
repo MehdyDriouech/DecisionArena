@@ -542,17 +542,14 @@ function renderDecisionMemoryReuseSection(ns, { state, escHtml, t }) {
     const linked = contextByMemoryId.get(memoryId) || [];
     const linkedIds = linked.map((ctx) => String(ctx?.context_id || '').trim());
     const hasActive = activeContextId && linkedIds.includes(activeContextId);
-    if (String(memory?.memory_state || '') === 'archived') {
-      return `<span class="badge badge-muted">${escHtml(t('memoryReuse.badge.archived'))}</span>`;
-    }
-    if (String(memory?.memory_state || '') === 'invalidated') {
-      return `<span class="badge badge-danger">${escHtml(t('memoryReuse.badge.deprecated'))}</span>`;
-    }
     if (hasActive) {
       return `<span class="badge badge-success">${escHtml(t('memoryReuse.badge.sameContext'))}</span>`;
     }
     if (linked.length > 0) {
       return `<span class="badge badge-warning">${escHtml(t('memoryReuse.badge.otherContext'))}</span>`;
+    }
+    if (mp.scope === 'current' && activeContextId) {
+      return `<span class="badge badge-success">${escHtml(t('memoryReuse.badge.sameContext'))}</span>`;
     }
     return `<span class="badge badge-muted">${escHtml(t('memoryReuse.badge.unknownContext'))}</span>`;
   };
@@ -601,6 +598,7 @@ function renderDecisionMemoryReuseSection(ns, { state, escHtml, t }) {
       const unresolved = Array.isArray(m.unresolved_risks) ? m.unresolved_risks : [];
       const nextSteps = Array.isArray(m.recommended_next_steps) ? m.recommended_next_steps : [];
       const assumptions = Array.isArray(m.failed_assumptions) ? m.failed_assumptions : [];
+      const decisionSummary = String(m.decision_summary || '').trim() || '—';
       const tags = [
         String(m.playbook_id || ''),
         String(m.decision_status || ''),
@@ -625,7 +623,7 @@ function renderDecisionMemoryReuseSection(ns, { state, escHtml, t }) {
           <div style="margin-top:4px;font-size:13px;color:var(--text-secondary);">${escHtml(statusLabel(m.decision_status))} · ${escHtml(t('memoryReuse.confidenceLabel'))}: ${escHtml(confidenceLabel(m.confidence))}</div>
           <div style="margin-top:2px;font-size:12px;color:var(--text-muted);">${escHtml(t('memoryReuse.contextLabel'))}: ${escHtml(ctxTitle)}</div>
           <div style="margin-top:10px;font-size:13px;line-height:1.5;color:var(--text-secondary);">
-            <strong>${escHtml(t('memoryReuse.decisionLabel'))}</strong><br>${escHtml(String(m.decision_summary || ''))}
+            <strong>${escHtml(t('memoryReuse.decisionLabel'))}</strong><br>${escHtml(decisionSummary)}
           </div>
           <div style="margin-top:10px;font-size:12px;color:var(--text-secondary);">
             <strong>${escHtml(t('memoryReuse.risksLabel'))}</strong>

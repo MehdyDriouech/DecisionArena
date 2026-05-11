@@ -47,7 +47,10 @@ function registerDecisionMemoryHandlers() {
     state.decisionMemory = { loading: true, error: null, memories: state.decisionMemory?.memories ?? null };
     window.DecisionArena.render?.();
     try {
-      const data = await window.DecisionArena.services.DecisionMemoryService.list(250, state.uiMode === 'expert' ? { include_archived: '1' } : {});
+      const [data] = await Promise.all([
+        window.DecisionArena.services.DecisionMemoryService.list(250, state.uiMode === 'expert' ? { include_archived: '1' } : {}),
+        window.DecisionArena.services.LoaderService.loadSessions().catch(() => {}),
+      ]);
       state.decisionMemory = { loading: false, error: null, memories: data.memories || [], links: data.links || [] };
       await refreshDecisionMemoryExplorerNav(state);
     } catch (err) {
@@ -562,6 +565,43 @@ function registerDecisionMemoryHandlers() {
       state.memoryConfirmingSessionId = null;
       window.DecisionArena.render?.();
     }
+  });
+
+  registerAction('attach-session-result-to-active-context', async ({ element }) => {
+    const sessionId = String(element?.dataset?.sessionId || '').trim();
+    if (!sessionId) return;
+    const state = window.DecisionArena.store.state;
+    state.error = null;
+    let contextId = String(state.activeStrategicContextId || state.activeStrategicContext?.context_id || '').trim();
+    if (!contextId) {
+      try {
+        const activeRes = await window.DecisionArena.services.StrategicContextService.getActive();
+        const active = activeRes?.active_context || null;
+        if (active?.context_id) {
+          contextId = String(active.context_id);
+          state.activeStrategicContext = active;
+          state.activeStrategicContextId = contextId;
+        }
+      } catch (_) {}
+    }
+    if (!contextId) {
+      state.error = window.i18n?.t('decisionMemory.attachToContextNoActive') || 'Aucun contexte actif.';
+      window.DecisionArena.render?.();
+      return;
+    }
+    try {
+      await window.DecisionArena.services.StrategicContextService.linkSession(contextId, sessionId);
+      state.toast = window.i18n?.t('decisionMemory.attachToContextSuccess') || 'Résultat attaché au contexte actif.';
+      setTimeout(() => {
+        try {
+          if (state.toast) state.toast = null;
+          window.DecisionArena.render?.();
+        } catch (_) {}
+      }, 2500);
+    } catch (err) {
+      state.error = String(err?.message || err);
+    }
+    window.DecisionArena.render?.();
   });
 
   registerAction('create-decision-memory-link', async ({ element }) => {

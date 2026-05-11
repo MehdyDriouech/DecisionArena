@@ -517,6 +517,7 @@ function renderDecisionOutcomeCard(data, opts = {}) {
   const uiMode = resolveUiMode(opts);
   const isExpert = uiMode === 'expert';
   const sessionId = String(opts.sessionId || opts.session_id || '').trim();
+  const t = (key) => window.i18n?.t(key) ?? key;
   const status = cleanDecisionBriefText(outcome.status || '') || 'validate_first';
   const confidence = (cleanDecisionBriefText(outcome.confidence || '') || 'weak').toLowerCase();
   const risk = cleanDecisionBriefText(outcome.execution_risk_level || '') || 'unknown';
@@ -538,6 +539,19 @@ function renderDecisionOutcomeCard(data, opts = {}) {
   const safeToPersist = persistenceSafety?.safe_to_persist === true;
   const requiresConfirm = persistenceSafety?.requires_user_confirmation === true;
   const derivedFallback = persistenceSafety?.derived_from_fallback === true;
+  const missingCritical = Array.isArray(persistenceSafety?.missing_critical_fields)
+    ? persistenceSafety.missing_critical_fields.map(cleanDecisionBriefText).filter(Boolean)
+    : [];
+  const criticalRequiredTotal = 2;
+  const canPersistFromUi = !!sessionId && (safeToPersist || (requiresConfirm && missingCritical.length === 0));
+  const persistReason = cleanDecisionBriefText(persistenceSafety?.reason || '');
+  const isPersisting = window.DecisionArena?.store?.state?.memoryConfirmingSessionId === sessionId;
+  const statusKey = safeToPersist
+    ? 'decisionMemory.persist.status.persistable'
+    : ((requiresConfirm && missingCritical.length === 0) ? 'decisionMemory.persist.status.confirmRequired' : 'decisionMemory.persist.status.nonPersistable');
+  const statusClass = safeToPersist
+    ? 'badge-success'
+    : ((requiresConfirm && missingCritical.length === 0) ? 'badge-warning' : 'badge-danger');
   const evidenceClaims = Array.isArray(outcome.evidence_claims)
     ? outcome.evidence_claims.filter((claim) => claim && typeof claim === 'object' && cleanDecisionBriefText(claim.claim || ''))
     : [];
@@ -645,6 +659,39 @@ function renderDecisionOutcomeCard(data, opts = {}) {
       ${list(unknowns, 'No blocking unknown listed.')}
     </div>
   </div>
+  ${sessionId ? `
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <span class="badge ${statusClass}">${escHtml(t(statusKey))}</span>
+      <button class="btn btn-primary btn-sm"
+        data-action="confirm-decision-memory"
+        data-session-id="${escHtml(sessionId)}"
+        ${(!canPersistFromUi || isPersisting) ? 'disabled' : ''}>
+        ${isPersisting ? '<span class="spinner"></span>' : '💾'} ${escHtml(t('decisionMemory.persistResultButton'))}
+      </button>
+      ${!canPersistFromUi ? `
+        <button class="btn btn-secondary btn-sm"
+          data-action="attach-session-result-to-active-context"
+          data-session-id="${escHtml(sessionId)}">
+          🧭 ${escHtml(t('decisionMemory.attachToContextButton'))}
+        </button>
+      ` : ''}
+      ${canPersistFromUi ? `<span style="font-size:11px;color:var(--text-muted);">${escHtml(t('decisionMemory.persistResultHint'))}</span>` : ''}
+    </div>
+    ${!canPersistFromUi && missingCritical.length ? `
+      <div style="margin-top:6px;font-size:12px;color:var(--text-muted);">
+        ${escHtml(t('decisionMemory.persistUnavailableUntilCritical'))}
+        <strong>${escHtml(String(missingCritical.length))}/${escHtml(String(criticalRequiredTotal))}</strong>
+      </div>
+    ` : ''}
+  ` : ''}
+  ${sessionId && !canPersistFromUi ? `
+    <div style="margin-top:8px;font-size:12px;color:var(--text-muted);line-height:1.5;">
+      <strong>${escHtml(t('decisionMemory.persistWhyNonPersistable'))}</strong>
+      ${persistReason ? `<div>${escHtml(persistReason)}</div>` : ''}
+      ${missingCritical.length ? `<div>${escHtml(t('decisionMemory.persistMissingFields'))}: ${escHtml(missingCritical.join(', '))}</div>` : ''}
+      ${derivedFallback ? `<div>${escHtml(t('decisionMemory.persistDerivedFallback'))}</div>` : ''}
+    </div>
+  ` : ''}
   ${validationItems.length ? `
     <div class="decision-outcome-section">
       <h4>Validation logic</h4>
@@ -734,19 +781,7 @@ function renderDecisionOutcomeCard(data, opts = {}) {
               : ''}
             ${persistenceSafety.reason ? `<li>reason: ${escHtml(String(persistenceSafety.reason))}</li>` : ''}
           </ul>
-          ${requiresConfirm && sessionId ? `
-            <div style="margin-top:10px;">
-              <button class="btn btn-primary btn-sm"
-                data-action="confirm-decision-memory"
-                data-session-id="${escHtml(sessionId)}"
-                ${window.DecisionArena?.store?.state?.memoryConfirmingSessionId === sessionId ? 'disabled' : ''}>
-                ${window.DecisionArena?.store?.state?.memoryConfirmingSessionId === sessionId ? '<span class="spinner"></span>' : '✅'} Confirmer &amp; persister la mémoire
-              </button>
-              <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">
-                Cette action n&rsquo;enregistre qu&rsquo;un r&eacute;sum&eacute; orient&eacute; d&eacute;cision (pas l&rsquo;historique chat).
-              </div>
-            </div>
-          ` : ''}
+          ${requiresConfirm && sessionId ? `<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">${escHtml(t('decisionMemory.persistAvailableAbove'))}</div>` : ''}
         </div>
       ` : ''}
       ${expertSignalRows.length ? `
