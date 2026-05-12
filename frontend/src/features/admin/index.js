@@ -646,6 +646,20 @@ function renderPersonaSandboxPanel() {
 function renderPersonas() {
   const { state, escHtml, t } = getCtx();
   const personas  = state.personas;
+  const providers = Array.isArray(state.providers) ? state.providers : [];
+  const activeProviders = providers.filter((p) => p.enabled == 1 || p.enabled === true);
+  const disabledById = new Map(
+    providers
+      .filter((p) => !(p.enabled == 1 || p.enabled === true))
+      .map((p) => [String(p.id), p]),
+  );
+  const providerOptsForPersona = (selectedId) => [
+    `<option value="">${escHtml(t('personas.defaultLlm.noProvider'))}</option>`,
+    ...(selectedId && disabledById.has(String(selectedId))
+      ? [`<option value="${escHtml(String(selectedId))}" selected>${escHtml((disabledById.get(String(selectedId))?.name || selectedId) + ' — ' + t('providers.statusDisabled'))}</option>`]
+      : []),
+    ...activeProviders.map((pr) => `<option value="${escHtml(pr.id)}" ${String(selectedId || '') === String(pr.id) ? 'selected' : ''}>${escHtml(pr.name || pr.id)}</option>`),
+  ].join('');
   const allModes  = ['chat', 'decision-room', 'confrontation'];
   const modeLabels = { 'chat': t('personas.modeChat'), 'decision-room': t('personas.modeDR'), 'confrontation': t('personas.modeConfrontation') };
   return `
@@ -687,6 +701,23 @@ function renderPersonas() {
               <div class="persona-dynamics-section" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
                 ${renderDecisionDynamicsEditor(p, { uiMode: state.uiMode, escHtml, t })}
               </div>
+              ${state.uiMode === 'expert' ? `
+              <div class="persona-default-llm-section" data-ui="expert-only" data-persona-llm-card="${pid}" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+                <div style="font-weight:600;font-size:12px;color:var(--text-secondary);margin-bottom:6px;">${escHtml(t('personas.defaultLlm.title'))}</div>
+                <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;line-height:1.45;">${escHtml(t('personas.defaultLlm.help'))}</div>
+                <div class="form-group" style="margin-bottom:8px;">
+                  <label style="font-size:12px;">${escHtml(t('personas.defaultLlm.provider'))}</label>
+                  <select class="input" data-persona-llm-prov style="margin-top:4px;">
+                    ${providerOptsForPersona(p.default_provider || '')}
+                  </select>
+                </div>
+                <div class="form-group" style="margin-bottom:8px;">
+                  <label style="font-size:12px;">${escHtml(t('personas.defaultLlm.model'))}</label>
+                  <input class="input" type="text" data-persona-llm-model style="margin-top:4px;" value="${escHtml(p.default_model || '')}" placeholder="ex: qwen2.5:14b">
+                </div>
+                <button type="button" class="btn btn-secondary btn-sm" data-action="save-persona-default-llm" data-persona-id="${pid}">${escHtml(t('personas.defaultLlm.save'))}</button>
+                <span class="persona-llm-save-status" id="persona-llm-status-${pid}" style="margin-left:8px;font-size:11px;color:var(--text-muted);"></span>
+              </div>` : ''}
             </div>
           `;
         }).join('')}
@@ -1247,6 +1278,10 @@ function sortedLocalServerProviders(providerList) {
 
 function renderProviderItem(provider) {
   const { escHtml, t } = getCtx();
+  const isEnabled = provider.enabled == 1 || provider.enabled === true;
+  const statusClass = isEnabled ? 'badge-success' : 'badge-danger';
+  const statusLabel = isEnabled ? t('providers.statusActive') : t('providers.statusDisabled');
+  const toggleLabel = isEnabled ? t('providers.disable') : t('providers.enable');
   return `
     <div class="provider-item">
       <div class="provider-item-header">
@@ -1257,15 +1292,18 @@ function renderProviderItem(provider) {
             ${provider.priority !== undefined ? `<span class="tag" style="background:rgba(255,255,255,.06);color:var(--text-muted);">P${escHtml(String(provider.priority))}</span>` : ''}
             <span style="font-size:12px;color:var(--text-muted);">${escHtml(provider.base_url || '')}</span>
             ${provider.default_model ? `<span style="font-size:12px;color:var(--text-muted);">/ ${escHtml(provider.default_model)}</span>` : ''}
+            <span class="badge ${statusClass}" style="margin-left:4px;">${escHtml(statusLabel)}</span>
           </div>
         </div>
         <div style="display:flex;gap:8px;flex-shrink:0;">
           <button class="btn btn-secondary btn-sm" data-action="test-provider" data-provider-id="${escHtml(provider.id)}">${t('providers.test')}</button>
           <button class="btn btn-secondary btn-sm" data-action="refresh-provider-models" data-provider-id="${escHtml(provider.id)}">${t('providers.refreshModels')}</button>
           <button class="btn btn-secondary btn-sm" data-action="edit-provider" data-provider-id="${escHtml(provider.id)}">${t('providers.edit')}</button>
+          <button class="btn btn-secondary btn-sm" data-action="toggle-local-provider-enabled" data-provider-id="${escHtml(provider.id)}">${escHtml(toggleLabel)}</button>
           <button class="btn btn-danger btn-sm" data-action="delete-provider" data-provider-id="${escHtml(provider.id)}">${t('providers.delete')}</button>
         </div>
       </div>
+      ${!isEnabled ? `<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">${escHtml(t('providers.disabledHint'))}</div>` : ''}
       <div id="provider-test-result-${escHtml(provider.id)}"></div>
     </div>
   `;
@@ -1448,6 +1486,12 @@ function renderProviderQuickSetupSection() {
 function renderProviderRoutingSection() {
   const { state, escHtml, t } = getCtx();
   const routingCandidates = getAvailableProviders(state);
+  const allProviders = Array.isArray(state.providers) ? state.providers : [];
+  const disabledProviderIds = new Set(
+    allProviders
+      .filter((p) => !(p.enabled == 1 || p.enabled === true))
+      .map((p) => String(p.id)),
+  );
   const emptyHint =
     routingCandidates.length === 0
       ? `<div class="provider-test-result fail" style="margin-bottom:12px;">Aucun fournisseur LLM valide pour le routage (serveur local avec URL, ou cloud avec clé API, priorité entre 0 et 1000000, fournisseur activé).</div>`
@@ -1462,6 +1506,19 @@ function renderProviderRoutingSection() {
 
   const mode = s.routing_mode || 'single-primary';
   const fallback = Array.isArray(s.fallback_provider_ids) ? s.fallback_provider_ids : [];
+  const disabledConfiguredIds = []
+    .concat(
+      s.primary_provider_id ? [String(s.primary_provider_id)] : [],
+      s.preferred_provider_id ? [String(s.preferred_provider_id)] : [],
+      fallback.map((id) => String(id)),
+    )
+    .filter((id, idx, arr) => id && arr.indexOf(id) === idx && disabledProviderIds.has(id));
+  const disabledConfigHint = disabledConfiguredIds.length > 0
+    ? `<div class="provider-test-result fail" style="margin-bottom:12px;">
+        ${escHtml(t('providers.routing.disabledConfiguredWarning'))}
+        <div style="margin-top:6px;font-size:12px;color:var(--text-muted);">${disabledConfiguredIds.map((id) => escHtml(id)).join(', ')}</div>
+      </div>`
+    : '';
 
   const providerOptionsFor = (selectedId) =>
     routingCandidates
@@ -1489,6 +1546,7 @@ function renderProviderRoutingSection() {
       <div class="card-description" style="margin-bottom:10px;">${t('admin.routing.desc')}</div>
       <div class="card admin-provider-routing-card">
         ${emptyHint}
+        ${disabledConfigHint}
         <div class="form-row">
           <div class="form-group" style="flex:1;">
             <label for="pr-routing-mode">${t('providers.routing.mode')}</label>

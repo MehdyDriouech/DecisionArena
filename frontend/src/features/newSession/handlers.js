@@ -11,6 +11,7 @@ import {
 import { ANALYSIS_CATALOG, applyAnalysisFamily } from './analysisCatalog.js';
 import { applyProductPreset } from './productPresets.js';
 import { getPlaybookById, isModeBackedPlaybook, isProductPlaybook } from '../../core/playbooks.js';
+import { fetchNewSessionProviderModels } from './providerModelsCache.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -70,15 +71,32 @@ function _applyCoherentDefaultsForMode(ns) {
     ns.blueTeam = [...blue];
     ns.redTeam = [...red];
     ns.selectedAgents = Array.from(new Set([...ns.blueTeam, ...ns.redTeam]));
+    ns.agentProviders = {};
+    ns.agentProviderDrafts = {};
+    ns.teamProviderDrafts = { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } };
   } else {
     ns.selectedAgents = defaultAgents;
+    ns.agentProviderDrafts = {};
   }
+  ns.teamProviderAssignments = { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } };
   ns.rounds = _defaultRoundsForMode(mode);
+}
+
+function _availableSimpleAgents(mode) {
+  return resolveDefaultPresetPersonas(getAvailablePersonaIdsForMode(mode));
+}
+
+/** Aligne l’état initial avec un changement de mode : agents par défaut si liste vide (hors confrontation). */
+function hydrateNewSessionDefaultAgents(ns) {
+  if (!ns || ns.mode === 'confrontation') return;
+  if ((ns.selectedAgents || []).length > 0) return;
+  const defaults = _availableSimpleAgents(ns.mode);
+  if (defaults.length > 0) ns.selectedAgents = [...defaults];
 }
 
 function resetNewSessionState() {
   const expert = window.DecisionArena?.store?.state?.uiMode === 'expert';
-  return {
+  const out = {
     title: '',
     idea: '',
     mode: expert ? 'chat' : 'stress-test',
@@ -101,12 +119,12 @@ function resetNewSessionState() {
     devilAdvocateEnabled: false,
     devilAdvocateThreshold: 0.65,
     agentProviders: {},
+    agentProviderDrafts: {},
     fastDecisionEnabled: expert,
     facilitationFramework: null,
     presetRationale: null,
-    // LLM Assignment
-    llmAssignmentMode: 'global',
     teamProviderAssignments: { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } },
+    teamProviderDrafts: { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } },
     selectedStarter: null,
     // Collapsed by default to reduce “fourre-tout” on first view.
     starterModelsCollapsed: true,
@@ -116,6 +134,7 @@ function resetNewSessionState() {
     decisionDynamicsPreset: 'balanced',
     confirmLegacyNoActiveStrategicContext: false,
     pendingStrategicContextId: '',
+    llmModelManualOpen: { agents: {}, teams: {} },
     // Decision Memory reuse (manual selection only; no auto injection)
     selectedMemoryIds: [],
     memoryPicker: {
@@ -132,13 +151,11 @@ function resetNewSessionState() {
       previewMemoryId: '',
     },
   };
+  hydrateNewSessionDefaultAgents(out);
+  return out;
 }
 
 let _contextCheckTimer = null;
-
-function _availableSimpleAgents(mode) {
-  return resolveDefaultPresetPersonas(getAvailablePersonaIdsForMode(mode));
-}
 
 function _applySimpleLaunchDefaults(ns) {
   if (ns.selectedPlaybookId && getPlaybookById(ns.selectedPlaybookId)) {
@@ -187,9 +204,10 @@ function applyDecisionPlaybook(playbookId) {
     fastDecisionEnabled: false,
     forceDisagreement: mode === 'quick-decision' ? !!ns.forceDisagreement : true,
     rounds: mode === 'quick-decision' ? 1 : (Number.isFinite(Number(ns.rounds)) ? Number(ns.rounds) : 3),
-    llmAssignmentMode: 'global',
     agentProviders: {},
+    agentProviderDrafts: {},
     teamProviderAssignments: { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } },
+    teamProviderDrafts: { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } },
   };
 
   if (mode === 'confrontation') {
@@ -835,6 +853,9 @@ function registerNewSessionHandlers() {
       render();
     } finally {
       state.isLoading = false;
+      // Important: the target view may have rendered while loading=true.
+      // Force a final render so Chat input/button state is refreshed.
+      render();
     }
   });
 
@@ -1017,6 +1038,10 @@ function _applyTemplate(state, template) {
   ns.selectedScenarioId = null;
   if (ns.mode === 'decision-room') ns.fastDecisionEnabled = false;
   ns.facilitationFramework = template.id === 'six-thinking-hats' ? 'six-thinking-hats' : null;
+  ns.agentProviders = {};
+  ns.agentProviderDrafts = {};
+  ns.teamProviderAssignments = { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } };
+  ns.teamProviderDrafts = { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } };
 }
 
 /** Apply a scenario pack's prefill to newSession state — does NOT create a session. */
@@ -1044,6 +1069,10 @@ function _applyScenarioPack(state, pack) {
   ns.selectedTemplateId = null;
   ns.facilitationFramework = null;
   if (ns.mode === 'decision-room') ns.fastDecisionEnabled = false;
+  ns.agentProviders = {};
+  ns.agentProviderDrafts = {};
+  ns.teamProviderAssignments = { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } };
+  ns.teamProviderDrafts = { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } };
 }
 
 function registerScenarioHandlers() {
@@ -1128,89 +1157,325 @@ function registerScenarioHandlers() {
   });
 
   /* ══════════════════════════════════════════════════════════════════════
-     LLM Assignment — mode toggle + team + per-agent
+     LLM routing overrides — team (confrontation) + per-agent
   ═══════════════════════════════════════════════════════════════════════ */
-  registerAction('set-llm-assignment-mode', ({ element }) => {
+  const ensureDraftMaps = (ns) => {
+    ns.agentProviderDrafts = ns.agentProviderDrafts || {};
+    ns.teamProviderDrafts = ns.teamProviderDrafts || { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } };
+    ns.teamProviderDrafts.blue = ns.teamProviderDrafts.blue || { provider_id: '', model: '' };
+    ns.teamProviderDrafts.red = ns.teamProviderDrafts.red || { provider_id: '', model: '' };
+    ns.agentProviders = ns.agentProviders || {};
+    ns.teamProviderAssignments = ns.teamProviderAssignments || { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } };
+    ns.teamProviderAssignments.blue = ns.teamProviderAssignments.blue || { provider_id: '', model: '' };
+    ns.teamProviderAssignments.red = ns.teamProviderAssignments.red || { provider_id: '', model: '' };
+  };
+
+  const normalizeProviderRow = (row) => {
+    const pid = String(row?.provider_id || '').trim();
+    const model = String(row?.model || '').trim();
+    if (!pid) return null;
+    return model ? { provider_id: pid, model } : { provider_id: pid };
+  };
+
+  /** Matérialise les providers Blue/Red sur chaque agent (payload explicite + évite blocage si agent_providers résiduels). */
+  registerAction('force-team-llm-to-agents', () => {
+    const { state, render, t } = getCtx();
+    const ns = state.newSession;
+    if (ns.mode !== 'confrontation') return;
+    ensureDraftMaps(ns);
+    const tpa = ns.teamProviderAssignments || {};
+    const bluePid = String(tpa.blue?.provider_id || '').trim();
+    const redPid = String(tpa.red?.provider_id || '').trim();
+    if (!bluePid && !redPid) {
+      state.error = t('newSession.llmTeamRouting.forceNothing');
+      render();
+      return;
+    }
+    state.error = null;
+    const roster = new Set([...(ns.blueTeam || []), ...(ns.redTeam || [])]);
+    ns.agentProviders = { ...(ns.agentProviders || {}) };
+    for (const id of roster) {
+      delete ns.agentProviders[id];
+    }
+    const bm = String(tpa.blue?.model || '').trim();
+    const rm = String(tpa.red?.model || '').trim();
+    if (bluePid) {
+      for (const id of ns.blueTeam || []) {
+        ns.agentProviders[id] = bm ? { provider_id: bluePid, model: bm } : { provider_id: bluePid };
+      }
+    }
+    if (redPid) {
+      for (const id of ns.redTeam || []) {
+        ns.agentProviders[id] = rm ? { provider_id: redPid, model: rm } : { provider_id: redPid };
+      }
+    }
+    render();
+  });
+
+  registerAction('apply-team-llm-override', ({ element }) => {
+    const { state, render, t } = getCtx();
+    const ns = state.newSession;
+    const team = String(element?.dataset?.team || '').trim();
+    if (!team || (team !== 'blue' && team !== 'red')) return;
+    ensureDraftMaps(ns);
+    const normalized = normalizeProviderRow(ns.teamProviderDrafts[team]);
+    if (!normalized) {
+      state.error = t('newSession.llmTeamRouting.applyMissingProvider');
+      render();
+      return;
+    }
+    state.error = null;
+    ns.teamProviderAssignments[team] = normalized;
+    render();
+  });
+
+  registerAction('reset-team-llm-override', ({ element }) => {
     const { state, render } = getCtx();
-    const mode = element.dataset.mode;
-    if (!mode) return;
-    state.newSession.llmAssignmentMode = mode;
+    const ns = state.newSession;
+    const team = String(element?.dataset?.team || '').trim();
+    if (!team || (team !== 'blue' && team !== 'red')) return;
+    ensureDraftMaps(ns);
+    ns.teamProviderAssignments[team] = { provider_id: '', model: '' };
+    ns.teamProviderDrafts[team] = { provider_id: '', model: '' };
+    state.newSession.llmModelManualOpen = state.newSession.llmModelManualOpen || { agents: {}, teams: {} };
+    delete state.newSession.llmModelManualOpen.teams[team];
     render();
   });
 
   registerAction('set-team-provider', ({ element }) => {
-    const { state } = getCtx();
+    const { state, render } = getCtx();
     const team = element.dataset.team;
     if (!team) return;
-    state.newSession.teamProviderAssignments = state.newSession.teamProviderAssignments || {};
-    state.newSession.teamProviderAssignments[team] = state.newSession.teamProviderAssignments[team] || {};
-    state.newSession.teamProviderAssignments[team].provider_id = element.value;
+    const ns = state.newSession;
+    ensureDraftMaps(ns);
+    state.newSession.llmModelManualOpen = state.newSession.llmModelManualOpen || { agents: {}, teams: {} };
+    const pid = String(element.value || '').trim();
+    ns.teamProviderDrafts[team] = ns.teamProviderDrafts[team] || {};
+    ns.teamProviderDrafts[team].provider_id = pid;
+    if (!pid) {
+      ns.teamProviderDrafts[team].model = '';
+      delete state.newSession.llmModelManualOpen.teams[team];
+    } else {
+      delete state.newSession.llmModelManualOpen.teams[team];
+      void fetchNewSessionProviderModels(pid);
+    }
+    render();
   });
 
   registerAction('set-team-model', ({ element }) => {
-    const { state } = getCtx();
+    const { state, render } = getCtx();
     const team = element.dataset.team;
     if (!team) return;
-    state.newSession.teamProviderAssignments = state.newSession.teamProviderAssignments || {};
-    state.newSession.teamProviderAssignments[team] = state.newSession.teamProviderAssignments[team] || {};
-    state.newSession.teamProviderAssignments[team].model = element.value;
+    const ns = state.newSession;
+    ensureDraftMaps(ns);
+    ns.teamProviderDrafts[team] = ns.teamProviderDrafts[team] || {};
+    ns.teamProviderDrafts[team].model = element.value;
+    render();
   });
 
   registerAction('set-agent-provider', ({ element }) => {
-    const { state } = getCtx();
+    const { state, render } = getCtx();
     const agentId = element.dataset.agentId;
     if (!agentId) return;
-    state.newSession.agentProviders = state.newSession.agentProviders || {};
-    state.newSession.agentProviders[agentId] = state.newSession.agentProviders[agentId] || {};
-    state.newSession.agentProviders[agentId].provider_id = element.value;
+    const ns = state.newSession;
+    ensureDraftMaps(ns);
+    state.newSession.llmModelManualOpen = state.newSession.llmModelManualOpen || { agents: {}, teams: {} };
+    const pid = String(element.value || '').trim();
+    ns.agentProviderDrafts[agentId] = ns.agentProviderDrafts[agentId] || {};
+    if (!pid) {
+      ns.agentProviderDrafts[agentId] = { provider_id: '', model: '' };
+      delete state.newSession.llmModelManualOpen.agents[agentId];
+    } else {
+      ns.agentProviderDrafts[agentId].provider_id = pid;
+      delete state.newSession.llmModelManualOpen.agents[agentId];
+      void fetchNewSessionProviderModels(pid);
+    }
+    render();
+  });
+
+  registerAction('set-agent-model-from-list', ({ element }) => {
+    const { state, render } = getCtx();
+    const agentId = element.dataset.agentId;
+    if (!agentId) return;
+    const v = element.value;
+    const ns = state.newSession;
+    ensureDraftMaps(ns);
+    state.newSession.llmModelManualOpen = state.newSession.llmModelManualOpen || { agents: {}, teams: {} };
+    ns.agentProviderDrafts[agentId] = ns.agentProviderDrafts[agentId] || {};
+    if (v === '__manual__') {
+      state.newSession.llmModelManualOpen.agents[agentId] = true;
+      render();
+      return;
+    }
+    state.newSession.llmModelManualOpen.agents[agentId] = false;
+    if (!v) {
+      delete ns.agentProviderDrafts[agentId].model;
+    } else {
+      ns.agentProviderDrafts[agentId].model = v;
+    }
+    render();
+  });
+
+  registerAction('set-team-model-from-list', ({ element }) => {
+    const { state, render } = getCtx();
+    const team = element.dataset.team;
+    if (!team) return;
+    const v = element.value;
+    const ns = state.newSession;
+    ensureDraftMaps(ns);
+    state.newSession.llmModelManualOpen = state.newSession.llmModelManualOpen || { agents: {}, teams: {} };
+    ns.teamProviderDrafts[team] = ns.teamProviderDrafts[team] || {};
+    if (v === '__manual__') {
+      state.newSession.llmModelManualOpen.teams[team] = true;
+      render();
+      return;
+    }
+    state.newSession.llmModelManualOpen.teams[team] = false;
+    if (!v) {
+      ns.teamProviderDrafts[team].model = '';
+    } else {
+      ns.teamProviderDrafts[team].model = v;
+    }
+    render();
+  });
+
+  registerAction('set-agent-model-manual-off', ({ element }) => {
+    const { state, render } = getCtx();
+    const agentId = element.dataset.agentId;
+    if (!agentId) return;
+    const ns = state.newSession;
+    ensureDraftMaps(ns);
+    state.newSession.llmModelManualOpen = state.newSession.llmModelManualOpen || { agents: {}, teams: {} };
+    delete state.newSession.llmModelManualOpen.agents[agentId];
+    const pid = String(ns.agentProviderDrafts?.[agentId]?.provider_id || '').trim();
+    const cache = (state.providerModelsCache || {})[pid];
+    const ids = new Set((cache?.models || []).map((m) => String(m.id || m.name || '').trim()).filter(Boolean));
+    const cur = String(ns.agentProviderDrafts?.[agentId]?.model || '').trim();
+    if (cur && !ids.has(cur)) {
+      delete ns.agentProviderDrafts[agentId].model;
+    }
+    render();
+  });
+
+  registerAction('set-team-model-manual-off', ({ element }) => {
+    const { state, render } = getCtx();
+    const team = element.dataset.team;
+    if (!team) return;
+    const ns = state.newSession;
+    ensureDraftMaps(ns);
+    state.newSession.llmModelManualOpen = state.newSession.llmModelManualOpen || { agents: {}, teams: {} };
+    delete state.newSession.llmModelManualOpen.teams[team];
+    const tpa = ns.teamProviderDrafts[team];
+    const pid = String(tpa.provider_id || '').trim();
+    const cache = (state.providerModelsCache || {})[pid];
+    const ids = new Set((cache?.models || []).map((m) => String(m.id || m.name || '').trim()).filter(Boolean));
+    const cur = String(tpa.model || '').trim();
+    if (cur && !ids.has(cur)) {
+      ns.teamProviderDrafts[team].model = '';
+    }
+    render();
+  });
+
+  registerAction('refresh-ns-provider-models', async ({ element }) => {
+    const pid = String(element?.dataset?.providerId || '').trim();
+    if (!pid) return;
+    await fetchNewSessionProviderModels(pid, { force: true });
   });
 
   registerAction('set-agent-model', ({ element }) => {
-    const { state } = getCtx();
+    const { state, render } = getCtx();
     const agentId = element.dataset.agentId;
     if (!agentId) return;
-    state.newSession.agentProviders = state.newSession.agentProviders || {};
-    state.newSession.agentProviders[agentId] = state.newSession.agentProviders[agentId] || {};
-    state.newSession.agentProviders[agentId].model = element.value;
+    const ns = state.newSession;
+    ensureDraftMaps(ns);
+    ns.agentProviderDrafts[agentId] = ns.agentProviderDrafts[agentId] || {};
+    ns.agentProviderDrafts[agentId].model = element.value;
+    render();
+  });
+
+  registerAction('apply-agent-llm-override', ({ element }) => {
+    const { state, render, t } = getCtx();
+    const agentId = element.dataset.agentId;
+    if (!agentId) return;
+    const ns = state.newSession;
+    ensureDraftMaps(ns);
+    const normalized = normalizeProviderRow(ns.agentProviderDrafts?.[agentId]);
+    if (!normalized) {
+      state.error = t('newSession.llmRouting.applyMissingProvider');
+      render();
+      return;
+    }
+    state.error = null;
+    ns.agentProviders[agentId] = normalized;
+    render();
+  });
+
+  registerAction('reset-agent-llm-override', ({ element }) => {
+    const { state, render } = getCtx();
+    const agentId = element.dataset.agentId;
+    if (!agentId) return;
+    const ns = state.newSession;
+    ensureDraftMaps(ns);
+    delete ns.agentProviders[agentId];
+    delete ns.agentProviderDrafts[agentId];
+    state.newSession.llmModelManualOpen = state.newSession.llmModelManualOpen || { agents: {}, teams: {} };
+    delete state.newSession.llmModelManualOpen.agents[agentId];
+    render();
   });
 }
 
 /**
  * Build the LLM-related fields for the POST /api/sessions payload.
- * Returns partial body object: { agent_providers, team_provider_assignments, blue_team_agents, red_team_agents }
+ * Confrontation: team_provider_assignments (+ team rosters) expanded server-side to session_agent_providers.
+ * Other modes: agent_providers only when the user picked a non-empty provider for an agent.
  */
 function _buildLlmPayload(ns) {
-  const mode = ns.llmAssignmentMode || 'global';
-
-  if (mode === 'global') {
-    return {};
-  }
-
-  if (mode === 'team') {
+  if (ns.mode === 'confrontation') {
     const tpa = ns.teamProviderAssignments || {};
-    const hasBlue = tpa.blue?.provider_id;
-    const hasRed  = tpa.red?.provider_id;
-    if (!hasBlue && !hasRed) return {};
-    return {
-      team_provider_assignments: {
-        blue: { provider_id: tpa.blue?.provider_id || '', model: tpa.blue?.model || '' },
-        red:  { provider_id: tpa.red?.provider_id  || '', model: tpa.red?.model  || '' },
-      },
-      blue_team_agents: ns.blueTeam || [],
-      red_team_agents:  ns.redTeam  || [],
-    };
-  }
+    const hasBlue = String(tpa.blue?.provider_id || '').trim();
+    const hasRed = String(tpa.red?.provider_id || '').trim();
 
-  if (mode === 'agent') {
     const ap = ns.agentProviders || {};
     const filtered = {};
     Object.entries(ap).forEach(([agId, ov]) => {
-      if (ov.provider_id) filtered[agId] = ov;
+      const pid = String(ov?.provider_id || '').trim();
+      if (!pid) return;
+      const m = String(ov?.model || '').trim();
+      filtered[agId] = m ? { provider_id: pid, model: m } : { provider_id: pid };
     });
-    return Object.keys(filtered).length > 0 ? { agent_providers: filtered } : {};
+
+    const out = {};
+    if (hasBlue || hasRed) {
+      out.team_provider_assignments = {
+        blue: { provider_id: String(tpa.blue?.provider_id || '').trim(), model: String(tpa.blue?.model || '').trim() },
+        red: { provider_id: String(tpa.red?.provider_id || '').trim(), model: String(tpa.red?.model || '').trim() },
+      };
+      out.blue_team_agents = [...(ns.blueTeam || [])];
+      out.red_team_agents = [...(ns.redTeam || [])];
+    }
+    if (Object.keys(filtered).length > 0) {
+      out.agent_providers = filtered;
+    }
+    return out;
   }
 
-  return {};
+  const ap = ns.agentProviders || {};
+  const filtered = {};
+  Object.entries(ap).forEach(([agId, ov]) => {
+    const pid = String(ov?.provider_id || '').trim();
+    if (!pid) return;
+    const m = String(ov?.model || '').trim();
+    filtered[agId] = m ? { provider_id: pid, model: m } : { provider_id: pid };
+  });
+  return Object.keys(filtered).length > 0 ? { agent_providers: filtered } : {};
 }
 
-export { registerNewSessionHandlers, registerScenarioHandlers, applyDecisionPlaybook, _applyTemplate, _applyScenarioPack, resetNewSessionState };
+export {
+  registerNewSessionHandlers,
+  registerScenarioHandlers,
+  applyDecisionPlaybook,
+  _applyTemplate,
+  _applyScenarioPack,
+  resetNewSessionState,
+  hydrateNewSessionDefaultAgents,
+};

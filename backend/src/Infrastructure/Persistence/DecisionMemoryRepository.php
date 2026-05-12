@@ -90,6 +90,12 @@ final class DecisionMemoryRepository
     {
         $existing = $this->findBySession($sessionId);
         if ($existing) {
+            $linkMeta = $this->linkMemoryToSessionContext($sessionId, (string)($existing['memory_id'] ?? ''));
+            $existing['strategic_context_linked'] = $linkMeta['linked'];
+            $existing['strategic_context_id'] = $linkMeta['context_id'];
+            if ($linkMeta['warning'] !== null) {
+                $existing['warning'] = $linkMeta['warning'];
+            }
             return $existing;
         }
 
@@ -120,6 +126,12 @@ final class DecisionMemoryRepository
         if ($existing) {
             // If already persisted but not confirmed, promote confirmation.
             if (!empty($existing['user_confirmed'])) {
+                $linkMeta = $this->linkMemoryToSessionContext($sessionId, (string)($existing['memory_id'] ?? ''));
+                $existing['strategic_context_linked'] = $linkMeta['linked'];
+                $existing['strategic_context_id'] = $linkMeta['context_id'];
+                if ($linkMeta['warning'] !== null) {
+                    $existing['warning'] = $linkMeta['warning'];
+                }
                 return $existing;
             }
             $stmt = $this->pdo->prepare('UPDATE decision_memories SET user_confirmed = 1 WHERE session_id = ?');
@@ -127,6 +139,12 @@ final class DecisionMemoryRepository
             $updated = $this->findBySession($sessionId);
             if ($updated && isset($updated['memory_id'])) {
                 $this->refreshFtsForMemoryId((string)$updated['memory_id']);
+                $linkMeta = $this->linkMemoryToSessionContext($sessionId, (string)$updated['memory_id']);
+                $updated['strategic_context_linked'] = $linkMeta['linked'];
+                $updated['strategic_context_id'] = $linkMeta['context_id'];
+                if ($linkMeta['warning'] !== null) {
+                    $updated['warning'] = $linkMeta['warning'];
+                }
             }
             return $updated;
         }
@@ -598,8 +616,41 @@ final class DecisionMemoryRepository
         $created = $this->findById($memoryId);
         if ($created) {
             $this->refreshFtsForMemoryId($memoryId);
+            $linkMeta = $this->linkMemoryToSessionContext($sessionId, $memoryId);
+            $created['strategic_context_linked'] = $linkMeta['linked'];
+            $created['strategic_context_id'] = $linkMeta['context_id'];
+            if ($linkMeta['warning'] !== null) {
+                $created['warning'] = $linkMeta['warning'];
+            }
         }
         return $created;
+    }
+
+    /**
+     * @return array{linked:bool,context_id:?string,warning:?string}
+     */
+    private function linkMemoryToSessionContext(string $sessionId, string $memoryId): array
+    {
+        $sessionId = trim($sessionId);
+        $memoryId = trim($memoryId);
+        if ($sessionId === '' || $memoryId === '') {
+            return ['linked' => false, 'context_id' => null, 'warning' => 'no_strategic_context_linked'];
+        }
+
+        $stmt = $this->pdo->prepare('SELECT strategic_context_id FROM sessions WHERE id = ? LIMIT 1');
+        $stmt->execute([$sessionId]);
+        $contextId = trim((string)($stmt->fetchColumn() ?: ''));
+        if ($contextId === '') {
+            return ['linked' => false, 'context_id' => null, 'warning' => 'no_strategic_context_linked'];
+        }
+
+        $linked = false;
+        try {
+            $linked = (new StrategicContextRepository())->linkMemory($contextId, $memoryId);
+        } catch (\Throwable) {
+            $linked = false;
+        }
+        return ['linked' => $linked, 'context_id' => $contextId, 'warning' => $linked ? null : 'no_strategic_context_linked'];
     }
 
     /** Returns whether the optional FTS index exists and is usable. */

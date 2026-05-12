@@ -15,6 +15,7 @@ use Domain\Vote\VoteAggregator;
 use Domain\Vote\VoteParser;
 use Infrastructure\Logging\Logger;
 use Infrastructure\Persistence\MessageRepository;
+use Infrastructure\Persistence\RunStatusRepository;
 use Infrastructure\Persistence\VerdictRepository;
 use Infrastructure\Persistence\VoteRepository;
 
@@ -36,6 +37,7 @@ class QuickDecisionRunner {
     private DecisionSummaryService $summaryService;
     private PlaybookRuntime $playbookRuntime;
     private Logger $logger;
+    private RunStatusRepository $runStatusRepo;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -55,6 +57,7 @@ class QuickDecisionRunner {
         $this->summaryService      = new DecisionSummaryService();
         $this->playbookRuntime     = new PlaybookRuntime();
         $this->logger              = new Logger();
+        $this->runStatusRepo       = new RunStatusRepository();
     }
 
     public function run(
@@ -64,6 +67,7 @@ class QuickDecisionRunner {
         string $language          = 'en',
         bool   $forceDisagreement = false,
         ?array $contextDoc        = null,
+        array  $agentProviders    = [],
         float  $decisionThreshold = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD,
         ?string $decisionDynamicsPreset = null,
         ?string $strategicContextId = null
@@ -87,10 +91,38 @@ class QuickDecisionRunner {
         }
 
         $roundMessages = [];
+        $this->appendRuntimeEvent($sessionId, [
+            'level' => 'info',
+            'phase' => 'round_started',
+            'round' => 1,
+            'label' => 'Round 1 demarre',
+        ], [
+            'current_round' => 1,
+            'total_rounds' => 2,
+            'current_phase' => 'analysis',
+            'current_phase_label' => 'Analyse agents',
+            'current_step' => 'round_start',
+            'percent' => 10,
+        ]);
 
         foreach ($nonSynth as $agentId) {
             $agent = $this->assembler->assemble($agentId, null, null, $dynamicsPreset);
             if (!$agent) continue;
+            $this->appendRuntimeEvent($sessionId, [
+                'level' => 'info',
+                'phase' => 'analysis',
+                'round' => 1,
+                'agent_id' => $agentId,
+                'label' => 'Analyse agents · ' . $agentId . ' · appel LLM demarre',
+            ], [
+                'current_round' => 1,
+                'total_rounds' => 2,
+                'current_phase' => 'analysis',
+                'current_phase_label' => 'Analyse agents',
+                'current_agent_id' => $agentId,
+                'current_step' => 'llm_call',
+                'percent' => 20,
+            ]);
 
             try {
                 $votesSnap   = $this->voteRepo->findVotesBySession($sessionId);
@@ -143,7 +175,13 @@ class QuickDecisionRunner {
                     ],
                 ]);
 
-                $routed  = $this->providerRouter->chat($messages, $agent);
+                $routed  = $this->providerRouter->chat(
+                    $messages,
+                    $agent,
+                    null,
+                    null,
+                    $this->resolveAgentOverride($agentProviders, (string)$agentId)
+                );
                 $content = $routed['content'];
 
                 $msg = $this->messageRepo->create([
@@ -158,6 +196,14 @@ class QuickDecisionRunner {
                     'requested_model'          => $routed['requested_model'] ?? null,
                     'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
                     'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                    'routing_source'           => $routed['routing_source'] ?? null,
+                    'resolved_provider_id'     => $routed['resolved_provider_id'] ?? null,
+                    'resolved_provider_label'  => $routed['resolved_provider_label'] ?? null,
+                    'resolved_model'           => $routed['resolved_model'] ?? null,
+                    'session_override_present' => $routed['session_override_present'] ?? null,
+                    'persona_default_provider_ignored' => $routed['persona_default_provider_ignored'] ?? null,
+                    'fallback_from_provider_id' => $routed['fallback_from_provider_id'] ?? null,
+                    'fallback_from_model'      => $routed['fallback_from_model'] ?? null,
                     'round'                    => 1,
                     'phase'                    => 'analysis',
                     'mode_context'             => 'quick-decision',
@@ -167,6 +213,21 @@ class QuickDecisionRunner {
                     'created_at'               => date('c'),
                 ]);
                 $roundMessages[] = $msg;
+                $this->appendRuntimeEvent($sessionId, [
+                    'level' => 'info',
+                    'phase' => 'analysis',
+                    'round' => 1,
+                    'agent_id' => $agentId,
+                    'label' => 'Analyse agents · ' . $agentId . ' · reponse recue',
+                ], [
+                    'current_round' => 1,
+                    'total_rounds' => 2,
+                    'current_phase' => 'analysis',
+                    'current_phase_label' => 'Analyse agents',
+                    'current_agent_id' => $agentId,
+                    'current_step' => 'response_received',
+                    'percent' => 45,
+                ]);
                 $parsedVote = $this->voteParser->parse($content);
                 if ($parsedVote) {
                     $this->voteRepo->createVote([
@@ -219,6 +280,21 @@ class QuickDecisionRunner {
                     'created_at'               => date('c'),
                 ]);
                 $roundMessages[] = $msg;
+                $this->appendRuntimeEvent($sessionId, [
+                    'level' => 'error',
+                    'phase' => 'analysis',
+                    'round' => 1,
+                    'agent_id' => $agentId,
+                    'label' => 'Analyse agents · ' . $agentId . ' · erreur',
+                ], [
+                    'current_round' => 1,
+                    'total_rounds' => 2,
+                    'current_phase' => 'analysis',
+                    'current_phase_label' => 'Analyse agents',
+                    'current_agent_id' => $agentId,
+                    'current_step' => 'failed',
+                    'percent' => 45,
+                ], 'running', (string)$e->getMessage());
             }
         }
 
@@ -228,6 +304,21 @@ class QuickDecisionRunner {
 
         $synthAgent = $this->assembler->assemble('synthesizer', null, null, $dynamicsPreset);
         if ($synthAgent) {
+            $this->appendRuntimeEvent($sessionId, [
+                'level' => 'info',
+                'phase' => 'synthesis_started',
+                'round' => 2,
+                'agent_id' => 'synthesizer',
+                'label' => 'Synthese demarree',
+            ], [
+                'current_round' => 2,
+                'total_rounds' => 2,
+                'current_phase' => 'synthesis_started',
+                'current_phase_label' => 'Synthese',
+                'current_agent_id' => 'synthesizer',
+                'current_step' => 'llm_call',
+                'percent' => 70,
+            ]);
             try {
                 $messages = $this->promptBuilder->buildQuickDecisionMessages(
                     $synthAgent, $objective, $roundMessages, $language, $forceDisagreement, $contextDoc, null,
@@ -265,7 +356,13 @@ class QuickDecisionRunner {
                         'session_id' => $sessionId,
                     ],
                 ]);
-                $routed  = $this->providerRouter->chat($messages, $synthAgent);
+                $routed  = $this->providerRouter->chat(
+                    $messages,
+                    $synthAgent,
+                    null,
+                    null,
+                    $this->resolveAgentOverride($agentProviders, 'synthesizer')
+                );
                 $content = $routed['content'];
 
                 $msg = $this->messageRepo->create([
@@ -280,6 +377,14 @@ class QuickDecisionRunner {
                     'requested_model'          => $routed['requested_model'] ?? null,
                     'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
                     'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                    'routing_source'           => $routed['routing_source'] ?? null,
+                    'resolved_provider_id'     => $routed['resolved_provider_id'] ?? null,
+                    'resolved_provider_label'  => $routed['resolved_provider_label'] ?? null,
+                    'resolved_model'           => $routed['resolved_model'] ?? null,
+                    'session_override_present' => $routed['session_override_present'] ?? null,
+                    'persona_default_provider_ignored' => $routed['persona_default_provider_ignored'] ?? null,
+                    'fallback_from_provider_id' => $routed['fallback_from_provider_id'] ?? null,
+                    'fallback_from_model'      => $routed['fallback_from_model'] ?? null,
                     'round'                    => 2,
                     'phase'                    => 'synthesis',
                     'mode_context'             => 'quick-decision',
@@ -289,6 +394,21 @@ class QuickDecisionRunner {
                     'created_at'               => date('c'),
                 ]);
                 $synthesis[] = $msg;
+                $this->appendRuntimeEvent($sessionId, [
+                    'level' => 'info',
+                    'phase' => 'synthesis_completed',
+                    'round' => 2,
+                    'agent_id' => 'synthesizer',
+                    'label' => 'Synthese terminee',
+                ], [
+                    'current_round' => 2,
+                    'total_rounds' => 2,
+                    'current_phase' => 'synthesis_completed',
+                    'current_phase_label' => 'Synthese terminee',
+                    'current_agent_id' => 'synthesizer',
+                    'current_step' => 'response_received',
+                    'percent' => 95,
+                ]);
 
                 $parsed = VerdictParser::parse($content, $playbookId);
                 if ($parsed) {
@@ -320,6 +440,21 @@ class QuickDecisionRunner {
                     'created_at'   => date('c'),
                 ]);
                 $synthesis[] = $msg;
+                $this->appendRuntimeEvent($sessionId, [
+                    'level' => 'error',
+                    'phase' => 'synthesis_failed',
+                    'round' => 2,
+                    'agent_id' => 'synthesizer',
+                    'label' => 'Synthese en erreur',
+                ], [
+                    'current_round' => 2,
+                    'total_rounds' => 2,
+                    'current_phase' => 'synthesis_failed',
+                    'current_phase_label' => 'Synthese en erreur',
+                    'current_agent_id' => 'synthesizer',
+                    'current_step' => 'failed',
+                    'percent' => 95,
+                ], 'running', (string)$e->getMessage());
             }
         }
 
@@ -377,6 +512,10 @@ class QuickDecisionRunner {
             'playbook_runtime' => $playbookDiagnostics,
             'risk_profile' => $riskProfile,
             'guardrails' => $guardrails,
+            'decision_label' => $reliability['adjusted_decision']['decision_label'] ?? null,
+            'decision_status' => $reliability['adjusted_decision']['decision_status'] ?? null,
+            'outcome' => $reliability['adjusted_decision']['final_outcome'] ?? null,
+            'next_steps' => $reliability['decision_reliability_summary']['recommended_action'] ?? null,
         ]);
         $verdictRow = is_array($verdict) ? $verdict : $this->verdictRepo->findBySession($sessionId);
 
@@ -465,5 +604,40 @@ class QuickDecisionRunner {
             $chars += mb_strlen((string)($message['content'] ?? ''), 'UTF-8');
         }
         return $chars;
+    }
+
+    private function appendRuntimeEvent(
+        string $sessionId,
+        array $event,
+        array $progressPatch = [],
+        ?string $status = null,
+        ?string $lastError = null
+    ): void {
+        try {
+            $this->runStatusRepo->appendEvent($sessionId, $event, $progressPatch, $status, $lastError);
+        } catch (\Throwable) {
+        }
+    }
+
+    /**
+     * @param array<string, array{provider_id?: string, model?: string|null}> $agentOverrides
+     * @return array{provider_id?: string, model?: string|null}|null
+     */
+    private function resolveAgentOverride(array $agentOverrides, string $agentId): ?array
+    {
+        $exact = trim($agentId);
+        if ($exact !== '' && isset($agentOverrides[$exact]) && is_array($agentOverrides[$exact])) {
+            return $agentOverrides[$exact];
+        }
+        $lower = strtolower($exact);
+        if ($lower === '') {
+            return null;
+        }
+        foreach ($agentOverrides as $key => $row) {
+            if (strtolower(trim((string)$key)) === $lower && is_array($row)) {
+                return $row;
+            }
+        }
+        return null;
     }
 }

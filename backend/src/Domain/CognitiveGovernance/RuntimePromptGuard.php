@@ -38,10 +38,18 @@ final class RuntimePromptGuard
                 'inclusion_reason' => $inclusionReason,
             ], CognitiveRuntimeQAMode::isAtLeast(CognitiveRuntimeQAMode::QA));
         }
-        if ($injectedChars > 0 && !isset($extra['content_hash']) && !in_array($blockId, ['global_system'], true)) {
+        if ($injectedChars > 0
+            && !isset($extra['content_hash'])
+            && !in_array($blockId, ['global_system'], true)
+            && !str_ends_with($blockId, '_dedup_omitted')
+        ) {
             self::violation('injection_untraced_content_hash_missing', [
                 'block_id' => $blockId,
+                'injection_key' => PromptInjectionRegistry::injectionKeyForBlockId($blockId),
                 'injected_chars' => $injectedChars,
+                'inclusion_reason' => $inclusionReason,
+                'missing_fields' => ['content_hash'],
+                'phase' => 'trace_collect',
             ], false);
         }
     }

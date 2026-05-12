@@ -46,16 +46,20 @@ function renderSidebar() {
       <div class="sidebar-logo-sub">${t('app.subtitle')}</div>
     </div>
     <nav class="sidebar-nav">
-      <div class="nav-item ${state.view === 'launch-assistant' ? 'active' : ''}" data-nav="launch-assistant">
+      <button type="button" class="nav-item ${state.view === 'launch-assistant' ? 'active' : ''}" data-nav="launch-assistant" ${state.view === 'launch-assistant' ? 'aria-current="page"' : ''}>
         <span class="nav-item-icon">🚀</span>
         <span>${t('dashboard.launchAssistant')}</span>
-      </div>
+      </button>
+      <button type="button" class="nav-item ${state.view === 'dashboard' ? 'active' : ''}" data-nav="dashboard" ${state.view === 'dashboard' ? 'aria-current="page"' : ''}>
+        <span class="nav-item-icon">🏠</span>
+        <span>${t('nav.dashboard')}</span>
+      </button>
       <div class="nav-group nav-group-analyses ${analysesOpen ? 'open' : 'closed'}">
         <div class="nav-group-header">
-          <div class="nav-item nav-item-group-main ${analysesGroupActive ? 'active' : ''}" data-nav="analyses">
+          <button type="button" class="nav-item nav-item-group-main ${analysesGroupActive ? 'active' : ''}" data-nav="analyses" ${analysesGroupActive ? 'aria-current="page"' : ''}>
             <span class="nav-item-icon">🗂️</span>
             <span>${t('nav.sessions')}</span>
-          </div>
+          </button>
           <button
             type="button"
             class="nav-group-toggle"
@@ -68,29 +72,29 @@ function renderSidebar() {
           </button>
         </div>
         <div class="nav-submenu ${analysesOpen ? '' : 'is-collapsed'}">
-          <div class="nav-item nav-item-sub ${state.view === 'new-session' ? 'active' : ''}" data-nav="new-session">
+          <button type="button" class="nav-item nav-item-sub ${state.view === 'new-session' ? 'active' : ''}" data-nav="new-session" ${state.view === 'new-session' ? 'aria-current="page"' : ''}>
             <span class="nav-item-icon">＋</span>
             <span>${t('nav.newSession')}</span>
-          </div>
-          <div class="nav-item nav-item-sub ${(state.view === 'analyses' || state.view === 'sessions') ? 'active' : ''}" data-nav="analyses">
+          </button>
+          <button type="button" class="nav-item nav-item-sub ${(state.view === 'analyses' || state.view === 'sessions') ? 'active' : ''}" data-nav="analyses" ${(state.view === 'analyses' || state.view === 'sessions') ? 'aria-current="page"' : ''}>
             <span class="nav-item-icon">🕘</span>
             <span>${t('nav.analysisHistory')}</span>
-          </div>
-          <div class="nav-item nav-item-sub ${(state.view === 'session-comparisons' || state.view === 'session-comparison') ? 'active' : ''}" data-nav="session-comparisons">
+          </button>
+          <button type="button" class="nav-item nav-item-sub ${(state.view === 'session-comparisons' || state.view === 'session-comparison') ? 'active' : ''}" data-nav="session-comparisons" ${(state.view === 'session-comparisons' || state.view === 'session-comparison') ? 'aria-current="page"' : ''}>
             <span class="nav-item-icon">⚖️</span>
             <span>${t('dashboard.compareSessions')}</span>
-          </div>
+          </button>
         </div>
       </div>
       ${nav.map((item) => {
-        if (item.id === 'launch-assistant') return '';
+        if (item.id === 'launch-assistant' || item.id === 'dashboard') return '';
         const isActive = state.view === item.id
           || (item.id === 'administration' && isAdminSubView);
         return `
-          <div class="nav-item ${isActive ? 'active' : ''}" data-nav="${escHtml(item.id)}">
+          <button type="button" class="nav-item ${isActive ? 'active' : ''}" data-nav="${escHtml(item.id)}" ${isActive ? 'aria-current="page"' : ''}>
             <span class="nav-item-icon">${item.icon}</span>
             <span>${item.label}</span>
-          </div>
+          </button>
         `;
       }).join('')}
     </nav>

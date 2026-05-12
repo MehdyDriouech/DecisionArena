@@ -129,7 +129,12 @@ final class DecisionMemoryController
         if (!$mem) {
             return Response::error('Memory could not be persisted (unsafe outcome)', 400);
         }
-        return ['memory' => $mem];
+        return [
+            'memory' => $mem,
+            'strategic_context_linked' => (bool)($mem['strategic_context_linked'] ?? false),
+            'strategic_context_id' => $mem['strategic_context_id'] ?? null,
+            'warning' => $mem['warning'] ?? null,
+        ];
     }
 
     /** POST /api/decision-memories/{id}/link */

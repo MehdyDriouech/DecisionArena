@@ -11,7 +11,7 @@ import { validatePlaybookCatalog } from './core/playbooks.js';
 
 /* ── Core: renderer + router + events ── */
 import { render, renderSidebar, renderMain, applyUiModeVisibility, applyComplexityVisibility } from './core/renderer.js';
-import { navigate, scrollMainToTop, scrollMessagesToBottom, scrollFollowUpToBottom } from './core/router.js';
+import * as Router from './core/router.js';
 import { bindGlobalEventDelegation, dispatchAction } from './core/events.js';
 import { registerHumanLoopHandlers } from './core/humanLoopHandlers.js';
 
@@ -44,7 +44,11 @@ import { registerGlobalHandlers } from './core/globalHandlers.js';
 import { registerSessionsHandlers } from './features/sessions/handlers.js';
 import { registerChatHandlers } from './features/chat/handlers.js';
 import { registerContextDocHandlers } from './features/contextDoc/handlers.js';
-import { registerNewSessionHandlers, registerScenarioHandlers } from './features/newSession/handlers.js';
+import {
+  registerNewSessionHandlers,
+  registerScenarioHandlers,
+  hydrateNewSessionDefaultAgents,
+} from './features/newSession/handlers.js';
 import { registerDecisionRoomHandlers } from './features/decisionRoom/handlers.js';
 import { registerConfrontationHandlers } from './features/confrontation/handlers.js';
 import { registerQuickDecisionHandlers } from './features/quickDecision/handlers.js';
@@ -78,10 +82,10 @@ function bootstrapModuleArchitecture() {
       ...messageLookup,
     },
     router: {
-      navigate,
-      scrollMainToTop,
-      scrollMessagesToBottom,
-      scrollFollowUpToBottom,
+      navigate: Router.navigate,
+      scrollMainToTop: Router.scrollMainToTop,
+      scrollMessagesToBottom: Router.scrollMessagesToBottom,
+      scrollFollowUpToBottom: Router.scrollFollowUpToBottom,
     },
     render,
     /* Views registry: populated by feature modules below. */
@@ -161,12 +165,16 @@ async function init() {
   const { LoaderService } = services;
   window.DecisionArena.render();
   await LoaderService.loadInitialData();
+  hydrateNewSessionDefaultAgents(window.DecisionArena.store.state.newSession);
   await dispatchAction('load-dashboard-summary').catch(() => {});
   window.DecisionArena.render();
 }
 
 async function startApp() {
   bootstrapModuleArchitecture();
+  if (typeof Router.initHashRouting === 'function') {
+    Router.initHashRouting();
+  }
   validatePlaybookCatalog();
   // Expose complexity helpers on the global namespace
   window.DecisionArena.setUiComplexity = (level) => {

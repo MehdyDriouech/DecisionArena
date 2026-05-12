@@ -131,8 +131,13 @@ a {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 100%;
   padding: 9px 12px;
   border-radius: var(--radius);
+  border: 1px solid transparent;
+  background: transparent;
+  text-align: left;
+  font-family: inherit;
   cursor: pointer;
   color: var(--text-secondary);
   font-size: 13.5px;
@@ -150,6 +155,16 @@ a {
 .nav-item.active {
   background: var(--accent-light);
   color: var(--accent-hover);
+}
+
+.nav-item:focus {
+  outline: none;
+}
+
+.nav-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-color: var(--accent);
 }
 
 .nav-item-icon {
@@ -1016,6 +1031,13 @@ a {
   flex-shrink: 0;
 }
 
+/* Une seule barre d’outils : occuper toute la largeur (évite grille 1fr → ~0px / texte une lettre par ligne). */
+.dr-header > .session-result-toolbar {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+}
+
 .dr-header-info {
   flex: 1;
   min-width: 0;
@@ -1025,21 +1047,27 @@ a {
   font-size: 17px;
   font-weight: 700;
   color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
 
 .dr-objective {
   font-size: 13px;
   color: var(--text-secondary);
   margin-top: 3px;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+  max-height: 4.6em;
   overflow: hidden;
-  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 /* ===== SESSION RESULT TOOLBAR (header alignment) ===== */
 .session-result-toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(220px, 1fr) auto;
   align-items: end;
   gap: 12px;
   width: 100%;
@@ -1048,6 +1076,7 @@ a {
 
 .session-result-context {
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .session-result-actions {
@@ -1550,6 +1579,8 @@ a {
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
+  width: 100%;
+  min-width: 0;
 }
 
 /* ===== CONFRONTATION MODE ===== */

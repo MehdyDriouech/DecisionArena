@@ -355,6 +355,9 @@ const createInitialState = () => {
   isLoading: false,
   drResults: null,
   drRunning: false,
+  runProgress: null,
+  runProgressBySessionId: {},
+  runProgressPolling: { active: false, intervalMs: 1500, error: null, lastUpdateAt: null },
   decisionBrief: null,
   confrontationResults: null,
   confrontationRunning: false,
@@ -557,6 +560,8 @@ const createInitialState = () => {
   },
   collapsedMessages: {},
   showDebateDetails: false,
+  /** providerId -> { status, models, error } — liste modèles pour routage LLM (nouvelle session). */
+  providerModelsCache: {},
     newSession: {
     title: '',
     idea: '',
@@ -600,6 +605,16 @@ const createInitialState = () => {
     decisionDynamicsPreset: 'balanced',
     /** Expert : contourner le garde-fou « contexte stratégique actif requis » (compatibilité legacy). */
     confirmLegacyNoActiveStrategicContext: false,
+    /** Overrides appliqués (persistés en session_agent_providers via POST /api/sessions). */
+    agentProviders: {},
+    /** Sélections en brouillon (non persistées tant que « Appliquer l’override » n’est pas cliqué). */
+    agentProviderDrafts: {},
+    /** Overrides appliqués par équipe (confrontation). */
+    teamProviderAssignments: { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } },
+    /** Brouillons d’override par équipe (confrontation). */
+    teamProviderDrafts: { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } },
+    /** UI : saisie manuelle modèle (liste déroulante masquée) par agent / équipe. */
+    llmModelManualOpen: { agents: {}, teams: {} },
   },
   currentContextDoc: null,
   ctxDocPanelOpen: false,

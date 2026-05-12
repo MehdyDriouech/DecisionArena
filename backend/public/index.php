@@ -48,6 +48,7 @@ $router->get('/api/health', function(Request $req) {
 $router->get('/api/personas/custom', [Controllers\PersonaController::class, 'custom']);
 $router->post('/api/personas/build-draft', [Controllers\PersonaController::class, 'buildDraft']);
 $router->post('/api/personas/save-custom', [Controllers\PersonaController::class, 'saveCustom']);
+$router->post('/api/personas/default-llm', [Controllers\PersonaController::class, 'updateDefaultLlm']);
 $router->post('/api/personas/modes', [Controllers\PersonaController::class, 'saveModes']);
 $router->post('/api/personas/decision-dynamics', [Controllers\PersonaController::class, 'saveDecisionDynamics']);
 $router->post('/api/personas/sandbox-test', [Controllers\PersonaSandboxController::class, 'test']);
@@ -64,6 +65,8 @@ $router->get('/api/providers', [Controllers\ProviderController::class, 'index'])
 $router->post('/api/providers', [Controllers\ProviderController::class, 'store']);
 $router->post('/api/providers/test', [Controllers\ProviderController::class, 'test']);
 $router->post('/api/providers/models', [Controllers\ProviderController::class, 'models']);
+$router->post('/api/providers/{id}/disable', [Controllers\ProviderController::class, 'disable']);
+$router->post('/api/providers/{id}/enable', [Controllers\ProviderController::class, 'enable']);
 $router->get('/api/providers/routing', [Controllers\ProviderRoutingController::class, 'show']);
 $router->put('/api/providers/routing', [Controllers\ProviderRoutingController::class, 'update']);
 $router->delete('/api/providers/{id}', [Controllers\ProviderController::class, 'destroy']);

@@ -17,13 +17,11 @@ class DecisionOutcomeProjector {
         $riskProfile = is_array($context['risk_profile'] ?? null) ? $context['risk_profile'] : [];
         $guardrails = is_array($context['guardrails'] ?? null) ? $context['guardrails'] : [];
 
-        $status = self::normalizeStatus(
-            (string)($canonical['decision'] ?? ''),
-            (string)($canonical['status'] ?? ''),
-            $guardrails
-        );
+        $statusResolution = self::resolveStatus($canonical, $context, $guardrails);
+        $status = $statusResolution['status'];
 
-        $actions = self::list($canonical['recommended_next_actions'] ?? []);
+        $actionsResolution = self::resolveRequiredNextActions($canonical, $context);
+        $actions = $actionsResolution['actions'];
         $unknowns = self::list($canonical['blocking_unknowns'] ?? []);
         $risks = self::list($canonical['risks'] ?? []);
         $why = self::list($canonical['why'] ?? []);
@@ -89,8 +87,111 @@ class DecisionOutcomeProjector {
                 'missing_fields' => $canonical['parser_diagnostics']['missing_fields'] ?? [],
                 'fallback_used' => $canonical['parser_diagnostics']['fallback_used'] ?? false,
                 'extraction_strategy_used' => $canonical['parser_diagnostics']['extraction_strategy_used'] ?? [],
+                'status_source' => $statusResolution['source'],
+                'required_next_actions_source' => $actionsResolution['source'],
+                'required_next_actions_rejected' => $actionsResolution['rejected'],
+                'required_next_actions_rejection_reason' => $actionsResolution['rejection_reason'],
                 'confidence_diagnostics' => $confidenceInfo,
             ],
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $canonical
+     * @param array<string,mixed> $context
+     * @return array{status:string,source:string}
+     */
+    private static function resolveStatus(array $canonical, array $context, array $guardrails): array
+    {
+        $statusCandidates = [
+            ['source' => 'canonical.status', 'value' => $canonical['status'] ?? null],
+            ['source' => 'canonical.decision_status', 'value' => $canonical['decision_status'] ?? null],
+            ['source' => 'canonical.recommended_status', 'value' => $canonical['recommended_status'] ?? null],
+            ['source' => 'context.status', 'value' => $context['status'] ?? null],
+            ['source' => 'context.decision_status', 'value' => $context['decision_status'] ?? null],
+            ['source' => 'context.recommended_status', 'value' => $context['recommended_status'] ?? null],
+        ];
+        foreach ($statusCandidates as $candidate) {
+            $raw = trim((string)($candidate['value'] ?? ''));
+            if ($raw === '') {
+                continue;
+            }
+            $norm = RuntimeContracts::normalizeStatus($raw);
+            if ($norm !== '') {
+                return ['status' => $norm, 'source' => (string)$candidate['source']];
+            }
+        }
+
+        $decisionCandidates = [
+            ['source' => 'canonical.decision', 'value' => $canonical['decision'] ?? null],
+            ['source' => 'canonical.decision_label', 'value' => $canonical['decision_label'] ?? null],
+            ['source' => 'canonical.outcome', 'value' => $canonical['outcome'] ?? null],
+            ['source' => 'canonical.final_verdict', 'value' => $canonical['final_verdict'] ?? null],
+            ['source' => 'canonical.verdict', 'value' => $canonical['verdict'] ?? null],
+            ['source' => 'context.decision', 'value' => $context['decision'] ?? null],
+            ['source' => 'context.decision_label', 'value' => $context['decision_label'] ?? null],
+            ['source' => 'context.outcome', 'value' => $context['outcome'] ?? null],
+            ['source' => 'context.final_verdict', 'value' => $context['final_verdict'] ?? null],
+            ['source' => 'context.verdict', 'value' => $context['verdict'] ?? null],
+        ];
+        foreach ($decisionCandidates as $candidate) {
+            $mapped = self::normalizeStatus(
+                (string)($candidate['value'] ?? ''),
+                (string)($canonical['status'] ?? ''),
+                $guardrails
+            );
+            if ($mapped !== '') {
+                return ['status' => $mapped, 'source' => (string)$candidate['source']];
+            }
+        }
+
+        $fallback = RuntimeContracts::normalizeStatus((string)($canonical['status'] ?? ''));
+        return ['status' => $fallback, 'source' => $fallback !== '' ? 'canonical.status_fallback' : 'none'];
+    }
+
+    /**
+     * @param array<string,mixed> $canonical
+     * @param array<string,mixed> $context
+     * @return array{
+     *   actions:list<string>,
+     *   source:string,
+     *   rejected:list<string>,
+     *   rejection_reason:string
+     * }
+     */
+    private static function resolveRequiredNextActions(array $canonical, array $context): array
+    {
+        $candidates = [
+            ['source' => 'canonical.required_next_actions', 'value' => $canonical['required_next_actions'] ?? null],
+            ['source' => 'canonical.recommended_next_actions', 'value' => $canonical['recommended_next_actions'] ?? null],
+            ['source' => 'canonical.next_steps', 'value' => $canonical['next_steps'] ?? null],
+            ['source' => 'context.required_next_actions', 'value' => $context['required_next_actions'] ?? null],
+            ['source' => 'context.next_steps', 'value' => $context['next_steps'] ?? null],
+            ['source' => 'context.decision_brief.next_step', 'value' => is_array($context['decision_brief'] ?? null) ? (($context['decision_brief']['next_step'] ?? null)) : null],
+            ['source' => 'context.decision_brief_next_step', 'value' => $context['decision_brief_next_step'] ?? null],
+        ];
+
+        $rejected = [];
+        foreach ($candidates as $candidate) {
+            $normalized = self::normalizeActionCandidates($candidate['value'] ?? null);
+            if ($normalized['actions'] !== []) {
+                return [
+                    'actions' => $normalized['actions'],
+                    'source' => (string)$candidate['source'],
+                    'rejected' => $normalized['rejected'],
+                    'rejection_reason' => '',
+                ];
+            }
+            if ($normalized['rejected'] !== []) {
+                $rejected = array_values(array_unique(array_merge($rejected, $normalized['rejected'])));
+            }
+        }
+
+        return [
+            'actions' => [],
+            'source' => 'none',
+            'rejected' => array_slice($rejected, 0, 8),
+            'rejection_reason' => 'no_executable_action_found',
         ];
     }
 
@@ -214,13 +315,13 @@ class DecisionOutcomeProjector {
             $s = strtoupper($canonicalStatus);
             return in_array($s, ['FRAGILE', 'INSUFFICIENT_CONTEXT'], true) ? 'proceed_with_constraints' : 'proceed';
         }
-        if (in_array($d, ['NO GO', 'KILL', 'STOP', 'REJECT'], true)) {
+        if (in_array($d, ['NO GO', 'NO_GO', 'KILL', 'STOP', 'REJECT'], true)) {
             return 'kill';
         }
         if (in_array($d, ['ITERATE', 'PIVOT', 'NARROW', 'DEFER', 'REDUCE SCOPE', 'PAUSE', 'TEST FIRST'], true)) {
             return 'pivot';
         }
-        if (in_array($d, ['INSUFFICIENT CONTEXT', 'NEEDS MORE INFO', 'NO CONSENSUS', 'VALIDATE FIRST'], true)) {
+        if (in_array($d, ['INSUFFICIENT CONTEXT', 'NEEDS MORE INFO', 'NO CONSENSUS', 'VALIDATE FIRST', 'BLOCKED'], true)) {
             return 'validate_first';
         }
         // Fallback to canonical runtime taxonomy (prevents empty/un-normalized status in weak prose).
@@ -361,6 +462,61 @@ class DecisionOutcomeProjector {
             }
         }
         return array_slice(array_values(array_unique($out)), 0, 6);
+    }
+
+    /**
+     * @return array{actions:list<string>,rejected:list<string>}
+     */
+    private static function normalizeActionCandidates(mixed $value): array
+    {
+        $rawItems = [];
+        if (is_string($value)) {
+            $rawItems = preg_split('/\r?\n|[;•]/', $value) ?: [];
+        } elseif (is_array($value)) {
+            $rawItems = $value;
+        }
+
+        $actions = [];
+        $rejected = [];
+        foreach ($rawItems as $item) {
+            $text = self::text($item);
+            if ($text === '') {
+                continue;
+            }
+            $text = preg_replace('/^[-*]\s*/', '', $text) ?? $text;
+            $text = preg_replace('/^\d+[.)]\s*/', '', $text) ?? $text;
+            $text = preg_replace('/^#+\s*/', '', $text) ?? $text;
+            $text = trim((string)$text);
+            if ($text === '') {
+                continue;
+            }
+            $lower = strtolower($text);
+            if (preg_match('/^next steps?$/i', $text) || preg_match('/^required next actions?$/i', $text) || str_starts_with($lower, '```')) {
+                $rejected[] = $text;
+                continue;
+            }
+            if (mb_strlen($text, 'UTF-8') < 12) {
+                $rejected[] = $text;
+                continue;
+            }
+            if (preg_match('/\b(tbd|n\/a|unknown|to be defined|à définir|à confirmer)\b/i', $text)) {
+                $rejected[] = $text;
+                continue;
+            }
+            if (!preg_match('/\b(launch|run|define|collect|validate|measure|build|draft|test|ship|create|document|plan|implement|review|align|prepare|verify|vérifier|valider|définir|lancer|mesurer|tester|documenter|planifier|mettre en œuvre|prioriser|collecter|analyser|corriger|déployer)\b/i', $text)) {
+                $rejected[] = $text;
+                continue;
+            }
+            $actions[] = $text;
+            if (count($actions) >= 6) {
+                break;
+            }
+        }
+
+        return [
+            'actions' => array_values(array_unique($actions)),
+            'rejected' => array_slice(array_values(array_unique($rejected)), 0, 10),
+        ];
     }
 
     private static function text(mixed $value): string {

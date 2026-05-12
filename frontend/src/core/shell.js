@@ -17,6 +17,13 @@ function renderSidebarShell(i18n) {
   if (!sidebar) return;
   const lang = i18n?.getLanguage ? i18n.getLanguage() : 'fr';
   const analysesOpen = readAnalysesNavOpen();
+  const analysesGroupActive = state.view === 'analyses'
+    || state.view === 'sessions'
+    || state.view === 'new-session'
+    || state.view === 'session-comparisons'
+    || state.view === 'session-comparison';
+  const adminViews = ['personas', 'persona-builder', 'persona-maker', 'providers', 'souls', 'templates', 'template-maker', 'scenario-packs', 'logs', 'retrospective', 'learning', 'prompt-policies', 'cognitive-governance'];
+  const isAdminSubView = adminViews.includes(state.view);
   mountHtml(sidebar, `
     <div class="sidebar-logo">
       <span class="sidebar-logo-icon">🧠</span>
@@ -24,14 +31,14 @@ function renderSidebarShell(i18n) {
       <div class="sidebar-logo-sub">${t('app.subtitle')}</div>
     </div>
     <nav class="sidebar-nav">
-      <div class="nav-item ${state.view === 'launch-assistant' ? 'active' : ''}" data-nav="launch-assistant">
+      <button type="button" class="nav-item ${state.view === 'launch-assistant' ? 'active' : ''}" data-nav="launch-assistant" ${state.view === 'launch-assistant' ? 'aria-current="page"' : ''}>
         <span class="nav-item-icon">🚀</span><span>${t('dashboard.launchAssistant')}</span>
-      </div>
+      </button>
       <div class="nav-group nav-group-analyses ${analysesOpen ? 'open' : 'closed'}">
         <div class="nav-group-header">
-          <div class="nav-item nav-item-group-main ${state.view === 'analyses' || state.view === 'sessions' || state.view === 'new-session' || state.view === 'session-comparisons' || state.view === 'session-comparison' ? 'active' : ''}" data-nav="analyses">
+          <button type="button" class="nav-item nav-item-group-main ${analysesGroupActive ? 'active' : ''}" data-nav="analyses" ${analysesGroupActive ? 'aria-current="page"' : ''}>
             <span class="nav-item-icon">🗂️</span><span>${t('nav.sessions')}</span>
-          </div>
+          </button>
           <button
             type="button"
             class="nav-group-toggle"
@@ -44,26 +51,26 @@ function renderSidebarShell(i18n) {
           </button>
         </div>
         <div class="nav-submenu ${analysesOpen ? '' : 'is-collapsed'}">
-          <div class="nav-item nav-item-sub ${state.view === 'new-session' ? 'active' : ''}" data-nav="new-session">
+          <button type="button" class="nav-item nav-item-sub ${state.view === 'new-session' ? 'active' : ''}" data-nav="new-session" ${state.view === 'new-session' ? 'aria-current="page"' : ''}>
             <span class="nav-item-icon">＋</span><span>${t('nav.newSession')}</span>
-          </div>
-          <div class="nav-item nav-item-sub ${(state.view === 'analyses' || state.view === 'sessions') ? 'active' : ''}" data-nav="analyses">
+          </button>
+          <button type="button" class="nav-item nav-item-sub ${(state.view === 'analyses' || state.view === 'sessions') ? 'active' : ''}" data-nav="analyses" ${(state.view === 'analyses' || state.view === 'sessions') ? 'aria-current="page"' : ''}>
             <span class="nav-item-icon">🕘</span><span>${t('nav.analysisHistory')}</span>
-          </div>
-          <div class="nav-item nav-item-sub ${(state.view === 'session-comparisons' || state.view === 'session-comparison') ? 'active' : ''}" data-nav="session-comparisons">
+          </button>
+          <button type="button" class="nav-item nav-item-sub ${(state.view === 'session-comparisons' || state.view === 'session-comparison') ? 'active' : ''}" data-nav="session-comparisons" ${(state.view === 'session-comparisons' || state.view === 'session-comparison') ? 'aria-current="page"' : ''}>
             <span class="nav-item-icon">⚖️</span><span>${t('dashboard.compareSessions')}</span>
-          </div>
+          </button>
         </div>
       </div>
-      <div class="nav-item ${state.view === 'dashboard' ? 'active' : ''}" data-nav="dashboard">
+      <button type="button" class="nav-item ${state.view === 'dashboard' ? 'active' : ''}" data-nav="dashboard" ${state.view === 'dashboard' ? 'aria-current="page"' : ''}>
         <span class="nav-item-icon">🏠</span><span>${t('nav.dashboard')}</span>
-      </div>
-      <div class="nav-item ${state.view === 'strategic-contexts' ? 'active' : ''}" data-nav="strategic-contexts">
+      </button>
+      <button type="button" class="nav-item ${state.view === 'strategic-contexts' ? 'active' : ''}" data-nav="strategic-contexts" ${state.view === 'strategic-contexts' ? 'aria-current="page"' : ''}>
         <span class="nav-item-icon">🧭</span><span>${t('nav.contexts')}</span>
-      </div>
-      <div class="nav-item ${state.view === 'administration' ? 'active' : ''}" data-nav="administration">
+      </button>
+      <button type="button" class="nav-item ${state.view === 'administration' || isAdminSubView ? 'active' : ''}" data-nav="administration" ${state.view === 'administration' || isAdminSubView ? 'aria-current="page"' : ''}>
         <span class="nav-item-icon">⚙️</span><span>${t('nav.admin')}</span>
-      </div>
+      </button>
     </nav>
     <div class="sidebar-ui-mode">
       <div class="sidebar-ui-mode-label">${t('ui.mode.label')}</div>

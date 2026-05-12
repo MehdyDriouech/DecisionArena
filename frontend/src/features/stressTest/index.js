@@ -16,6 +16,7 @@ import { renderGraphViewPanel } from '../graphView/index.js';
 import { renderArgumentHeatmapPanel } from '../argumentHeatmap/index.js';
 import { renderDebateReplayPanel } from '../debateReplay/index.js';
 import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
+import { renderRunProgressPanel } from '../../ui/runProgressPanel.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -83,6 +84,8 @@ function renderStressTest() {
   const session = state.currentSession;
   if (!session) return `<div class="view-container"><p>${t('chat.noSession')}</p></div>`;
   const results = state.stResults;
+  const runProgressEntry = session?.id ? state.runProgressBySessionId?.[session.id] : null;
+  const liveRunProgress = runProgressEntry?.data || state.runProgress;
 
   return `
     <div class="full-height-view">
@@ -110,6 +113,13 @@ function renderStressTest() {
       ${renderContextDocPanel()}
 
       <div class="dr-content">
+        ${state.stRunning ? renderRunProgressPanel(liveRunProgress, {
+    t,
+    escHtml,
+    uiMode: state.uiMode,
+    mode: 'stress-test',
+    polling: state.runProgressPolling || null,
+  }) : ''}
         ${state.stRunning ? `
           <div class="loading-state"><span class="spinner spinner-lg"></span> ${t('st.running')}</div>
         ` : ''}

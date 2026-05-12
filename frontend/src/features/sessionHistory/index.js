@@ -8,6 +8,7 @@ import { renderDecisionBrief, renderDecisionDynamicsSummary, renderDecisionOutco
 import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
 import { renderSixThinkingMethodBanner } from '../../utils/sixThinkingHats.js';
 import { mapAnalysisLifecycle } from '../../core/store.js';
+import { normalizeLlmRoutingMeta, renderLlmRoutingCompact } from '../../utils/llmRoutingUi.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -795,14 +796,30 @@ function renderLlmUsedPanel(messages) {
     if (!msg.agent_id || msg.role !== 'assistant') return;
     const aid = msg.agent_id;
     if (!agentMap[aid]) {
+      const info = normalizeLlmRoutingMeta(msg);
+      let hasRoutingMeta = false;
+      let parsedMeta = null;
+      if (msg?.meta_json && typeof msg.meta_json === 'string') {
+        try {
+          parsedMeta = JSON.parse(msg.meta_json);
+        } catch (_) {
+          parsedMeta = null;
+        }
+      } else if (msg?.meta_json && typeof msg.meta_json === 'object') {
+        parsedMeta = msg.meta_json;
+      }
+      if (parsedMeta && typeof parsedMeta === 'object' && parsedMeta.llm_routing && typeof parsedMeta.llm_routing === 'object') {
+        hasRoutingMeta = true;
+      }
       agentMap[aid] = {
-        provider_id:           msg.provider_id           || null,
-        provider_name:         msg.provider_name         || null,
-        model:                 msg.model                 || null,
-        requested_provider_id: msg.requested_provider_id || null,
-        requested_model:       msg.requested_model       || null,
-        fallback_used:         msg.provider_fallback_used == 1 || msg.provider_fallback_used === true,
-        fallback_reason:       msg.provider_fallback_reason || null,
+        provider_id: info.usedProvider || msg?.provider_name || msg?.provider_id || null,
+        model: info.usedModel || msg?.model || null,
+        requested_provider_id: info.requestedProvider || msg?.requested_provider_id || null,
+        requested_model: info.requestedModel || msg?.requested_model || null,
+        fallback_used: info.fallbackUsed,
+        fallback_reason: info.fallbackReason || null,
+        routing_source: info.routingSource || null,
+        has_routing_meta: hasRoutingMeta,
       };
     }
   });
@@ -815,16 +832,25 @@ function renderLlmUsedPanel(messages) {
 
   const rows = agents.map((aid) => {
     const info = agentMap[aid];
-    const usedLabel   = [info.model, info.provider_name || info.provider_id].filter(Boolean).join(' via ') || t('message.llm.routingGlobal');
-    const reqLabel    = info.requested_provider_id ? [info.requested_model, info.requested_provider_id].filter(Boolean).join(' / ') : '—';
+    const usedLabel   = [info.provider_id, info.model].filter(Boolean).join(' / ') || t('message.llm.routingGlobal');
+    const reqLabel    = info.requested_provider_id ? [info.requested_provider_id, info.requested_model].filter(Boolean).join(' / ') : '—';
+    const sourceKey = info.routing_source ? `message.llm.source.${info.routing_source}` : 'message.llm.source.unknown';
+    const sourceTr = t(sourceKey);
+    const sourceLabel = sourceTr === sourceKey ? t('message.llm.source.unknown') : sourceTr;
     const fallbackCell= info.fallback_used
-      ? `<span style="color:#f59e0b;font-size:11px;" title="${escHtml(info.fallback_reason || '')}">⚠ ${t('message.llm.fallback')}</span>`
+      ? `<span style="color:#f59e0b;font-size:11px;" title="${escHtml(info.fallback_reason || '')}">⚠ ${t('message.llm.fallback')} ${info.fallback_reason ? `· ${escHtml(info.fallback_reason)}` : ''}</span>`
       : `<span style="color:#22c55e;font-size:11px;">✓</span>`;
+    const partialMetaKey = 'session.llmUsed.partialMeta';
+    const partialMetaTr = t(partialMetaKey);
+    const partialMetaText = partialMetaTr === partialMetaKey ? 'Metadonnees LLM partielles' : partialMetaTr;
+    const partialMetaBadge = info.has_routing_meta
+      ? ''
+      : `<div style="font-size:11px;color:var(--text-muted);">${escHtml(partialMetaText)}</div>`;
     return `
       <tr>
         <td style="padding:4px 8px;font-size:12px;font-weight:600;">${escHtml(aid)}</td>
         <td style="padding:4px 8px;font-size:12px;color:var(--text-muted);">${escHtml(reqLabel)}</td>
-        <td style="padding:4px 8px;font-size:12px;">${escHtml(usedLabel)}</td>
+        <td style="padding:4px 8px;font-size:12px;">${escHtml(usedLabel)}<div style="font-size:11px;color:var(--text-muted);">${escHtml(sourceLabel)}</div>${partialMetaBadge}</td>
         <td style="padding:4px 8px;text-align:center;">${fallbackCell}</td>
       </tr>`;
   }).join('');
@@ -1272,14 +1298,7 @@ function renderSessionHistory() {
     const isDA      = msg.agent_id === 'devil_advocate' || msg.message_type === 'devil_advocate';
     const daClass   = isDA ? ' devil-advocate-card' : '';
     const daBadge   = isDA ? `<span class="badge" style="background:rgba(220,38,38,0.12);color:#dc2626;font-size:10px;">😈 ${t('devil.advocate.badge')}</span>` : '';
-    const providerLabel = msg.provider_name || msg.provider_id || null;
-    const modelLabel    = msg.model || null;
-    const hasFallback   = msg.provider_fallback_used == 1 || msg.provider_fallback_used === true;
-    const provBadge = (providerLabel || modelLabel) ? `
-      <span class="message-llm-meta provider-badge" data-ui="expert-only">
-        ${modelLabel ? escHtml(modelLabel) : ''}${providerLabel ? ` via ${escHtml(providerLabel)}` : ''}
-        ${hasFallback ? `<span class="message-llm-fallback" title="${escHtml(msg.provider_fallback_reason || '')}">⚠ ${t('message.llm.fallback')}</span>` : ''}
-      </span>` : '';
+    const provBadge = renderLlmRoutingCompact(msg, { escHtml, t, expert: state.uiMode === 'expert' });
     const messageId = String(msg.id || `${session.id}-hist-${msg.agent_id || 'agent'}-${idx}`);
     const isLong = String(msg.content || '').length > 650;
     const isSimpleMode = state.uiMode === 'basic';
@@ -1524,8 +1543,33 @@ function renderSessionHistory() {
   `;
 }
 
+function renderSessionNotFound() {
+  const { state, escHtml, t } = getCtx();
+  const routeErr = state.sessionRouteError || {};
+  const sessionId = String(routeErr.sessionId || '');
+  const isNetwork = routeErr.type === 'network';
+  const title = isNetwork ? 'Erreur de chargement de session' : 'Session introuvable';
+  const body = isNetwork
+    ? (routeErr.message || 'Impossible de joindre le serveur pour cette session.')
+    : 'Vérifiez l’identifiant ou retournez aux analyses.';
+
+  return `
+    <div style="max-width:760px;margin:0 auto;padding:24px 20px;">
+      <div class="card" style="padding:20px;">
+        <div style="font-size:20px;font-weight:700;margin-bottom:8px;">⚠️ ${escHtml(title)}</div>
+        ${sessionId ? `<div style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">Session: <code>${escHtml(sessionId)}</code></div>` : ''}
+        <div style="font-size:14px;color:var(--text-secondary);margin-bottom:16px;">${escHtml(body)}</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button class="btn btn-secondary btn-sm" data-nav="analyses">← ${t('nav.analysisHistory')}</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function registerSessionHistoryFeature() {
   window.DecisionArena.views['session-history'] = renderSessionHistory;
+  window.DecisionArena.views['session-not-found'] = renderSessionNotFound;
   window.DecisionArena.views.shared.renderTemplateCard       = renderTemplateCard;
   window.DecisionArena.views.shared.renderActionPlanPanel    = renderActionPlanPanel;
   window.DecisionArena.views.shared.renderPersonaScorePanel  = renderPersonaScorePanel;
@@ -1539,6 +1583,7 @@ function registerSessionHistoryFeature() {
 export {
   registerSessionHistoryFeature,
   renderSessionHistory,
+  renderSessionNotFound,
   renderTemplateCard,
   renderActionPlanPanel,
   renderPersonaScorePanel,

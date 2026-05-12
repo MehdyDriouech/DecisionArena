@@ -661,7 +661,8 @@ EN;
                 'chars_budget_allowed' => (int)($budgeted['chars_budget_allowed'] ?? mb_strlen($work, 'UTF-8')),
                 'budget_soft_cap_registry' => $budgeted['soft_budget'] ?? null,
                 'budget_hard_cap_registry' => $budgeted['hard_budget'] ?? null,
-            ])
+            ]),
+            $work
         );
         if ($dedup !== null && $dedup !== '') {
             PromptInjectionTraceCollector::recordSegmentFingerprint($dedup, $segment);

@@ -4,7 +4,7 @@ import { normalizeDecisionDynamics } from '../../utils/decisionDynamics.js';
 import { updateProviderSettings, deleteProviderKey, maskProviderKey } from '../../core/store.js';
 import { withProviderRuntime } from '../../core/providerRuntime.js';
 import { getAvailableProviders } from '../../core/providerRouting.js';
-import { testProviderConnection } from '../../services/providerService.js';
+import { ProviderService, testProviderConnection } from '../../services/providerService.js';
 import { isConfirmationConfirmed, requestConfirmation, uiCopy } from '../../utils/confirmationUi.js';
 
 function getCtx() {
@@ -419,6 +419,36 @@ function registerAdminHandlers() {
     }
   });
 
+  registerAction('save-persona-default-llm', async ({ element }) => {
+    const { state, render, PersonaService, t } = getCtx();
+    const personaId = element?.dataset?.personaId ?? '';
+    if (!personaId) return;
+    const card = document.querySelector(`[data-persona-llm-card="${personaId}"]`);
+    const prov = card?.querySelector('[data-persona-llm-prov]')?.value ?? '';
+    const model = card?.querySelector('[data-persona-llm-model]')?.value ?? '';
+    const statusEl = document.getElementById(`persona-llm-status-${personaId}`);
+    try {
+      await PersonaService.updateDefaultLlm({
+        persona_id: personaId,
+        default_provider: prov,
+        default_model: model,
+      });
+      const data = await PersonaService.list();
+      state.personas = Array.isArray(data) ? data : (data.personas || []);
+      if (statusEl) {
+        statusEl.textContent = t('personas.defaultLlm.saved');
+        statusEl.style.color = '#059669';
+        setTimeout(() => { statusEl.textContent = ''; statusEl.style.color = ''; }, 2800);
+      }
+      render();
+    } catch (err) {
+      if (statusEl) {
+        statusEl.textContent = `${t('personas.defaultLlm.error')}: ${err?.message || err}`;
+        statusEl.style.color = '#dc2626';
+      }
+    }
+  });
+
   registerAction('update-persona-dynamics', ({ element }) => {
     const { state, render } = getCtx();
     const personaId = element?.dataset?.personaId ?? '';
@@ -536,15 +566,18 @@ function registerAdminHandlers() {
 
   /* ── Providers ────────────────────────────────────────────────────────── */
   registerAction('test-provider', async ({ element }) => {
-    const { apiFetch, escHtml, t } = getCtx();
+    const { state, apiFetch, escHtml, t } = getCtx();
     const providerId = element.dataset.providerId;
     const resultEl   = document.getElementById(`provider-test-result-${providerId}`);
+    const provider = (state.providers || []).find((p) => String(p.id) === String(providerId));
+    const isEnabled = provider && (provider.enabled == 1 || provider.enabled === true);
     if (resultEl) resultEl.innerHTML = `<span style="color:var(--text-muted);font-size:12px;">${t('providers.testing')}</span>`;
     try {
       const result = await apiFetch('/api/providers/test', { method: 'POST', body: JSON.stringify({ provider_id: providerId }) });
       if (resultEl) {
         const ok = result.success || result.status === 'ok';
-        resultEl.innerHTML = `<div class="provider-test-result ${ok ? 'ok' : 'fail'}">${ok ? '✅ Connected' : '❌ Failed'}: ${escHtml(result.message || result.error || JSON.stringify(result))}</div>`;
+        const manualDisabledHint = !isEnabled ? `<div style="margin-top:6px;font-size:11px;color:var(--text-muted);">${escHtml(t('providers.manualTestDisabledHint'))}</div>` : '';
+        resultEl.innerHTML = `<div class="provider-test-result ${ok ? 'ok' : 'fail'}">${ok ? '✅ Connected' : '❌ Failed'}: ${escHtml(result.message || result.error || JSON.stringify(result))}${manualDisabledHint}</div>`;
       }
     } catch (err) {
       if (resultEl) resultEl.innerHTML = `<div class="provider-test-result fail">❌ ${escHtml(err.message)}</div>`;
@@ -679,6 +712,50 @@ function registerAdminHandlers() {
       state.error = err.message;
       render();
     }
+  });
+
+  registerAction('toggle-local-provider-enabled', async (ctx = {}) => {
+    const { element } = ctx;
+    const { state, render, t } = getCtx();
+    const providerId = String(element?.dataset?.providerId || '').trim();
+    if (!providerId) return;
+    const provider = (state.providers || []).find((p) => String(p.id) === providerId);
+    if (!provider) return;
+    const currentlyEnabled = provider.enabled == 1 || provider.enabled === true;
+    const nextEnabled = !currentlyEnabled;
+    if (!isConfirmationConfirmed(ctx)) {
+      requestConfirmation(state, {
+        id: `toggle-provider-enabled:${providerId}:${nextEnabled ? 'on' : 'off'}`,
+        mode: 'modal',
+        tone: 'warning',
+        title: nextEnabled ? t('providers.confirmEnable') : t('providers.confirmDisable'),
+        body: nextEnabled
+          ? uiCopy('Ce provider redeviendra disponible pour le routage et les nouvelles analyses.', 'This provider will be available again for routing and new analyses.')
+          : uiCopy('Il ne sera plus utilise par le routage ni propose par defaut pour les nouvelles analyses.', 'It will no longer be used by routing nor proposed by default for new analyses.'),
+        expertBody: uiCopy('Aucune configuration n’est supprimée.', 'No configuration is deleted.'),
+        confirmLabel: nextEnabled ? t('providers.enable') : t('providers.disable'),
+        action: 'toggle-local-provider-enabled',
+        payload: { providerId },
+      });
+      render();
+      return;
+    }
+    try {
+      const result = nextEnabled
+        ? await ProviderService.enable(providerId)
+        : await ProviderService.disable(providerId);
+      const updated = result?.provider || null;
+      if (updated) {
+        const idx = state.providers.findIndex((p) => String(p.id) === providerId);
+        if (idx >= 0) {
+          state.providers[idx] = { ...state.providers[idx], ...updated };
+        }
+      }
+      state.error = null;
+    } catch (err) {
+      state.error = err.message || String(err);
+    }
+    render();
   });
 
   /* ── BYOK (clés API locales, store navigateur) ────────────────────────── */

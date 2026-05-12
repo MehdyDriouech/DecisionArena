@@ -10,6 +10,9 @@ const SessionService = {
   get(sessionId) {
     return apiFetch(`/api/sessions/${sessionId}`);
   },
+  getRunStatus(sessionId, options = {}) {
+    return apiFetch(`/api/sessions/${sessionId}/run-status`, options);
+  },
   create(payload) {
     return apiFetch('/api/sessions', {
       method: 'POST',

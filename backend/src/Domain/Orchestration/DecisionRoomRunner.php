@@ -18,6 +18,7 @@ use Domain\Vote\VoteParser;
 use Infrastructure\Logging\Logger;
 use Infrastructure\Persistence\DebateRepository;
 use Infrastructure\Persistence\MessageRepository;
+use Infrastructure\Persistence\RunStatusRepository;
 use Infrastructure\Persistence\VerdictRepository;
 use Infrastructure\Persistence\VoteRepository;
 
@@ -43,6 +44,7 @@ class DecisionRoomRunner {
     private DecisionSummaryService $summaryService;
     private PlaybookRuntime $playbookRuntime;
     private Logger $logger;
+    private RunStatusRepository $runStatusRepo;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -66,23 +68,21 @@ class DecisionRoomRunner {
         $this->summaryService = new DecisionSummaryService();
         $this->playbookRuntime = new PlaybookRuntime();
         $this->logger = new Logger();
-        // Ensure run_status column exists for auto-retry progress signaling
-        try {
-            $pdo = \Infrastructure\Persistence\Database::getConnection();
-            $pdo->exec("ALTER TABLE sessions ADD COLUMN run_status TEXT DEFAULT NULL");
-        } catch (\Exception $e) {
-            // Column already exists — safe to ignore
-        }
+        $this->runStatusRepo = new RunStatusRepository();
     }
 
-    private function writeRunStatus(string $sessionId, array $status): void
+    private function reportRuntimeEvent(
+        string $sessionId,
+        array $event,
+        array $progressPatch = [],
+        ?string $status = null,
+        ?string $lastError = null
+    ): void
     {
         try {
-            $pdo  = \Infrastructure\Persistence\Database::getConnection();
-            $stmt = $pdo->prepare("UPDATE sessions SET run_status = :s WHERE id = :id");
-            $stmt->execute([':s' => json_encode($status), ':id' => $sessionId]);
-        } catch (\Exception $e) {
-            // Non-fatal — progress signaling is best-effort
+            $this->runStatusRepo->appendEvent($sessionId, $event, $progressPatch, $status, $lastError);
+        } catch (\Throwable $e) {
+            // Non-fatal — runtime progress is best-effort
         }
     }
 
@@ -130,6 +130,24 @@ class DecisionRoomRunner {
         for ($round = 1; $round <= $rounds; $round++) {
             $roundMessages  = [];
             $agentsForRound = $selectedAgents;
+            $this->reportRuntimeEvent(
+                $sessionId,
+                [
+                    'level' => 'info',
+                    'phase' => 'round_started',
+                    'round' => $round,
+                    'label' => 'Round ' . $round . ' demarre',
+                ],
+                [
+                    'current_round' => $round,
+                    'total_rounds' => $rounds,
+                    'current_phase' => 'round_started',
+                    'current_phase_label' => 'Round ' . $round . ' demarre',
+                    'current_step' => 'round_start',
+                    'percent' => $this->estimatePercent($round, $rounds, 0.0),
+                ],
+                'running'
+            );
 
             // Synthesizer speaks last only on the final round
             $hasSynthesizer = in_array('synthesizer', $agentsForRound, true);
@@ -145,6 +163,27 @@ class DecisionRoomRunner {
             foreach ($agentsForRound as $agentId) {
                 $agent = $this->assembler->assemble($agentId, null, null, $dynamicsPreset);
                 if (!$agent) continue;
+                $phase = ($agentId === 'synthesizer' && $round === $rounds) ? 'synthesis' : 'analysis';
+                $this->reportRuntimeEvent(
+                    $sessionId,
+                    [
+                        'level' => 'info',
+                        'phase' => $phase,
+                        'round' => $round,
+                        'agent_id' => $agentId,
+                        'label' => $this->agentEventLabel($phase, $agentId, true),
+                    ],
+                    [
+                        'current_round' => $round,
+                        'total_rounds' => $rounds,
+                        'current_phase' => $phase,
+                        'current_phase_label' => $this->phaseHumanLabel($phase),
+                        'current_agent_id' => $agentId,
+                        'current_step' => 'llm_call',
+                        'percent' => $this->estimatePercent($round, $rounds, 0.2),
+                    ],
+                    'running'
+                );
 
                 $assignedTarget = ($round > 1 && $agentId !== 'synthesizer')
                     ? $this->computeAssignedTarget($agentsForRound, $agentId, $round)
@@ -279,7 +318,8 @@ class DecisionRoomRunner {
                                             mb_strlen($bConstraints['content'], 'UTF-8'),
                                             'pre_model_aggregate_votes_guardrails_evidence',
                                             null,
-                                            $beC
+                                            $beC,
+                                            (string)$bConstraints['content']
                                         );
                                         PromptInjectionTraceCollector::addStep(
                                             'synthesizer_output_format',
@@ -287,7 +327,8 @@ class DecisionRoomRunner {
                                             mb_strlen($bFormat['content'], 'UTF-8'),
                                             'playbook_output_schema_and_optional_premortem_addendum',
                                             null,
-                                            $beF
+                                            $beF,
+                                            (string)$bFormat['content']
                                         );
                                     }
                                     break;
@@ -304,7 +345,13 @@ class DecisionRoomRunner {
                         ? json_encode(['prompt_injection_trace' => $promptTrace], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE)
                         : null;
 
-                    $routed  = $this->providerRouter->chat($messages, $agent, null, null, $agentProviders[$agentId] ?? null);
+                    $routed  = $this->providerRouter->chat(
+                        $messages,
+                        $agent,
+                        null,
+                        null,
+                        $this->resolveAgentOverride($agentProviders, (string)$agentId)
+                    );
                     $content = $routed['content'];
 
                     $msg = $this->messageRepo->create([
@@ -319,6 +366,14 @@ class DecisionRoomRunner {
                         'requested_model'          => $routed['requested_model'] ?? null,
                         'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
                         'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                        'routing_source'           => $routed['routing_source'] ?? null,
+                        'resolved_provider_id'     => $routed['resolved_provider_id'] ?? null,
+                        'resolved_provider_label'  => $routed['resolved_provider_label'] ?? null,
+                        'resolved_model'           => $routed['resolved_model'] ?? null,
+                        'session_override_present' => $routed['session_override_present'] ?? null,
+                        'persona_default_provider_ignored' => $routed['persona_default_provider_ignored'] ?? null,
+                        'fallback_from_provider_id' => $routed['fallback_from_provider_id'] ?? null,
+                        'fallback_from_model'      => $routed['fallback_from_model'] ?? null,
                         'round'                    => $round,
                         'phase'                    => $agentId === 'synthesizer' ? 'synthesis' : 'analysis',
                         'mode_context'             => 'decision-room',
@@ -328,6 +383,26 @@ class DecisionRoomRunner {
                         'created_at'               => date('c'),
                     ]);
                     $roundMessages[] = $msg;
+                    $this->reportRuntimeEvent(
+                        $sessionId,
+                        [
+                            'level' => 'info',
+                            'phase' => $phase,
+                            'round' => $round,
+                            'agent_id' => $agentId,
+                            'label' => $this->agentEventLabel($phase, $agentId, false),
+                        ],
+                        [
+                            'current_round' => $round,
+                            'total_rounds' => $rounds,
+                            'current_phase' => $phase,
+                            'current_phase_label' => $this->phaseHumanLabel($phase),
+                            'current_agent_id' => $agentId,
+                            'current_step' => 'response_received',
+                            'percent' => $this->estimatePercent($round, $rounds, $agentId === 'synthesizer' ? 0.95 : 0.6),
+                        ],
+                        'running'
+                    );
                     $targetResolution = $this->resolveTargetAgent($content, $previousRoundMessages, $agentId, $assignedTarget);
                     $targetAgentId = $targetResolution['target_agent_id'];
                     $this->debateMemory->processMessage(
@@ -406,6 +481,27 @@ class DecisionRoomRunner {
                         'created_at'               => date('c'),
                     ]);
                     $roundMessages[] = $msg;
+                    $this->reportRuntimeEvent(
+                        $sessionId,
+                        [
+                            'level' => 'error',
+                            'phase' => $phase,
+                            'round' => $round,
+                            'agent_id' => $agentId,
+                            'label' => $this->agentEventLabel($phase, $agentId, false) . ' (erreur)',
+                        ],
+                        [
+                            'current_round' => $round,
+                            'total_rounds' => $rounds,
+                            'current_phase' => $phase,
+                            'current_phase_label' => $this->phaseHumanLabel($phase),
+                            'current_agent_id' => $agentId,
+                            'current_step' => 'failed',
+                            'percent' => $this->estimatePercent($round, $rounds, 0.65),
+                        ],
+                        'running',
+                        (string)$e->getMessage()
+                    );
                 }
             }
 
@@ -481,10 +577,18 @@ class DecisionRoomRunner {
                             'provider_id'              => $daRouted['provider_id'] ?? null,
                             'provider_name'            => $daRouted['provider_name'] ?? null,
                             'model'                    => $daRouted['model'] ?? null,
-                            'requested_provider_id'    => null,
-                            'requested_model'          => null,
-                            'provider_fallback_used'   => 0,
-                            'provider_fallback_reason' => null,
+                            'requested_provider_id'    => $daRouted['requested_provider_id'] ?? null,
+                            'requested_model'          => $daRouted['requested_model'] ?? null,
+                            'provider_fallback_used'   => ($daRouted['fallback_used'] ?? false) ? 1 : 0,
+                            'provider_fallback_reason' => $daRouted['fallback_reason'] ?? null,
+                            'routing_source'           => $daRouted['routing_source'] ?? null,
+                            'resolved_provider_id'     => $daRouted['resolved_provider_id'] ?? null,
+                            'resolved_provider_label'  => $daRouted['resolved_provider_label'] ?? null,
+                            'resolved_model'           => $daRouted['resolved_model'] ?? null,
+                            'session_override_present' => $daRouted['session_override_present'] ?? null,
+                            'persona_default_provider_ignored' => $daRouted['persona_default_provider_ignored'] ?? null,
+                            'fallback_from_provider_id' => $daRouted['fallback_from_provider_id'] ?? null,
+                            'fallback_from_model'      => $daRouted['fallback_from_model'] ?? null,
                             'round'                    => $round,
                             'phase'                    => 'devil-advocate',
                             'mode_context'             => 'decision-room',
@@ -577,11 +681,28 @@ class DecisionRoomRunner {
 
         if (($guardrails['should_auto_retry'] ?? false) === true) {
             $initialScore = $debateQualityProxy;
-            $this->writeRunStatus($sessionId, [
-                'status'        => 'auto_retry',
-                'reason'        => 'weak_parallel_debate',
-                'initial_score' => $initialScore,
-            ]);
+            $this->reportRuntimeEvent(
+                $sessionId,
+                [
+                    'level' => 'warning',
+                    'phase' => 'auto_retry_started',
+                    'round' => $rounds + 1,
+                    'label' => 'Auto-retry demarre',
+                    'metadata' => [
+                        'reason' => 'weak_parallel_debate',
+                        'initial_score' => $initialScore,
+                    ],
+                ],
+                [
+                    'current_round' => $rounds + 1,
+                    'total_rounds' => $rounds + 1,
+                    'current_phase' => 'auto_retry_started',
+                    'current_phase_label' => 'Auto-retry demarre',
+                    'current_step' => 'retry',
+                    'percent' => 96,
+                ],
+                'running'
+            );
 
             $retryInstruction = $this->promptBuilder->buildAutoRetryAdversarialPrompt($initialScore);
 
@@ -622,7 +743,10 @@ class DecisionRoomRunner {
                     }
                     $routed = $this->providerRouter->chat(
                         $retryMessages,
-                        $agent, null, null, $agentProviders[$agentId] ?? null
+                        $agent,
+                        null,
+                        null,
+                        $this->resolveAgentOverride($agentProviders, (string)$agentId)
                     );
                     $this->messageRepo->create([
                         'id'           => $this->uuid(),
@@ -633,6 +757,21 @@ class DecisionRoomRunner {
                         'phase'        => 'retry-round',
                         'mode_context' => 'decision-room',
                         'message_type' => 'retry-round',
+                        'provider_id'   => $routed['provider_id'] ?? null,
+                        'provider_name' => $routed['provider_name'] ?? null,
+                        'model'         => $routed['model'] ?? null,
+                        'requested_provider_id'    => $routed['requested_provider_id'] ?? null,
+                        'requested_model'          => $routed['requested_model'] ?? null,
+                        'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
+                        'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                        'routing_source'           => $routed['routing_source'] ?? null,
+                        'resolved_provider_id'     => $routed['resolved_provider_id'] ?? null,
+                        'resolved_provider_label'  => $routed['resolved_provider_label'] ?? null,
+                        'resolved_model'           => $routed['resolved_model'] ?? null,
+                        'session_override_present' => $routed['session_override_present'] ?? null,
+                        'persona_default_provider_ignored' => $routed['persona_default_provider_ignored'] ?? null,
+                        'fallback_from_provider_id' => $routed['fallback_from_provider_id'] ?? null,
+                        'fallback_from_model'      => $routed['fallback_from_model'] ?? null,
                         'meta_json'    => $retryMetaJson,
                         'content'      => $routed['content'] ?? '',
                         'created_at'   => date('c'),
@@ -672,7 +811,27 @@ class DecisionRoomRunner {
                 'extra_rounds'                 => 1,
             ];
 
-            $this->writeRunStatus($sessionId, ['status' => 'auto_retry_complete', 'new_score' => $newDebateProxy]);
+            $this->reportRuntimeEvent(
+                $sessionId,
+                [
+                    'level' => 'info',
+                    'phase' => 'auto_retry_completed',
+                    'round' => $rounds + 1,
+                    'label' => 'Auto-retry termine',
+                    'metadata' => [
+                        'new_score' => $newDebateProxy,
+                    ],
+                ],
+                [
+                    'current_round' => $rounds + 1,
+                    'total_rounds' => $rounds + 1,
+                    'current_phase' => 'auto_retry_completed',
+                    'current_phase_label' => 'Auto-retry termine',
+                    'current_step' => 'retry_done',
+                    'percent' => 98,
+                ],
+                'running'
+            );
         }
 
         $finalFcData      = $newFalseConsensus ?? $falseConsensusData;
@@ -731,6 +890,10 @@ class DecisionRoomRunner {
             'playbook_runtime' => $playbookDiagnostics,
             'risk_profile' => $riskProfile,
             'guardrails' => $guardrails,
+            'decision_label' => $reliability['adjusted_decision']['decision_label'] ?? null,
+            'decision_status' => $reliability['adjusted_decision']['decision_status'] ?? null,
+            'outcome' => $reliability['adjusted_decision']['final_outcome'] ?? null,
+            'next_steps' => $reliability['decision_reliability_summary']['recommended_action'] ?? null,
         ]);
         $decisionBrief = $this->summaryService->buildDecisionBrief(
             array_merge($reliability, [
@@ -832,6 +995,24 @@ class DecisionRoomRunner {
         return $others[($agentIdx + $round) % count($others)];
     }
 
+    private function resolveAgentOverride(array $agentOverrides, string $agentId): ?array
+    {
+        $exact = trim($agentId);
+        if ($exact !== '' && isset($agentOverrides[$exact]) && is_array($agentOverrides[$exact])) {
+            return $agentOverrides[$exact];
+        }
+        $lower = strtolower($exact);
+        if ($lower === '') {
+            return null;
+        }
+        foreach ($agentOverrides as $key => $row) {
+            if (strtolower(trim((string)$key)) === $lower && is_array($row)) {
+                return $row;
+            }
+        }
+        return null;
+    }
+
     private function countMessageChars(array $messages): int
     {
         $chars = 0;
@@ -839,6 +1020,32 @@ class DecisionRoomRunner {
             $chars += mb_strlen((string)($message['content'] ?? ''), 'UTF-8');
         }
         return $chars;
+    }
+
+    private function phaseHumanLabel(string $phase): string
+    {
+        return match ($phase) {
+            'analysis' => 'Analyse agents',
+            'synthesis' => 'Synthese',
+            'round_started' => 'Round en cours',
+            'auto_retry_started' => 'Auto-retry demarre',
+            'auto_retry_completed' => 'Auto-retry termine',
+            default => $phase,
+        };
+    }
+
+    private function agentEventLabel(string $phase, string $agentId, bool $started): string
+    {
+        $step = $started ? 'appel LLM demarre' : 'reponse recue';
+        return $this->phaseHumanLabel($phase) . ' · ' . $agentId . ' · ' . $step;
+    }
+
+    private function estimatePercent(int $currentRound, int $totalRounds, float $withinRound): int
+    {
+        $safeTotal = max(1, $totalRounds);
+        $base = max(0.02, (($currentRound - 1) / $safeTotal));
+        $intra = max(0.0, min(1.0, $withinRound)) * (1.0 / $safeTotal);
+        return (int)round(min(0.99, $base + $intra) * 100);
     }
 
     private function uuid(): string {

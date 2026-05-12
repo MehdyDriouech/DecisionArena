@@ -57,6 +57,7 @@ final class PromptInjectionRegistry
     public const OFFICIAL_ORDER_DECISION_ROOM_USER = [
         'context_document',
         'session_objective',
+        'strategic_context_guidance',
         'playbook_block',
         'playbook_debate_discipline',
         'session_history_rounds',
@@ -81,6 +82,7 @@ final class PromptInjectionRegistry
     public const BLOCK_ID_TO_INJECTION_KEY = [
         'context_document' => 'context_document',
         'objective' => 'session_objective',
+        'strategic_context_guidance' => 'strategic_context_guidance',
         'playbook_block' => 'playbook_block',
         'debate_discipline' => 'playbook_debate_discipline',
         'previous_rounds' => 'session_history_rounds',
@@ -107,6 +109,22 @@ final class PromptInjectionRegistry
         'confrontation_user_payload' => 'confrontation_user_payload',
         'confrontation_synthesis_payload' => 'confrontation_synthesis_payload',
     ];
+
+    /** Suffixe de trace pour segment identique déjà injecté (voir PromptInjectionTraceCollector::isDuplicateSegment). */
+    private const TRACE_DEDUP_OMITTED_SUFFIX = '_dedup_omitted';
+
+    /**
+     * Normalise un block_id de trace vers la clé registre (ex. beliefs_prioritized_dedup_omitted → beliefs_prioritized).
+     */
+    public static function canonicalTraceBlockId(string $blockId): string
+    {
+        $suf = self::TRACE_DEDUP_OMITTED_SUFFIX;
+        if (str_ends_with($blockId, $suf)) {
+            return substr($blockId, 0, -strlen($suf));
+        }
+
+        return $blockId;
+    }
 
     /**
      * @return list<InjectionDef>
@@ -443,6 +461,29 @@ final class PromptInjectionRegistry
                 'enabled_by_default' => true,
                 'channel' => 'user',
                 'trace_block_id' => 'objective',
+            ]),
+            $def([
+                'injection_key' => 'strategic_context_guidance',
+                'label' => 'Contexte stratégique actif (description workspace)',
+                'category' => 'strategic_context',
+                'priority' => 98,
+                'max_chars' => 24000,
+                'soft_budget' => 14000,
+                'hard_budget' => 26000,
+                'context_scope' => 'strategic_context',
+                'cognitive_layer' => 'strategic_context',
+                'provenance_required' => true,
+                'deterministic' => true,
+                'optional' => true,
+                'requires_expert_mode' => false,
+                'retrieval_allowed' => true,
+                'deduplication_key' => 'strategic_context_workspace_description',
+                'pruning_priority' => 42,
+                'source_types' => ['strategic_context', 'workspace'],
+                'supports_cross_context' => false,
+                'enabled_by_default' => true,
+                'channel' => 'user',
+                'trace_block_id' => 'strategic_context_guidance',
             ]),
             $def([
                 'injection_key' => 'playbook_block',
@@ -1245,7 +1286,8 @@ final class PromptInjectionRegistry
     /** @return array<string, mixed>|null */
     public static function definitionForBlockId(string $blockId): ?array
     {
-        $key = self::BLOCK_ID_TO_INJECTION_KEY[$blockId] ?? null;
+        $canonical = self::canonicalTraceBlockId($blockId);
+        $key = self::BLOCK_ID_TO_INJECTION_KEY[$canonical] ?? null;
         if ($key === null) {
             return null;
         }
@@ -1256,7 +1298,9 @@ final class PromptInjectionRegistry
 
     public static function injectionKeyForBlockId(string $blockId): string
     {
-        return self::BLOCK_ID_TO_INJECTION_KEY[$blockId] ?? $blockId;
+        $canonical = self::canonicalTraceBlockId($blockId);
+
+        return self::BLOCK_ID_TO_INJECTION_KEY[$canonical] ?? $canonical;
     }
 
     public static function deduplicationKeyForBlockId(string $blockId): ?string

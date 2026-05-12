@@ -7,6 +7,7 @@ namespace Domain\Orchestration;
 use Domain\CognitiveGovernance\CognitiveProvenanceEnvelope;
 use Domain\CognitiveGovernance\CognitiveRuntimeQAMode;
 use Domain\CognitiveGovernance\DeterministicHash;
+use Domain\CognitiveGovernance\PromptInjectionProvenance;
 use Domain\CognitiveGovernance\PromptInjectionRegistry;
 use Domain\CognitiveGovernance\RuntimePromptGuard;
 use Domain\CognitiveGovernance\PromptRuntimePolicy;
@@ -89,6 +90,7 @@ final class PromptInjectionTraceCollector
 
     /**
      * @param array<string, mixed> $extra priority, relevance_score, budget_consumed, refused_chars, pruning_decision, fallback_decision, cognitive_provenance_hint, etc.
+     * @param string|null $injectedUtf8ForContentHash corps **après** dédup/budget, aligné sur injectedChars ; auto-remplit `content_hash` si absent
      */
     public static function addStep(
         string $blockId,
@@ -96,25 +98,34 @@ final class PromptInjectionTraceCollector
         int $injectedChars,
         string $inclusionReason,
         ?string $exclusionReason = null,
-        array $extra = []
+        array $extra = [],
+        ?string $injectedUtf8ForContentHash = null
     ): void {
         if (self::$state === null) {
             return;
         }
         $order = count(self::$state['steps']) + 1;
         $regDef = PromptInjectionRegistry::definitionForBlockId($blockId);
-        RuntimePromptGuard::inspectStep($blockId, $regDef, max(0, $injectedChars), $inclusionReason, $extra);
+        $extraForGuard = $extra;
+        $chars = max(0, $injectedChars);
+        if ($chars > 0
+            && !isset($extraForGuard['content_hash'])
+            && $injectedUtf8ForContentHash !== null
+        ) {
+            $extraForGuard['content_hash'] = PromptInjectionProvenance::computeInjectedContentHash($injectedUtf8ForContentHash);
+        }
+        RuntimePromptGuard::inspectStep($blockId, $regDef, $chars, $inclusionReason, $extraForGuard);
         $registryFields = is_array($regDef) ? PromptInjectionRegistry::traceFieldsFromDefinition($regDef) : [
             'injection_key' => PromptInjectionRegistry::injectionKeyForBlockId($blockId),
         ];
-        $refused = (int)($extra['refused_chars'] ?? 0);
+        $refused = (int)($extraForGuard['refused_chars'] ?? 0);
         $budgetSoftRemaining = null;
         if (is_array($regDef) && isset($regDef['soft_budget']) && $regDef['soft_budget'] !== null) {
             $budgetSoftRemaining = max(0, (int)$regDef['soft_budget'] - max(0, $injectedChars));
         }
-        $hint = isset($extra['cognitive_provenance_hint']) && is_array($extra['cognitive_provenance_hint'])
-            ? $extra['cognitive_provenance_hint'] : null;
-        $extraClean = $extra;
+        $hint = isset($extraForGuard['cognitive_provenance_hint']) && is_array($extraForGuard['cognitive_provenance_hint'])
+            ? $extraForGuard['cognitive_provenance_hint'] : null;
+        $extraClean = $extraForGuard;
         unset(
             $extraClean['cognitive_provenance_hint'],
             $extraClean['pruning_decision'],
@@ -132,10 +143,10 @@ final class PromptInjectionTraceCollector
                 'refused_chars' => $refused,
                 'inclusion_reason' => $inclusionReason,
                 'exclusion_reason' => $exclusionReason,
-                'pruning_decision' => $extra['pruning_decision'] ?? null,
-                'fallback_decision' => $extra['fallback_decision'] ?? null,
-                'score_priority' => $extra['score_priority'] ?? ($registryFields['priority'] ?? null),
-                'budget_soft_remaining' => $extra['budget_soft_remaining'] ?? $budgetSoftRemaining,
+                'pruning_decision' => $extraForGuard['pruning_decision'] ?? null,
+                'fallback_decision' => $extraForGuard['fallback_decision'] ?? null,
+                'score_priority' => $extraForGuard['score_priority'] ?? ($registryFields['priority'] ?? null),
+                'budget_soft_remaining' => $extraForGuard['budget_soft_remaining'] ?? $budgetSoftRemaining,
             ],
             $registryFields,
             $extraClean

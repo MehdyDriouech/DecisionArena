@@ -518,7 +518,7 @@ function renderDecisionOutcomeCard(data, opts = {}) {
   const isExpert = uiMode === 'expert';
   const sessionId = String(opts.sessionId || opts.session_id || '').trim();
   const t = (key) => window.i18n?.t(key) ?? key;
-  const status = cleanDecisionBriefText(outcome.status || '') || 'validate_first';
+  const status = cleanDecisionBriefText(outcome.status || '') || 'unknown';
   const confidence = (cleanDecisionBriefText(outcome.confidence || '') || 'weak').toLowerCase();
   const risk = cleanDecisionBriefText(outcome.execution_risk_level || '') || 'unknown';
   const summary = cleanDecisionBriefText(outcome.decision_summary || '') || 'Decision outcome incomplete.';
@@ -633,7 +633,7 @@ function renderDecisionOutcomeCard(data, opts = {}) {
   <div class="decision-outcome-top">
     <div>
       <div class="decision-outcome-kicker">Decision outcome</div>
-      <h3>${escHtml(label(status))}</h3>
+      <h3>${escHtml(status === 'unknown' ? t('decisionMemory.missingStatusLabel') : label(status))}</h3>
       <p>${escHtml(summary)}</p>
     </div>
     <div class="decision-outcome-badges">
@@ -674,6 +674,7 @@ function renderDecisionOutcomeCard(data, opts = {}) {
           data-session-id="${escHtml(sessionId)}">
           🧭 ${escHtml(t('decisionMemory.attachToContextButton'))}
         </button>
+        <span style="font-size:11px;color:var(--text-muted);">${escHtml(t('decisionMemory.attachToContextHint'))}</span>
       ` : ''}
       ${canPersistFromUi ? `<span style="font-size:11px;color:var(--text-muted);">${escHtml(t('decisionMemory.persistResultHint'))}</span>` : ''}
     </div>
@@ -689,7 +690,10 @@ function renderDecisionOutcomeCard(data, opts = {}) {
       <strong>${escHtml(t('decisionMemory.persistWhyNonPersistable'))}</strong>
       ${persistReason ? `<div>${escHtml(persistReason)}</div>` : ''}
       ${missingCritical.length ? `<div>${escHtml(t('decisionMemory.persistMissingFields'))}: ${escHtml(missingCritical.join(', '))}</div>` : ''}
+      ${missingCritical.includes('status') ? `<div>${escHtml(t('decisionMemory.persistMissingStatusDetail'))}</div>` : ''}
+      ${missingCritical.includes('required_next_actions') ? `<div>${escHtml(t('decisionMemory.persistMissingActionsDetail'))}</div>` : ''}
       ${derivedFallback ? `<div>${escHtml(t('decisionMemory.persistDerivedFallback'))}</div>` : ''}
+      <div>${escHtml(t('decisionMemory.persistRecoveryHint'))}</div>
     </div>
   ` : ''}
   ${validationItems.length ? `

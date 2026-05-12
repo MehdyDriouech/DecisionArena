@@ -17,6 +17,7 @@ use Domain\StrategicContext\AgentContextMemoryService;
 use Infrastructure\Persistence\DebateRepository;
 use Infrastructure\Persistence\JuryAdversarialReportRepository;
 use Infrastructure\Persistence\MessageRepository;
+use Infrastructure\Persistence\RunStatusRepository;
 use Infrastructure\Persistence\VoteRepository;
 
 class JuryRunner {
@@ -40,6 +41,7 @@ class JuryRunner {
     private PromptBuilder $promptBuilder;
     private PlaybookRuntime $playbookRuntime;
     private AgentContextMemoryService $agentContextMemorySvc;
+    private RunStatusRepository $runStatusRepo;
 
     public function __construct() {
         $this->assembler        = new AgentAssembler();
@@ -62,22 +64,21 @@ class JuryRunner {
         $this->summaryService = new DecisionSummaryService();
         $this->playbookRuntime = new PlaybookRuntime();
         $this->agentContextMemorySvc = new AgentContextMemoryService();
-        try {
-            $pdo = \Infrastructure\Persistence\Database::getConnection();
-            $pdo->exec("ALTER TABLE sessions ADD COLUMN run_status TEXT DEFAULT NULL");
-        } catch (\Exception $e) {
-            // Column already exists — safe to ignore
-        }
+        $this->runStatusRepo = new RunStatusRepository();
     }
 
-    private function writeRunStatus(string $sessionId, array $status): void
+    private function reportRuntimeEvent(
+        string $sessionId,
+        array $event,
+        array $progressPatch = [],
+        ?string $status = null,
+        ?string $lastError = null
+    ): void
     {
         try {
-            $pdo  = \Infrastructure\Persistence\Database::getConnection();
-            $stmt = $pdo->prepare("UPDATE sessions SET run_status = :s WHERE id = :id");
-            $stmt->execute([':s' => json_encode($status), ':id' => $sessionId]);
-        } catch (\Exception $e) {
-            // Non-fatal
+            $this->runStatusRepo->appendEvent($sessionId, $event, $progressPatch, $status, $lastError);
+        } catch (\Throwable $e) {
+            // Non-fatal runtime telemetry path
         }
     }
 
@@ -90,6 +91,7 @@ class JuryRunner {
         float  $threshold,
         string $language,
         ?array $contextDoc,
+        array  $agentProviders = [],
         array  $adversarialCfg = [],
         ?string $decisionDynamicsPreset = null,
         ?string $strategicContextId = null
@@ -134,10 +136,48 @@ class JuryRunner {
         for ($round = 1; $round <= $totalDebateRounds; $round++) {
             $phase        = $this->resolveJuryPhase($round, $rounds, $adversarialCfg);
             $roundMessages = [];
+            $this->reportRuntimeEvent(
+                $sessionId,
+                [
+                    'level' => 'info',
+                    'phase' => 'round_started',
+                    'round' => $round,
+                    'label' => 'Round ' . $round . ' demarre',
+                ],
+                [
+                    'current_round' => $round,
+                    'total_rounds' => $rounds,
+                    'current_phase' => $phase,
+                    'current_phase_label' => $this->phaseHumanLabel($phase),
+                    'current_step' => 'round_start',
+                    'percent' => $this->estimatePercent($round, $rounds, 0.05),
+                ],
+                'running'
+            );
 
             foreach ($debateAgents as $agentId) {
                 $agent = $this->assembler->assemble($agentId, null, null, $dynamicsPreset);
                 if (!$agent) continue;
+                $this->reportRuntimeEvent(
+                    $sessionId,
+                    [
+                        'level' => 'info',
+                        'phase' => $phase,
+                        'round' => $round,
+                        'agent_id' => $agentId,
+                        'label' => $this->agentEventLabel($phase, $agentId, true),
+                    ],
+                    [
+                        'current_round' => $round,
+                        'total_rounds' => $rounds,
+                        'current_phase' => $phase,
+                        'current_phase_label' => $this->phaseHumanLabel($phase),
+                        'current_agent_id' => $agentId,
+                        'current_step' => 'llm_call',
+                        'percent' => $this->estimatePercent($round, $rounds, 0.2),
+                    ],
+                    'running'
+                );
 
                 $assignedTarget = ($phase !== 'jury-opening')
                     ? $this->computeAssignedTarget($debateAgents, $agentId, $round)
@@ -183,7 +223,13 @@ class JuryRunner {
                     $messages = $governed['messages'];
                     $promptMetaJson = $governed['meta_json'];
 
-                    $routed  = $this->providerRouter->chat($messages, $agent);
+                    $routed  = $this->providerRouter->chat(
+                        $messages,
+                        $agent,
+                        null,
+                        null,
+                        $this->resolveAgentOverride($agentProviders, (string)$agentId)
+                    );
                     $content = $routed['content'];
 
                     // ── Adversarial compliance check + single retry ───────────
@@ -196,7 +242,13 @@ class JuryRunner {
                             $content, $complianceIssue, $phase, $agentId, $contextMessages
                         );
                         try {
-                            $retried = $this->providerRouter->chat($correctedMessages, $agent);
+                            $retried = $this->providerRouter->chat(
+                                $correctedMessages,
+                                $agent,
+                                null,
+                                null,
+                                $this->resolveAgentOverride($agentProviders, (string)$agentId)
+                            );
                             $content = $retried['content'];
                             $routed  = $retried;
                         } catch (\Throwable $retryEx) {
@@ -221,6 +273,14 @@ class JuryRunner {
                         'requested_model'          => $routed['requested_model'] ?? null,
                         'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
                         'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                        'routing_source'           => $routed['routing_source'] ?? null,
+                        'resolved_provider_id'     => $routed['resolved_provider_id'] ?? null,
+                        'resolved_provider_label'  => $routed['resolved_provider_label'] ?? null,
+                        'resolved_model'           => $routed['resolved_model'] ?? null,
+                        'session_override_present' => $routed['session_override_present'] ?? null,
+                        'persona_default_provider_ignored' => $routed['persona_default_provider_ignored'] ?? null,
+                        'fallback_from_provider_id' => $routed['fallback_from_provider_id'] ?? null,
+                        'fallback_from_model'      => $routed['fallback_from_model'] ?? null,
                         'round'                    => $round,
                         'phase'                    => $phase,
                         'target_agent_id'          => $targetAgentId,
@@ -231,6 +291,26 @@ class JuryRunner {
                         'created_at'               => date('c'),
                     ]);
                     $roundMessages[] = $msg;
+                    $this->reportRuntimeEvent(
+                        $sessionId,
+                        [
+                            'level' => 'info',
+                            'phase' => $phase,
+                            'round' => $round,
+                            'agent_id' => $agentId,
+                            'label' => $this->agentEventLabel($phase, $agentId, false),
+                        ],
+                        [
+                            'current_round' => $round,
+                            'total_rounds' => $rounds,
+                            'current_phase' => $phase,
+                            'current_phase_label' => $this->phaseHumanLabel($phase),
+                            'current_agent_id' => $agentId,
+                            'current_step' => 'response_received',
+                            'percent' => $this->estimatePercent($round, $rounds, 0.65),
+                        ],
+                        'running'
+                    );
 
                     $this->debateMemory->processMessage(
                         $sessionId, $round, $agentId, $content, $targetAgentId, $state, $targetResolution['edge_source']
@@ -287,6 +367,27 @@ class JuryRunner {
                         'created_at'               => date('c'),
                     ]);
                     $roundMessages[] = $msg;
+                    $this->reportRuntimeEvent(
+                        $sessionId,
+                        [
+                            'level' => 'error',
+                            'phase' => $phase,
+                            'round' => $round,
+                            'agent_id' => $agentId,
+                            'label' => $this->agentEventLabel($phase, $agentId, false) . ' (erreur)',
+                        ],
+                        [
+                            'current_round' => $round,
+                            'total_rounds' => $rounds,
+                            'current_phase' => $phase,
+                            'current_phase_label' => $this->phaseHumanLabel($phase),
+                            'current_agent_id' => $agentId,
+                            'current_step' => 'failed',
+                            'percent' => $this->estimatePercent($round, $rounds, 0.7),
+                        ],
+                        'running',
+                        (string)$e->getMessage()
+                    );
                 }
             }
 
@@ -315,9 +416,27 @@ class JuryRunner {
         $allDebateMessages = array_merge(...array_values($allRounds ?: [[]]));
         $prelimQuality = $this->computeDebateQualityScore($state, count($debateAgents), false);
         if ($adversarialCfg['enabled'] && $this->needsMiniChallengeRound($prelimQuality, $adversarialCfg)) {
+            $this->reportRuntimeEvent(
+                $sessionId,
+                [
+                    'level' => 'info',
+                    'phase' => 'jury-mini-challenge',
+                    'round' => $nextRound,
+                    'label' => 'Mini challenge demarre',
+                ],
+                [
+                    'current_round' => $nextRound,
+                    'total_rounds' => $rounds,
+                    'current_phase' => 'jury-mini-challenge',
+                    'current_phase_label' => $this->phaseHumanLabel('jury-mini-challenge'),
+                    'current_step' => 'phase_start',
+                    'percent' => $this->estimatePercent($nextRound, $rounds, 0.15),
+                ],
+                'running'
+            );
             $miniMessages = $this->runMiniChallengeRound(
                 $sessionId, $objective, $debateAgents,
-                $prevMessages, $language, $contextDoc, $adversarialCfg, $state, $nextRound
+                $prevMessages, $language, $contextDoc, $adversarialCfg, $state, $nextRound, $dynamicsPreset, $agentProviders
             );
             if (!empty($miniMessages)) {
                 $allRounds['mini-challenge'] = $miniMessages;
@@ -349,6 +468,24 @@ class JuryRunner {
 
             $minorityRound        = $nextRound;
             $allDebateForMinority = $allDebateMessages;
+            $this->reportRuntimeEvent(
+                $sessionId,
+                [
+                    'level' => 'info',
+                    'phase' => 'jury-minority-report',
+                    'round' => $minorityRound,
+                    'label' => 'Minority report demarre',
+                ],
+                [
+                    'current_round' => $minorityRound,
+                    'total_rounds' => $rounds,
+                    'current_phase' => 'jury-minority-report',
+                    'current_phase_label' => $this->phaseHumanLabel('jury-minority-report'),
+                    'current_step' => 'phase_start',
+                    'percent' => $this->estimatePercent($minorityRound, $rounds, 0.2),
+                ],
+                'running'
+            );
             foreach (array_slice($minorityAgentIds, 0, 2) as $minorityAgentId) {
                 $agent = $this->assembler->assemble($minorityAgentId, null, null, $dynamicsPreset);
                 if (!$agent) continue;
@@ -372,7 +509,13 @@ class JuryRunner {
                     );
                     $mrMessages = $governed['messages'];
                     $promptMetaJson = $governed['meta_json'];
-                    $routed  = $this->providerRouter->chat($mrMessages, $agent);
+                    $routed  = $this->providerRouter->chat(
+                        $mrMessages,
+                        $agent,
+                        null,
+                        null,
+                        $this->resolveAgentOverride($agentProviders, (string)$minorityAgentId)
+                    );
                     $content = $routed['content'];
 
                     $msg = $this->messageRepo->create([
@@ -387,6 +530,14 @@ class JuryRunner {
                         'requested_model'          => $routed['requested_model'] ?? null,
                         'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
                         'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                        'routing_source'           => $routed['routing_source'] ?? null,
+                        'resolved_provider_id'     => $routed['resolved_provider_id'] ?? null,
+                        'resolved_provider_label'  => $routed['resolved_provider_label'] ?? null,
+                        'resolved_model'           => $routed['resolved_model'] ?? null,
+                        'session_override_present' => $routed['session_override_present'] ?? null,
+                        'persona_default_provider_ignored' => $routed['persona_default_provider_ignored'] ?? null,
+                        'fallback_from_provider_id' => $routed['fallback_from_provider_id'] ?? null,
+                        'fallback_from_model'      => $routed['fallback_from_model'] ?? null,
                         'round'                    => $minorityRound,
                         'phase'                    => 'jury-minority-report',
                         'target_agent_id'          => null,
@@ -419,6 +570,26 @@ class JuryRunner {
         $verdictMessages = [];
         $synthAgent = $this->assembler->assemble('synthesizer', null, null, $dynamicsPreset);
         if ($synthAgent) {
+            $this->reportRuntimeEvent(
+                $sessionId,
+                [
+                    'level' => 'info',
+                    'phase' => 'jury-verdict',
+                    'round' => $verdictRound,
+                    'agent_id' => 'synthesizer',
+                    'label' => 'Synthese jury demarree',
+                ],
+                [
+                    'current_round' => $verdictRound,
+                    'total_rounds' => $rounds,
+                    'current_phase' => 'jury-verdict',
+                    'current_phase_label' => $this->phaseHumanLabel('jury-verdict'),
+                    'current_agent_id' => 'synthesizer',
+                    'current_step' => 'llm_call',
+                    'percent' => 96,
+                ],
+                'running'
+            );
             try {
                 $allPrevMessages = $allDebateMessages;
                 $messages = $this->buildJuryMessages(
@@ -498,7 +669,13 @@ class JuryRunner {
                 $messages = $governed['messages'];
                 $promptMetaJson = $governed['meta_json'];
 
-                $routed  = $this->providerRouter->chat($messages, $synthAgent);
+                $routed  = $this->providerRouter->chat(
+                    $messages,
+                    $synthAgent,
+                    null,
+                    null,
+                    $this->resolveAgentOverride($agentProviders, 'synthesizer')
+                );
                 $content = $routed['content'];
 
                 $msg = $this->messageRepo->create([
@@ -513,6 +690,14 @@ class JuryRunner {
                     'requested_model'          => $routed['requested_model'] ?? null,
                     'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
                     'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                    'routing_source'           => $routed['routing_source'] ?? null,
+                    'resolved_provider_id'     => $routed['resolved_provider_id'] ?? null,
+                    'resolved_provider_label'  => $routed['resolved_provider_label'] ?? null,
+                    'resolved_model'           => $routed['resolved_model'] ?? null,
+                    'session_override_present' => $routed['session_override_present'] ?? null,
+                    'persona_default_provider_ignored' => $routed['persona_default_provider_ignored'] ?? null,
+                    'fallback_from_provider_id' => $routed['fallback_from_provider_id'] ?? null,
+                    'fallback_from_model'      => $routed['fallback_from_model'] ?? null,
                     'round'                    => $verdictRound,
                     'phase'                    => 'jury-verdict',
                     'target_agent_id'          => null,
@@ -523,6 +708,26 @@ class JuryRunner {
                     'created_at'               => date('c'),
                 ]);
                 $verdictMessages[] = $msg;
+                $this->reportRuntimeEvent(
+                    $sessionId,
+                    [
+                        'level' => 'info',
+                        'phase' => 'jury-verdict',
+                        'round' => $verdictRound,
+                        'agent_id' => 'synthesizer',
+                        'label' => 'Synthese jury terminee',
+                    ],
+                    [
+                        'current_round' => $verdictRound,
+                        'total_rounds' => $rounds,
+                        'current_phase' => 'jury-verdict',
+                        'current_phase_label' => $this->phaseHumanLabel('jury-verdict'),
+                        'current_agent_id' => 'synthesizer',
+                        'current_step' => 'response_received',
+                        'percent' => 99,
+                    ],
+                    'running'
+                );
 
             } catch (\Throwable $e) {
                 $msg = $this->messageRepo->create([
@@ -546,6 +751,27 @@ class JuryRunner {
                     'created_at'               => date('c'),
                 ]);
                 $verdictMessages[] = $msg;
+                $this->reportRuntimeEvent(
+                    $sessionId,
+                    [
+                        'level' => 'error',
+                        'phase' => 'jury-verdict',
+                        'round' => $verdictRound,
+                        'agent_id' => 'synthesizer',
+                        'label' => 'Synthese jury en erreur',
+                    ],
+                    [
+                        'current_round' => $verdictRound,
+                        'total_rounds' => $rounds,
+                        'current_phase' => 'jury-verdict',
+                        'current_phase_label' => $this->phaseHumanLabel('jury-verdict'),
+                        'current_agent_id' => 'synthesizer',
+                        'current_step' => 'failed',
+                        'percent' => 99,
+                    ],
+                    'running',
+                    (string)$e->getMessage()
+                );
             }
         }
         $allRounds[$verdictRound] = $verdictMessages;
@@ -666,11 +892,28 @@ class JuryRunner {
 
         if (($guardrails['should_auto_retry'] ?? false) === true) {
             $initialScore = $juryDebateScore;
-            $this->writeRunStatus($sessionId, [
-                'status'        => 'auto_retry',
-                'reason'        => 'weak_parallel_debate',
-                'initial_score' => $initialScore,
-            ]);
+            $this->reportRuntimeEvent(
+                $sessionId,
+                [
+                    'level' => 'warning',
+                    'phase' => 'auto_retry_started',
+                    'round' => $verdictRound + 1,
+                    'label' => 'Auto-retry demarre',
+                    'metadata' => [
+                        'reason' => 'weak_parallel_debate',
+                        'initial_score' => $initialScore,
+                    ],
+                ],
+                [
+                    'current_round' => $verdictRound + 1,
+                    'total_rounds' => $rounds + 1,
+                    'current_phase' => 'auto_retry_started',
+                    'current_phase_label' => 'Auto-retry demarre',
+                    'current_step' => 'retry',
+                    'percent' => 96,
+                ],
+                'running'
+            );
 
             $retryInstruction = $this->promptBuilder->buildAutoRetryAdversarialPrompt($initialScore);
 
@@ -710,7 +953,10 @@ class JuryRunner {
                     }
                     $routed = $this->providerRouter->chat(
                         $retryMessages,
-                        $agent
+                        $agent,
+                        null,
+                        null,
+                        $this->resolveAgentOverride($agentProviders, (string)$agentId)
                     );
                     $this->messageRepo->create([
                         'id'           => $this->uuid(),
@@ -721,6 +967,21 @@ class JuryRunner {
                         'phase'        => 'retry-round',
                         'mode_context' => 'jury',
                         'message_type' => 'retry-round',
+                        'provider_id'   => $routed['provider_id'] ?? null,
+                        'provider_name' => $routed['provider_name'] ?? null,
+                        'model'         => $routed['model'] ?? null,
+                        'requested_provider_id'    => $routed['requested_provider_id'] ?? null,
+                        'requested_model'          => $routed['requested_model'] ?? null,
+                        'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
+                        'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                        'routing_source'           => $routed['routing_source'] ?? null,
+                        'resolved_provider_id'     => $routed['resolved_provider_id'] ?? null,
+                        'resolved_provider_label'  => $routed['resolved_provider_label'] ?? null,
+                        'resolved_model'           => $routed['resolved_model'] ?? null,
+                        'session_override_present' => $routed['session_override_present'] ?? null,
+                        'persona_default_provider_ignored' => $routed['persona_default_provider_ignored'] ?? null,
+                        'fallback_from_provider_id' => $routed['fallback_from_provider_id'] ?? null,
+                        'fallback_from_model'      => $routed['fallback_from_model'] ?? null,
                         'meta_json'    => $retryMetaJson,
                         'content'      => $routed['content'] ?? '',
                         'created_at'   => date('c'),
@@ -758,7 +1019,27 @@ class JuryRunner {
                 'retry_debate_quality_score'   => $newScore,
                 'extra_rounds'                 => 1,
             ];
-            $this->writeRunStatus($sessionId, ['status' => 'auto_retry_complete', 'new_score' => $newScore]);
+            $this->reportRuntimeEvent(
+                $sessionId,
+                [
+                    'level' => 'info',
+                    'phase' => 'auto_retry_completed',
+                    'round' => $verdictRound + 1,
+                    'label' => 'Auto-retry termine',
+                    'metadata' => [
+                        'new_score' => $newScore,
+                    ],
+                ],
+                [
+                    'current_round' => $verdictRound + 1,
+                    'total_rounds' => $rounds + 1,
+                    'current_phase' => 'auto_retry_completed',
+                    'current_phase_label' => 'Auto-retry termine',
+                    'current_step' => 'retry_done',
+                    'percent' => 98,
+                ],
+                'running'
+            );
         }
 
         $finalJuryFc    = $newFalseConsensus ?? ($reliability['false_consensus'] ?? []);
@@ -783,6 +1064,10 @@ class JuryRunner {
             'playbook_runtime' => $playbookDiagnostics,
             'risk_profile' => $riskProfile,
             'guardrails' => $guardrails,
+            'decision_label' => $reliability['adjusted_decision']['decision_label'] ?? null,
+            'decision_status' => $reliability['adjusted_decision']['decision_status'] ?? null,
+            'outcome' => $reliability['adjusted_decision']['final_outcome'] ?? null,
+            'next_steps' => $reliability['decision_reliability_summary']['recommended_action'] ?? null,
         ]);
 
         // Heuristic fallback fields used by DecisionSummaryService::buildDecisionBrief when
@@ -1070,7 +1355,9 @@ class JuryRunner {
         ?array $contextDoc,
         array  $adversarialCfg,
         array  &$state,
-        int    $miniChallengeRound
+        int    $miniChallengeRound,
+        ?string $dynamicsPreset,
+        array  $agentProviders
     ): array {
         $miniMessages = [];
         $langNote = $language !== 'en' ? " Respond in language code: $language." : '';
@@ -1123,7 +1410,13 @@ class JuryRunner {
                 );
                 $miniPrompt = $governed['messages'];
                 $promptMetaJson = $governed['meta_json'];
-                $routed  = $this->providerRouter->chat($miniPrompt, $agent);
+                $routed  = $this->providerRouter->chat(
+                    $miniPrompt,
+                    $agent,
+                    null,
+                    null,
+                    $this->resolveAgentOverride($agentProviders, (string)$agentId)
+                );
                 $content = $routed['content'];
                 $targetResolution = $this->resolveJuryTargetAgent($content, $prevMessages, $agentId, $assignedTarget);
 
@@ -1139,6 +1432,14 @@ class JuryRunner {
                     'requested_model'          => $routed['requested_model'] ?? null,
                     'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
                     'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                    'routing_source'           => $routed['routing_source'] ?? null,
+                    'resolved_provider_id'     => $routed['resolved_provider_id'] ?? null,
+                    'resolved_provider_label'  => $routed['resolved_provider_label'] ?? null,
+                    'resolved_model'           => $routed['resolved_model'] ?? null,
+                    'session_override_present' => $routed['session_override_present'] ?? null,
+                    'persona_default_provider_ignored' => $routed['persona_default_provider_ignored'] ?? null,
+                    'fallback_from_provider_id' => $routed['fallback_from_provider_id'] ?? null,
+                    'fallback_from_model'      => $routed['fallback_from_model'] ?? null,
                     'round'                    => $miniChallengeRound,
                     'phase'                    => 'jury-mini-challenge',
                     'target_agent_id'          => $targetResolution['target_agent_id'],
@@ -1751,6 +2052,37 @@ class JuryRunner {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    private function phaseHumanLabel(string $phase): string
+    {
+        return match ($phase) {
+            'jury-opening' => 'Jury ouverture',
+            'jury-cross-examination' => 'Jury contre-interrogatoire',
+            'jury-defense' => 'Jury defense',
+            'jury-deliberation' => 'Jury deliberation',
+            'jury-mini-challenge' => 'Jury mini challenge',
+            'jury-minority-report' => 'Jury minority report',
+            'jury-verdict' => 'Jury verdict',
+            'round_started' => 'Round en cours',
+            'auto_retry_started' => 'Auto-retry demarre',
+            'auto_retry_completed' => 'Auto-retry termine',
+            default => $phase,
+        };
+    }
+
+    private function agentEventLabel(string $phase, string $agentId, bool $started): string
+    {
+        $step = $started ? 'appel LLM demarre' : 'reponse recue';
+        return $this->phaseHumanLabel($phase) . ' · ' . $agentId . ' · ' . $step;
+    }
+
+    private function estimatePercent(int $currentRound, int $totalRounds, float $withinRound): int
+    {
+        $safeTotal = max(1, $totalRounds);
+        $base = max(0.02, (($currentRound - 1) / $safeTotal));
+        $intra = max(0.0, min(1.0, $withinRound)) * (1.0 / $safeTotal);
+        return (int)round(min(0.99, $base + $intra) * 100);
+    }
+
     private function computeAssignedTarget(array $allAgentIds, string $agentId, int $round): ?string {
         $others = array_values(array_filter($allAgentIds, fn($id) => $id !== $agentId && $id !== 'synthesizer'));
         if (empty($others)) return null;
@@ -1806,6 +2138,27 @@ class JuryRunner {
             mt_rand(0, 0x3fff) | 0x8000,
             mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
         );
+    }
+
+    /**
+     * @param array<string, array{provider_id?: string, model?: string|null}> $agentOverrides
+     * @return array{provider_id?: string, model?: string|null}|null
+     */
+    private function resolveAgentOverride(array $agentOverrides, string $agentId): ?array {
+        $exact = trim($agentId);
+        if ($exact !== '' && isset($agentOverrides[$exact]) && is_array($agentOverrides[$exact])) {
+            return $agentOverrides[$exact];
+        }
+        $lower = strtolower($exact);
+        if ($lower === '') {
+            return null;
+        }
+        foreach ($agentOverrides as $key => $row) {
+            if (strtolower(trim((string)$key)) === $lower && is_array($row)) {
+                return $row;
+            }
+        }
+        return null;
     }
 
 }

@@ -9,6 +9,7 @@ import {
   renderPlaybookDecisionGuide,
   renderPlaybookOutputContract,
 } from '../../ui/components.js';
+import { providerSupportsModelDiscovery } from './providerModelsCache.js';
 
 function modesUsingStrategicWorkspace(mode) {
   return ['chat', 'decision-room', 'quick-decision', 'confrontation', 'stress-test', 'jury'].includes(mode);
@@ -681,7 +682,7 @@ function renderDecisionMemoryReuseSection(ns, { state, escHtml, t }) {
   const previewJson = preview ? escHtml(JSON.stringify({ allowed, blocked }, null, 2)) : '';
 
   return `
-    <details class="ns-collapsible" open style="max-width:1100px;width:100%;margin-top:14px;">
+    <details class="ns-collapsible" style="max-width:1100px;width:100%;margin-top:14px;margin-bottom:14px;">
       <summary class="ns-collapsible-summary">
         <span>${escHtml(t('memoryReuse.titleHuman'))}</span>
         <span class="ns-collapsible-hint">${escHtml(t('memoryReuse.subtitleHuman'))}</span>
@@ -764,6 +765,276 @@ function renderDecisionMemoryReuseSection(ns, { state, escHtml, t }) {
       </div>
     </details>
   `;
+}
+
+function personaDisplayNameForLlm(personas, agId) {
+  const p = (personas || []).find((x) => String(x.id) === String(agId));
+  return p?.name || agId;
+}
+
+/**
+ * Modèle : liste déroulante issue de /api/providers/models quand disponible, sinon saisie libre.
+ */
+function renderNsModelControl(ns, state, escHtml, t, opts) {
+  const { variant, agentId, team, selectedProviderId, currentModel } = opts;
+  const pid = String(selectedProviderId || '').trim();
+  const cur = String(currentModel || '').trim();
+  const open = ns.llmModelManualOpen || { agents: {}, teams: {} };
+
+  if (!pid) {
+    return `<input class="input" disabled style="width:160px;font-size:12px;padding:4px 6px;" placeholder="${escHtml(t('newSession.llmRouting.modelNeedProvider'))}" title="${escHtml(t('newSession.llmRouting.modelNeedProvider'))}">`;
+  }
+
+  const providers = state.providers || [];
+  const prow = providers.find((p) => String(p.id) === pid);
+  const cache = (state.providerModelsCache || {})[pid] || { status: 'idle', models: [], error: '' };
+  const manualOpen = variant === 'agent' ? !!open.agents?.[agentId] : !!open.teams?.[team];
+  const loadingish = cache.status === 'loading'
+    || (cache.status === 'idle' && providerSupportsModelDiscovery(prow));
+
+  const modelRows = (cache.models || []).map((m) => {
+    const id = String(m.id || m.name || '').trim();
+    if (!id) return null;
+    const label = String(m.name || m.id || '').trim();
+    const det = String(m.details || '').trim();
+    const text = det ? `${label} (${det})` : label;
+    return { id, text };
+  }).filter(Boolean);
+  const modelIds = new Set(modelRows.map((r) => r.id));
+  const inList = !cur || modelIds.has(cur);
+
+  const selAttrs = variant === 'agent'
+    ? `data-action="set-agent-model-from-list" data-agent-id="${escHtml(agentId)}"`
+    : `data-action="set-team-model-from-list" data-team="${escHtml(team)}"`;
+  const inpAttrs = variant === 'agent'
+    ? `data-action="set-agent-model" data-agent-id="${escHtml(agentId)}"`
+    : `data-action="set-team-model" data-team="${escHtml(team)}"`;
+  const manualOffAttrs = variant === 'agent'
+    ? `data-action="set-agent-model-manual-off" data-agent-id="${escHtml(agentId)}"`
+    : `data-action="set-team-model-manual-off" data-team="${escHtml(team)}"`;
+  const refreshBtn = `<button type="button" class="btn btn-secondary btn-sm" style="font-size:10px;padding:2px 6px;align-self:flex-start;" data-action="refresh-ns-provider-models" data-provider-id="${escHtml(pid)}">${escHtml(t('newSession.llmRouting.refreshModels'))}</button>`;
+
+  if (loadingish) {
+    return `
+      <div style="display:flex;flex-direction:column;gap:4px;min-width:168px;align-items:flex-start;">
+        <select class="input" disabled style="min-width:168px;padding:4px 6px;font-size:12px;">
+          <option>${escHtml(t('newSession.llmRouting.modelsLoading'))}</option>
+        </select>
+        ${refreshBtn}
+      </div>`;
+  }
+
+  const listReady = cache.status === 'ok' && modelRows.length > 0;
+  const useManual = manualOpen || (listReady && cur && !inList) || cache.status === 'error' || (cache.status === 'unsupported' && modelRows.length === 0);
+
+  if (listReady && !useManual) {
+    const optsHtml = [
+      `<option value="">${escHtml(t('newSession.llmRouting.modelProviderDefault'))}</option>`,
+      ...modelRows.map((r) => `<option value="${escHtml(r.id)}" ${cur === r.id ? 'selected' : ''}>${escHtml(r.text)}</option>`),
+      `<option value="__manual__">${escHtml(t('newSession.llmRouting.modelManualOption'))}</option>`,
+    ].join('');
+    return `
+      <div style="display:flex;flex-direction:column;gap:4px;min-width:168px;align-items:flex-start;">
+        <select class="input" style="min-width:168px;padding:4px 6px;font-size:12px;" ${selAttrs}>
+          ${optsHtml}
+        </select>
+        ${refreshBtn}
+      </div>`;
+  }
+
+  const errHint = cache.status === 'error' ? String(cache.error || '') : '';
+  const hintParts = [];
+  if (cache.status === 'unsupported') hintParts.push(t('newSession.llmRouting.modelsUnsupported'));
+  if (errHint) hintParts.push(errHint);
+  const hint = hintParts.length ? `<span style="font-size:10px;color:var(--text-muted);">${escHtml(hintParts.join(' — '))}</span>` : '';
+
+  const backBtn = listReady
+    ? `<button type="button" class="btn btn-secondary btn-sm" style="font-size:10px;padding:2px 6px;align-self:flex-start;" ${manualOffAttrs}>${escHtml(t('newSession.llmRouting.pickFromList'))}</button>`
+    : '';
+
+  return `
+    <div style="display:flex;flex-direction:column;gap:4px;min-width:168px;align-items:flex-start;">
+      <input class="input" type="text" style="width:100%;min-width:140px;padding:4px 6px;font-size:12px;" placeholder="${escHtml(t('newSession.llmAssignment.model'))}" value="${escHtml(cur)}" ${inpAttrs}>
+      ${hint}
+      <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+        ${backBtn}
+        ${providerSupportsModelDiscovery(prow) ? refreshBtn : ''}
+      </div>
+    </div>`;
+}
+
+function providerRowNormalized(row) {
+  const pid = String(row?.provider_id || '').trim();
+  const model = String(row?.model || '').trim();
+  return pid ? { provider_id: pid, model } : null;
+}
+
+function providerRowsEquivalent(a, b) {
+  const na = providerRowNormalized(a);
+  const nb = providerRowNormalized(b);
+  if (!na && !nb) return true;
+  if (!na || !nb) return false;
+  return na.provider_id === nb.provider_id && na.model === nb.model;
+}
+
+/** Predicted routing source for UI badges (matches runtime priority at session creation). */
+function predictedLlmSourceKey(ns, personas, agId) {
+  const applied = providerRowNormalized((ns.agentProviders || {})[agId]);
+  const draft = providerRowNormalized((ns.agentProviderDrafts || {})[agId]);
+  if (applied && !providerRowsEquivalent(applied, draft)) return 'override_pending';
+  if (!applied && draft) return 'override_pending';
+  if (applied) return 'override_analysis';
+  if (ns.mode === 'confrontation') {
+    const tpa = ns.teamProviderAssignments || {};
+    const inBlue = (ns.blueTeam || []).includes(agId);
+    const inRed = (ns.redTeam || []).includes(agId);
+    if (inBlue && String(tpa.blue?.provider_id || '').trim()) return 'override_team';
+    if (inRed && String(tpa.red?.provider_id || '').trim()) return 'override_team';
+  }
+  const p = (personas || []).find((x) => String(x.id) === String(agId));
+  if (p && (String(p.default_provider || '').trim() || String(p.default_model || '').trim())) return 'persona_default';
+  return 'global_routing';
+}
+
+/** Classe du badge « source » (override actif ≠ grisé comme un bouton disabled). */
+function llmRoutingSourceBadgeClass(sk) {
+  switch (sk) {
+    case 'override_analysis':
+      return 'badge badge-info';
+    case 'override_pending':
+      return 'badge badge-warning';
+    case 'override_team':
+      return 'badge badge-warning';
+    case 'persona_default':
+      return 'badge badge-default';
+    default:
+      return 'badge badge-muted';
+  }
+}
+
+/**
+ * Expert-only: analysis/session LLM routing (per-agent for most modes; per-team for confrontation).
+ * Team assignment is expanded to session_agent_providers per agent at session creation (backend).
+ */
+function renderAnalysisLlmRoutingPanel(ns, state, escHtml, t) {
+  if (state.uiMode !== 'expert') return '';
+  const modes = ['chat', 'decision-room', 'confrontation', 'quick-decision', 'stress-test', 'jury'];
+  if (!modes.includes(ns.mode)) return '';
+
+  const providers = state.providers || [];
+  const activeProviders = providers.filter((p) => p.enabled == 1 || p.enabled === true);
+  const providersById = new Map(providers.map((p) => [String(p.id), p]));
+  if (activeProviders.length < 1) return '';
+
+  const allPersonas = state.personas || [];
+
+  const providerOpts = (selectedId) => [
+    `<option value="">${escHtml(t('newSession.llmRouting.selectProvider'))}</option>`,
+    ...(
+      selectedId
+      && providersById.has(String(selectedId))
+      && !(providersById.get(String(selectedId)).enabled == 1 || providersById.get(String(selectedId)).enabled === true)
+        ? [`<option value="${escHtml(String(selectedId))}" selected>${escHtml((providersById.get(String(selectedId)).name || selectedId) + ' — ' + t('providers.statusDisabled'))}</option>`]
+        : []
+    ),
+    ...activeProviders.map((p) => `<option value="${escHtml(p.id)}" ${selectedId === p.id ? 'selected' : ''}>${escHtml(p.name || p.id)}</option>`),
+  ].join('');
+
+  if (ns.mode === 'confrontation') {
+    const teamAssign = ns.teamProviderAssignments || { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } };
+    const teamDrafts = ns.teamProviderDrafts || teamAssign;
+    const blueAgents = ns.blueTeam || [];
+    const redAgents = ns.redTeam || [];
+    const expansionRows = [
+      ...blueAgents.map((id) => ({ id, team: 'blue' })),
+      ...redAgents.map((id) => ({ id, team: 'red' })),
+    ]
+      .map(({ id, team }) => {
+        const sk = predictedLlmSourceKey(ns, allPersonas, id);
+        const ov = (ns.agentProviders || {})[id] || {};
+        const tpa = teamAssign[team] || {};
+        const effectivePid = String(ov.provider_id || '').trim() || String(tpa.provider_id || '').trim() || '—';
+        const effectiveModel = String(ov.model || '').trim() || String(tpa.model || '').trim() || '—';
+        const teamLabel = team === 'blue' ? t('newSession.llmAssignment.blueTeam') : t('newSession.llmAssignment.redTeam');
+        return `<tr><td style="padding:4px 8px;font-size:11px;">${escHtml(personaDisplayNameForLlm(allPersonas, id))}</td><td style="padding:4px 8px;font-size:11px;">${escHtml(teamLabel)}</td><td style="padding:4px 8px;font-size:11px;">${escHtml(effectivePid)}</td><td style="padding:4px 8px;font-size:11px;">${escHtml(effectiveModel)}</td><td style="padding:4px 8px;font-size:11px;"><span class="${llmRoutingSourceBadgeClass(sk)}">${escHtml(t(`newSession.llmSource.${sk}`))}</span></td></tr>`;
+      })
+      .join('');
+
+    return `
+      <div class="llm-assignment-panel" data-ui="expert-only" style="margin-top:16px;padding:16px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border);">
+        <div style="font-weight:600;font-size:13px;color:var(--text-secondary);margin-bottom:6px;">${escHtml(t('newSession.llmTeamRouting.title'))}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;line-height:1.45;">${escHtml(t('newSession.llmTeamRouting.blueHelp'))}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;line-height:1.45;">${escHtml(t('newSession.llmTeamRouting.redHelp'))}</div>
+        <div class="llm-assignment-grid" style="margin-top:6px;">
+          <div class="llm-agent-row" style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+            <span style="font-size:12px;font-weight:600;min-width:90px;color:#3b82f6;">🔵 ${t('newSession.llmAssignment.blueTeam')}</span>
+            <select class="input" style="flex:1;min-width:120px;padding:4px 6px;font-size:12px;" data-action="set-team-provider" data-team="blue">
+              ${providerOpts(teamDrafts.blue?.provider_id || teamAssign.blue?.provider_id || '')}
+            </select>
+            ${renderNsModelControl(ns, state, escHtml, t, { variant: 'team', team: 'blue', agentId: '', selectedProviderId: teamDrafts.blue?.provider_id || teamAssign.blue?.provider_id || '', currentModel: teamDrafts.blue?.model || teamAssign.blue?.model || '' })}
+            <button type="button" class="btn btn-primary btn-sm" data-action="apply-team-llm-override" data-team="blue">${escHtml(t('newSession.llmTeamRouting.applyBlue'))}</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-action="reset-team-llm-override" data-team="blue">${escHtml(t('newSession.llmTeamRouting.resetBlue'))}</button>
+          </div>
+          <div class="llm-agent-row" style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+            <span style="font-size:12px;font-weight:600;min-width:90px;color:#ef4444;">🔴 ${t('newSession.llmAssignment.redTeam')}</span>
+            <select class="input" style="flex:1;min-width:120px;padding:4px 6px;font-size:12px;" data-action="set-team-provider" data-team="red">
+              ${providerOpts(teamDrafts.red?.provider_id || teamAssign.red?.provider_id || '')}
+            </select>
+            ${renderNsModelControl(ns, state, escHtml, t, { variant: 'team', team: 'red', agentId: '', selectedProviderId: teamDrafts.red?.provider_id || teamAssign.red?.provider_id || '', currentModel: teamDrafts.red?.model || teamAssign.red?.model || '' })}
+            <button type="button" class="btn btn-primary btn-sm" data-action="apply-team-llm-override" data-team="red">${escHtml(t('newSession.llmTeamRouting.applyRed'))}</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-action="reset-team-llm-override" data-team="red">${escHtml(t('newSession.llmTeamRouting.resetRed'))}</button>
+          </div>
+        </div>
+        <div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+          <button type="button" class="btn btn-primary btn-sm" data-action="force-team-llm-to-agents">${escHtml(t('newSession.llmTeamRouting.forceApply'))}</button>
+          <span style="font-size:11px;color:var(--text-muted);max-width:520px;line-height:1.45;">${escHtml(t('newSession.llmTeamRouting.forceHelp'))}</span>
+        </div>
+        <details style="margin-top:12px;font-size:12px;">
+          <summary style="cursor:pointer;color:var(--text-muted);">${escHtml(t('newSession.llmTeamRouting.expansionSummary'))}</summary>
+          <div style="font-size:10px;color:var(--text-muted);margin:6px 0;">${escHtml(t('newSession.llmTeamRouting.teamExpandHint'))}</div>
+          <table style="width:100%;border-collapse:collapse;margin-top:4px;border:1px solid var(--border);">
+            <thead><tr style="background:var(--bg-tertiary);font-size:11px;text-align:left;"><th style="padding:4px 8px;">${escHtml(t('newSession.llmRouting.colAgent'))}</th><th style="padding:4px 8px;">${escHtml(t('newSession.llmRouting.colTeam'))}</th><th style="padding:4px 8px;">${escHtml(t('newSession.llmRouting.colProvider'))}</th><th style="padding:4px 8px;">${escHtml(t('newSession.llmRouting.colModel'))}</th><th style="padding:4px 8px;">${escHtml(t('newSession.llmRouting.colSource'))}</th></tr></thead>
+            <tbody>${expansionRows || `<tr><td colspan="5" style="padding:8px;font-size:11px;color:var(--text-muted);">${escHtml(t('newSession.llmAssignment.selectAgentsFirst'))}</td></tr>`}</tbody>
+          </table>
+        </details>
+      </div>`;
+  }
+
+  const agents = ns.selectedAgents || [];
+  if (agents.length === 0) {
+    return `<div class="llm-assignment-panel" data-ui="expert-only" style="margin-top:12px;padding:12px;background:var(--bg-secondary);border-radius:8px;font-size:12px;color:var(--text-muted);">${escHtml(t('newSession.llmAssignment.selectAgentsFirst'))}</div>`;
+  }
+
+  const rows = agents.map((agId) => {
+    const applied = (ns.agentProviders || {})[agId] || {};
+    const draft = (ns.agentProviderDrafts || {})[agId] || applied;
+    const sk = predictedLlmSourceKey(ns, allPersonas, agId);
+    const pMeta = allPersonas.find((x) => String(x.id) === String(agId));
+    const personaDefaults = pMeta && (String(pMeta.default_provider || '').trim() || String(pMeta.default_model || '').trim())
+      ? `${String(pMeta.default_provider || '').trim() || '—'} / ${String(pMeta.default_model || '').trim() || '—'}`
+      : t('newSession.llmRouting.noPersonaDefault');
+    return `
+      <div class="llm-agent-row" style="display:flex;align-items:flex-start;gap:8px;margin-bottom:10px;flex-wrap:wrap;padding-bottom:10px;border-bottom:1px dashed var(--border);">
+        <div style="min-width:120px;flex:1;">
+          <div style="font-size:13px;font-weight:600;color:var(--text-primary);">${escHtml(personaDisplayNameForLlm(allPersonas, agId))}</div>
+          <div style="font-size:10px;color:var(--text-muted);margin-top:2px;">${escHtml(t('newSession.llmRouting.personaDefaultsLabel'))}: ${escHtml(personaDefaults)}</div>
+        </div>
+        <select class="input" style="flex:1;min-width:140px;padding:4px 6px;font-size:12px;" data-action="set-agent-provider" data-agent-id="${escHtml(agId)}">
+          ${providerOpts(draft.provider_id || '')}
+        </select>
+        ${renderNsModelControl(ns, state, escHtml, t, { variant: 'agent', agentId: agId, team: '', selectedProviderId: draft.provider_id || '', currentModel: draft.model || '' })}
+        <span class="${llmRoutingSourceBadgeClass(sk)}" style="align-self:center;font-size:10px;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;" title="${escHtml(t(`newSession.llmSource.${sk}`))}">${escHtml(t(`newSession.llmSource.${sk}`))}</span>
+        <button type="button" class="btn btn-primary btn-sm" style="font-size:11px;padding:4px 8px;align-self:center;" data-action="apply-agent-llm-override" data-agent-id="${escHtml(agId)}">${escHtml(t('newSession.llmRouting.applyOverride'))}</button>
+        <button type="button" class="btn btn-secondary btn-sm" style="font-size:11px;padding:4px 8px;align-self:center;" data-action="reset-agent-llm-override" data-agent-id="${escHtml(agId)}">${escHtml(t('newSession.llmRouting.reset'))}</button>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="llm-assignment-panel" data-ui="expert-only" style="margin-top:16px;padding:16px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border);">
+      <div style="font-weight:600;font-size:13px;color:var(--text-secondary);margin-bottom:6px;">${escHtml(t('newSession.llmAnalysisRouting.title'))}</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;line-height:1.45;">${escHtml(t('newSession.llmAnalysisRouting.help'))}</div>
+      ${rows}
+    </div>`;
 }
 
 function renderNewSession() {
@@ -981,6 +1252,8 @@ function renderNewSession() {
       <div ${isFastDecision ? 'style="display:none"' : ''}>
       ${agentSectionHtml}
 
+      ${renderAnalysisLlmRoutingPanel(ns, state, escHtml, t)}
+
       ${['chat', 'decision-room', 'quick-decision', 'stress-test', 'jury'].includes(ns.mode) ? `
         <div class="form-group" id="rounds-field">
           <label for="ns-rounds">${ns.mode === 'jury' ? t('jury.rounds') : t('newSession.rounds')} (${ns.rounds}) ${tip(t('tooltip.rounds'))}</label>
@@ -1022,76 +1295,6 @@ function renderNewSession() {
         </div>
         </div>
 
-        ${(() => {
-          // LLM Assignment block — only if 2+ providers configured
-          const providers = state.providers || [];
-          const activeProviders = providers.filter((p) => p.enabled == 1 || p.enabled === true);
-          if (activeProviders.length < 2) return '';
-
-          const assignMode = ns.llmAssignmentMode || 'global';
-          const teamAssign = ns.teamProviderAssignments || { blue: {provider_id:'',model:''}, red: {provider_id:'',model:''} };
-          const agentsForLLM = ns.mode === 'confrontation'
-            ? [...new Set([...(ns.blueTeam||[]), ...(ns.redTeam||[])])]
-            : (ns.selectedAgents || []);
-
-          const providerOpts = (selectedId) => [
-            `<option value="">${t('newSession.llmAssignment.provider')} (${t('newSession.llmAssignment.global')})</option>`,
-            ...activeProviders.map((p) => `<option value="${escHtml(p.id)}" ${selectedId === p.id ? 'selected' : ''}>${escHtml(p.name || p.id)}</option>`)
-          ].join('');
-
-          const modeTabStyle = (m) => assignMode === m
-            ? 'padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;background:var(--accent);color:#fff;border:none;cursor:pointer;'
-            : 'padding:6px 14px;font-size:12px;border-radius:6px;background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border);cursor:pointer;';
-
-          const teamRows = ns.mode === 'confrontation' ? `
-            <div class="llm-assignment-grid" style="margin-top:10px;">
-              <div class="llm-agent-row" style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
-                <span style="font-size:12px;font-weight:600;min-width:90px;color:#3b82f6;">🔵 ${t('newSession.llmAssignment.blueTeam')}</span>
-                <select class="input" style="flex:1;min-width:120px;padding:4px 6px;font-size:12px;" data-action="set-team-provider" data-team="blue">
-                  ${providerOpts(teamAssign.blue?.provider_id || '')}
-                </select>
-                <input class="input" type="text" placeholder="${t('newSession.llmAssignment.model')}" style="width:130px;padding:4px 6px;font-size:12px;" value="${escHtml(teamAssign.blue?.model || '')}" data-action="set-team-model" data-team="blue">
-              </div>
-              <div class="llm-agent-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                <span style="font-size:12px;font-weight:600;min-width:90px;color:#ef4444;">🔴 ${t('newSession.llmAssignment.redTeam')}</span>
-                <select class="input" style="flex:1;min-width:120px;padding:4px 6px;font-size:12px;" data-action="set-team-provider" data-team="red">
-                  ${providerOpts(teamAssign.red?.provider_id || '')}
-                </select>
-                <input class="input" type="text" placeholder="${t('newSession.llmAssignment.model')}" style="width:130px;padding:4px 6px;font-size:12px;" value="${escHtml(teamAssign.red?.model || '')}" data-action="set-team-model" data-team="red">
-              </div>
-            </div>
-          ` : `<div style="font-size:12px;color:var(--text-muted);margin-top:8px;">${t('newSession.llmAssignment.teamNotAvailable')}</div>`;
-
-          const agentRows = agentsForLLM.length === 0
-            ? `<div style="font-size:12px;color:var(--text-muted);margin-top:8px;">${t('newSession.llmAssignment.selectAgentsFirst')}</div>`
-            : agentsForLLM.map((agId) => {
-                const override = (ns.agentProviders || {})[agId] || {};
-                return `
-                  <div class="llm-agent-row" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
-                    <span style="font-size:12px;min-width:90px;color:var(--text-secondary);">${escHtml(agId)}</span>
-                    <select class="input" style="flex:1;min-width:120px;padding:4px 6px;font-size:12px;" data-action="set-agent-provider" data-agent-id="${escHtml(agId)}">
-                      ${providerOpts(override.provider_id || '')}
-                    </select>
-                    <input class="input" type="text" placeholder="${t('newSession.llmAssignment.model')}" style="width:130px;padding:4px 6px;font-size:12px;" value="${escHtml(override.model || '')}" data-action="set-agent-model" data-agent-id="${escHtml(agId)}">
-                  </div>`;
-              }).join('');
-
-          return `
-            <div class="llm-assignment-panel" style="margin-top:16px;padding:16px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border);">
-              <div style="font-weight:600;font-size:13px;color:var(--text-secondary);margin-bottom:10px;letter-spacing:.03em;">
-                🤖 ${t('newSession.llmAssignment.title')}
-              </div>
-              <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">${t('newSession.llmAssignment.desc')}</div>
-              <div class="llm-assignment-mode" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;">
-                <button type="button" style="${modeTabStyle('global')}" data-action="set-llm-assignment-mode" data-mode="global">${t('newSession.llmAssignment.global')}</button>
-                <button type="button" style="${modeTabStyle('team')}"   data-action="set-llm-assignment-mode" data-mode="team">${t('newSession.llmAssignment.team')}</button>
-                <button type="button" style="${modeTabStyle('agent')}"  data-action="set-llm-assignment-mode" data-mode="agent">${t('newSession.llmAssignment.agent')}</button>
-              </div>
-              ${assignMode === 'global' ? `<div style="font-size:12px;color:var(--text-muted);">${t('newSession.llmAssignment.globalDesc')}</div>` : ''}
-              ${assignMode === 'team'  ? teamRows : ''}
-              ${assignMode === 'agent' ? `<div class="llm-assignment-grid" style="margin-top:10px;">${agentRows}</div>` : ''}
-            </div>`;
-        })()}
       ` : ''}
 
       </div>

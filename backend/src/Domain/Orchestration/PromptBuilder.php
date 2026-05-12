@@ -630,7 +630,8 @@ TEXT;
             mb_strlen($segment, 'UTF-8'),
             $inclusionReason,
             $exclusionReason,
-            $extra
+            $extra,
+            $segment
         );
     }
 

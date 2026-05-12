@@ -16,7 +16,7 @@ class ProviderController {
     public function index(Request $req): array {
         $providers = $this->repo->findAll();
         return array_map(
-            fn($p) => array_merge($p, ['api_key' => $p['api_key'] ? '***' : '']),
+            fn($p) => $this->presentProvider($p),
             $providers
         );
     }
@@ -49,10 +49,18 @@ class ProviderController {
         ];
         try {
             $saved = $this->repo->save($provider);
-            return array_merge($saved, ['api_key' => $saved['api_key'] ? '***' : '']);
+            return $this->presentProvider($saved);
         } catch (\Throwable $e) {
             return Response::error($e->getMessage(), 400);
         }
+    }
+
+    public function disable(Request $req): array {
+        return $this->setEnabledState($req, false);
+    }
+
+    public function enable(Request $req): array {
+        return $this->setEnabledState($req, true);
     }
 
     public function test(Request $req): array {
@@ -200,5 +208,31 @@ class ProviderController {
             throw new \RuntimeException('Invalid JSON returned by provider');
         }
         return $data;
+    }
+
+    private function setEnabledState(Request $req, bool $enabled): array {
+        $id = trim((string)$req->param('id'));
+        if ($id === '') {
+            return Response::error('provider id required', 400);
+        }
+        $provider = $this->repo->findById($id);
+        if (!$provider) {
+            return Response::error('Provider not found', 404);
+        }
+        $updated = $this->repo->setEnabled($id, $enabled);
+        if (!$updated) {
+            return Response::error('Provider not found', 404);
+        }
+        return [
+            'provider' => $this->presentProvider($updated),
+        ];
+    }
+
+    private function presentProvider(array $provider): array {
+        $normalized = $provider;
+        $normalized['enabled'] = (int)($provider['enabled'] ?? 0);
+        $normalized['is_enabled'] = $normalized['enabled'] === 1;
+        $normalized['api_key'] = !empty($provider['api_key']) ? '***' : '';
+        return $normalized;
     }
 }

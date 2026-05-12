@@ -14,6 +14,8 @@ import { renderGraphViewPanel } from '../graphView/index.js';
 import { renderArgumentHeatmapPanel } from '../argumentHeatmap/index.js';
 import { renderDebateReplayPanel } from '../debateReplay/index.js';
 import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
+import { renderLlmRoutingCompact } from '../../utils/llmRoutingUi.js';
+import { renderRunProgressPanel } from '../../ui/runProgressPanel.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -47,6 +49,7 @@ function renderConfrontationAgentCard(msg, isSynthesis, messageKey = '') {
   const contentHtml = isLong && collapsed
     ? `<div class="agent-content md-content"><p>${preview}…</p></div>`
     : `<div class="agent-content md-content">${renderMarkdown(msg.content)}</div>`;
+  const llmMeta = renderLlmRoutingCompact(msg, { escHtml, t, expert: state.uiMode === 'expert' });
   const chBtn = window.DecisionArena?.utils?.canChallengeMessage?.(msg)
     ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;font-size:11px;" data-action="challenge-claim" data-message-id="${escHtml(String(msg.id))}">${escHtml(t('hitl.challenge'))}</button>`
     : '';
@@ -66,8 +69,7 @@ function renderConfrontationAgentCard(msg, isSynthesis, messageKey = '') {
       ${isLong ? `<button class="btn btn-secondary btn-sm" data-action="toggle-agent-message" data-message-id="${escHtml(messageId)}">${collapsed ? 'Voir' : 'Masquer'}</button>` : ''}
       ${chBtn}
       <div class="agent-card-footer">
-        ${msg.provider_id ? `<span>${escHtml(msg.provider_id)}</span>` : ''}
-        ${msg.model ? `<span>${escHtml(msg.model)}</span>` : ''}
+        ${llmMeta}
         ${msg.created_at ? `<span style="margin-left:auto;font-size:11px;color:var(--text-muted);">${formatDate(msg.created_at)}</span>` : ''}
       </div>
     </div>
@@ -513,6 +515,8 @@ function renderConfrontationView() {
   const blueTeam = session._blueTeam || ['pm', 'architect', 'po', 'ux-expert'];
   const redTeam  = session._redTeam || ['analyst', 'critic'];
   const includeSynthesis = session._includeSynthesis !== false;
+  const runProgressEntry = session?.id ? state.runProgressBySessionId?.[session.id] : null;
+  const liveRunProgress = runProgressEntry?.data || state.runProgress;
   return `
     <div class="full-height-view confrontation-view">
       <div class="dr-header">
@@ -534,6 +538,13 @@ function renderConfrontationView() {
       </div>
       ${renderContextDocPanel()}
       <div class="dr-content">
+        ${state.confrontationRunning ? renderRunProgressPanel(liveRunProgress, {
+    t,
+    escHtml,
+    uiMode: state.uiMode,
+    mode: 'confrontation',
+    polling: state.runProgressPolling || null,
+  }) : ''}
         ${state.confrontationRunning ? `<div class="loading-state"><span class="spinner spinner-lg"></span> ${t('confrontation.running')}</div>` : ''}
         ${!results && !state.confrontationRunning ? `
           <div class="confrontation-setup">

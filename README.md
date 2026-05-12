@@ -80,6 +80,7 @@ Decision Arena ne promet pas “la bonne réponse”. Il propose :
 - **Workspace Analyses consolide** — la vue `analyses` devient l'entree principale pour les sessions passees et les actions lifecycle.
 - **Lifecycle hybride unifie** — statuts persistes (`draft`, `running`, `completed`, `archived`) + overlays derives (`blocked`, `fragile`, `rerun`, `forked`) via un mapping frontend unique.
 - **Historique d'analyses en navigation** — ajout d'une entree dediee dans la sidebar pour acceder plus vite aux analyses passees.
+- **Deep-link session par hash fiabilise** — les routes `#/sessions/<session_id>` (canonique) et `#/analyses/<session_id>` (alias) ouvrent directement la session via `GET /api/sessions/{id}` (support du chargement initial direct + `hashchange` dans le meme onglet).
 - **Contextes strategiques fiabilises** — bouton `Voir memory.md` fiable, colonne liste sticky sur desktop, bouton `Activer l'espace` dans chaque card.
 - **Formulaire contexte stabilise** — correction du bug "Titre obligatoire" (synchronisation DOM/state avant validation).
 - **Suppression des contextes robuste** — endpoint backend de suppression corrige avec suppression transactionnelle des dependances SQLite.
@@ -204,6 +205,10 @@ Navigation unifiée autour des **analyses** :
 - **`new-session`** : création d’une nouvelle analyse.
 - **`session-comparisons`** : comparaison multi-analyses.
 - **`session-history`** : détail d’une analyse.
+- **Deep-links supportés** :
+  - canonique : `#/sessions/<session_id>`
+  - alias compat : `#/analyses/<session_id>`
+  - compat legacy : `#/session-history/<session_id>`
 
 Conventions frontend (cleanup Phase 1) :
 

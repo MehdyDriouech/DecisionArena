@@ -5,6 +5,7 @@ use Domain\Agents\AgentAssembler;
 use Domain\Providers\ProviderRouter;
 use Infrastructure\Logging\Logger;
 use Infrastructure\Persistence\MessageRepository;
+use Infrastructure\Persistence\SessionAgentProvidersRepository;
 use Infrastructure\Persistence\SessionRepository;
 
 class ChatRunner {
@@ -15,6 +16,7 @@ class ChatRunner {
     private Logger $logger;
     private MessageRepository $messageRepo;
     private SessionRepository $sessionRepo;
+    private SessionAgentProvidersRepository $agentProvidersRepo;
 
     public function __construct() {
         $this->assembler       = new AgentAssembler();
@@ -23,7 +25,8 @@ class ChatRunner {
         $this->providerRouter  = new ProviderRouter();
         $this->logger          = new Logger();
         $this->messageRepo     = new MessageRepository();
-        $this->sessionRepo      = new SessionRepository();
+        $this->sessionRepo     = new SessionRepository();
+        $this->agentProvidersRepo = new SessionAgentProvidersRepository();
     }
 
     public function run(
@@ -66,6 +69,7 @@ class ChatRunner {
         $history     = $this->messageRepo->findBySession($sessionId);
         $newMessages = [];
         $runtimeTraces = [];
+        $agentOverrides = $this->agentProvidersRepo->findBySession($sessionId);
         $dynamicsPreset = \Domain\Agents\DecisionDynamicsPreset::normalizeId($decisionDynamicsPreset);
         $strategicCtx = null;
         try {
@@ -120,7 +124,13 @@ class ChatRunner {
                     ],
                 ]);
 
-                $routed  = $this->providerRouter->chat($messages, $agent);
+                $routed  = $this->providerRouter->chat(
+                    $messages,
+                    $agent,
+                    null,
+                    null,
+                    $this->resolveAgentOverride($agentOverrides, (string)$agentId)
+                );
                 $content = $routed['content'];
 
                 $msg = $this->messageRepo->create([
@@ -135,6 +145,14 @@ class ChatRunner {
                     'requested_model'          => $routed['requested_model'] ?? null,
                     'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
                     'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                    'routing_source'           => $routed['routing_source'] ?? null,
+                    'resolved_provider_id'     => $routed['resolved_provider_id'] ?? null,
+                    'resolved_provider_label'  => $routed['resolved_provider_label'] ?? null,
+                    'resolved_model'           => $routed['resolved_model'] ?? null,
+                    'session_override_present' => $routed['session_override_present'] ?? null,
+                    'persona_default_provider_ignored' => $routed['persona_default_provider_ignored'] ?? null,
+                    'fallback_from_provider_id' => $routed['fallback_from_provider_id'] ?? null,
+                    'fallback_from_model'      => $routed['fallback_from_model'] ?? null,
                     'round'                    => null,
                     'meta_json'                => $promptMetaJson,
                     'content'                  => $content,
@@ -186,5 +204,27 @@ class ChatRunner {
             $chars += mb_strlen((string)($message['content'] ?? ''), 'UTF-8');
         }
         return $chars;
+    }
+
+    /**
+     * @param array<string, array{provider_id?: string, model?: string|null}> $agentOverrides
+     * @return array{provider_id?: string, model?: string|null}|null
+     */
+    private function resolveAgentOverride(array $agentOverrides, string $agentId): ?array
+    {
+        $exact = trim($agentId);
+        if ($exact !== '' && isset($agentOverrides[$exact]) && is_array($agentOverrides[$exact])) {
+            return $agentOverrides[$exact];
+        }
+        $lower = strtolower($exact);
+        if ($lower === '') {
+            return null;
+        }
+        foreach ($agentOverrides as $key => $row) {
+            if (strtolower(trim((string)$key)) === $lower && is_array($row)) {
+                return $row;
+            }
+        }
+        return null;
     }
 }

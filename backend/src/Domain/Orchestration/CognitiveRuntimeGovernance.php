@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Domain\Orchestration;
 
 use Domain\CognitiveGovernance\DeterministicHash;
+use Domain\CognitiveGovernance\PromptInjectionProvenance;
 use Domain\CognitiveGovernance\RuntimeSafetyRecorder;
 
 final class CognitiveRuntimeGovernance
@@ -65,7 +66,7 @@ final class CognitiveRuntimeGovernance
                 ]);
                 $budget = CognitiveBudgetEngine::applySegment($userBlockId, $content);
                 $messages[$userIndex]['content'] = $budget['content'];
-                $contentHash = DeterministicHash::sha256($budget['content']);
+                $contentHash = PromptInjectionProvenance::computeInjectedContentHash($budget['content']);
                 PromptInjectionTraceCollector::addStep(
                     $userBlockId,
                     $cognitiveLayer,

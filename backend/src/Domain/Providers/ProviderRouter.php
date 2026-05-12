@@ -26,11 +26,11 @@ class ProviderRouter {
     /**
      * Routes a chat call and returns provider/model metadata.
      *
-     * Provider resolution priority order:
-     * 1. $sessionAgentOverride (session_agent_providers table — per-session per-agent override)
-     * 2. $explicitProviderId (explicit call parameter)
-     * 3. Persona frontmatter default (agent->providerId)
-     * 4. Global routing settings (routing_mode, etc.)
+     * Product priority (conceptual — team assignment is expanded to per-agent rows in session_agent_providers at session creation):
+     * 1. session_agent_providers (session / analysis override per agent)
+     * 2. Team-derived overrides (confrontation only; same table after expansion — does not beat an explicit per-agent row in payload)
+     * 3. Persona frontmatter default_provider / default_model (fallback configuration)
+     * 4. Global routing settings (provider_routing_settings)
      *
      * @param array|null $sessionAgentOverride ['provider_id' => '...', 'model' => '...'] for the current agent
      * @return array{content:string, provider_id:string, provider_name:string, provider_type:string, model:string, routing_mode:string}
@@ -57,6 +57,8 @@ class ProviderRouter {
         $requestedProviderId = null;
         $requestedModel      = null;
         $fallbackReason      = null;
+        $personaProviderId = trim((string)($agent?->providerId ?? ''));
+        $personaProviderDisabled = $personaProviderId !== '' && $this->isProviderDisabled($personaProviderId);
 
         if ($sessionAgentOverride && !empty($sessionAgentOverride['provider_id'])) {
             $requestedProviderId = (string)$sessionAgentOverride['provider_id'];
@@ -115,15 +117,29 @@ class ProviderRouter {
                     'provider_type'          => (string)($providerData['type'] ?? ''),
                     'model'                  => $model,
                     'routing_mode'           => 'session_agent_override',
+                    'routing_source'         => 'session_override',
                     'requested_provider_id'  => $requestedProviderId,
                     'requested_model'        => $requestedModel,
+                    'resolved_provider_id'   => (string)$providerData['id'],
+                    'resolved_provider_label'=> (string)($providerData['name'] ?? $providerData['id']),
+                    'resolved_model'         => $model,
+                    'requested_routing_source' => 'session_override',
+                    'session_override_present' => true,
+                    'persona_default_provider_ignored' => (
+                        trim((string)($agent?->providerId ?? '')) !== ''
+                        && trim((string)($agent?->providerId ?? '')) !== (string)$providerData['id']
+                    ),
                     'fallback_used'          => false,
                     'fallback_reason'        => null,
                 ];
 
             } catch (\Throwable $e) {
                 // Override failed — gracefully fall back to global routing
-                $fallbackReason = 'Override provider unavailable (' . $requestedProviderId . '): ' . $e->getMessage();
+                if ($this->isProviderDisabled($requestedProviderId)) {
+                    $fallbackReason = 'Provider disabled';
+                } else {
+                    $fallbackReason = 'Override provider unavailable (' . $requestedProviderId . '): ' . $e->getMessage();
+                }
                 $this->logger->logProviderError('session_agent_override_fallback', [
                     'agent_id'              => $agent?->id,
                     'requested_provider_id' => $requestedProviderId,
@@ -193,8 +209,18 @@ class ProviderRouter {
                 'provider_type'         => (string)($providerData['type'] ?? ''),
                 'model'                 => $model,
                 'routing_mode'          => 'explicit',
+                'routing_source'        => 'explicit_call',
                 'requested_provider_id' => null,
                 'requested_model'       => null,
+                'resolved_provider_id'  => (string)$providerData['id'],
+                    'resolved_provider_label'=> (string)($providerData['name'] ?? $providerData['id']),
+                'resolved_model'        => $model,
+                    'requested_routing_source' => null,
+                'session_override_present' => $requestedProviderId !== null,
+                'persona_default_provider_ignored' => (
+                    trim((string)($agent?->providerId ?? '')) !== ''
+                    && trim((string)($agent?->providerId ?? '')) !== (string)$providerData['id']
+                ),
                 'fallback_used'         => false,
                 'fallback_reason'       => null,
             ];
@@ -259,6 +285,11 @@ class ProviderRouter {
                     ],
                 ]);
                 return [
+                    'routing_source'         => (
+                        $personaProviderId !== '' && !$personaProviderDisabled
+                            ? 'persona_default'
+                            : 'global_routing'
+                    ),
                     'content'               => $content,
                     'provider_id'           => (string)$providerData['id'],
                     'provider_name'         => (string)($providerData['name'] ?? $providerData['id']),
@@ -267,8 +298,19 @@ class ProviderRouter {
                     'routing_mode'          => $fallbackReason ? 'fallback_from_override' : $routingMode,
                     'requested_provider_id' => $requestedProviderId,
                     'requested_model'       => $requestedModel,
-                    'fallback_used'         => $fallbackReason !== null,
-                    'fallback_reason'       => $fallbackReason,
+                    'resolved_provider_id'  => (string)$providerData['id'],
+                    'resolved_provider_label'=> (string)($providerData['name'] ?? $providerData['id']),
+                    'resolved_model'        => $model,
+                    'requested_routing_source' => $requestedProviderId !== null ? 'session_override' : null,
+                    'session_override_present' => $requestedProviderId !== null,
+                    'persona_default_provider_ignored' => (
+                        $personaProviderId !== ''
+                        && ($personaProviderDisabled || $personaProviderId !== (string)$providerData['id'])
+                    ),
+                    'fallback_used'         => ($fallbackReason !== null) || $personaProviderDisabled,
+                    'fallback_reason'       => $fallbackReason ?? ($personaProviderDisabled ? 'Provider disabled' : null),
+                    'fallback_from_provider_id' => $fallbackReason !== null ? $requestedProviderId : null,
+                    'fallback_from_model'   => $fallbackReason !== null ? $requestedModel : null,
                 ];
             } catch (\Throwable $e) {
                 $lastErr = $e;
@@ -345,6 +387,19 @@ class ProviderRouter {
         return null;
     }
 
+    private function isProviderDisabled(?string $id): bool
+    {
+        $pid = trim((string)$id);
+        if ($pid === '') {
+            return false;
+        }
+        $row = $this->providerRepo->findById($pid);
+        if (!$row) {
+            return false;
+        }
+        return (int)($row['enabled'] ?? 0) !== 1;
+    }
+
     /**
      * Fournisseurs DB éligibles + stubs commerciaux (requête courante, provider_runtime).
      */
@@ -391,6 +446,11 @@ class ProviderRouter {
 
         $primary   = ($primaryId !== '' && isset($byId[$primaryId])) ? $byId[$primaryId] : null;
         $preferred = ($preferredId !== '' && isset($byId[$preferredId])) ? $byId[$preferredId] : null;
+        $agentPreferred = null;
+        $agentProviderId = trim((string)($agent?->providerId ?? ''));
+        if ($agentProviderId !== '') {
+            $agentPreferred = $this->resolveProviderRow($agentProviderId);
+        }
 
         $unique = function (array $items): array {
             $seen = [];
@@ -413,12 +473,8 @@ class ProviderRouter {
         $firstEnabled = $enabled[0];
 
         if ($routingMode === 'agent-default') {
-            $agentProviderId = $agent?->providerId ? trim((string)$agent->providerId) : '';
-            if ($agentProviderId !== '') {
-                $resolved = $this->resolveProviderRow($agentProviderId);
-                if ($resolved) {
-                    return [$resolved];
-                }
+            if ($agentPreferred) {
+                return [$agentPreferred];
             }
             // Missing agent default -> fallback to primary behavior
             $routingMode = 'single-primary';
@@ -431,7 +487,7 @@ class ProviderRouter {
                 'provider_id' => (string)($chosen['id'] ?? ''),
                 'metadata' => ['routing_mode' => 'single-primary'],
             ]);
-            return [$chosen];
+            return $agentPreferred ? $unique([$agentPreferred, $chosen]) : [$chosen];
         }
 
         if ($routingMode === 'preferred-with-fallback') {
@@ -447,7 +503,8 @@ class ProviderRouter {
                     'fallback_provider_ids' => array_map(fn($p) => (string)($p['id'] ?? ''), $tail),
                 ],
             ]);
-            return $unique(array_merge([$head], $tail));
+            $base = $unique(array_merge([$head], $tail));
+            return $agentPreferred ? $unique(array_merge([$agentPreferred], $base)) : $base;
         }
 
         if ($routingMode === 'load-balance') {
@@ -476,11 +533,12 @@ class ProviderRouter {
                     'candidates' => array_map(fn($p) => (string)($p['id'] ?? ''), $ordered),
                 ],
             ]);
-            return $unique($ordered);
+            return $agentPreferred ? $unique(array_merge([$agentPreferred], $ordered)) : $unique($ordered);
         }
 
         // Default fallback
-        return [$primary ?: $firstEnabled];
+        $fallback = $primary ?: $firstEnabled;
+        return $agentPreferred ? $unique([$agentPreferred, $fallback]) : [$fallback];
     }
 }
 
