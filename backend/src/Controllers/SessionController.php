@@ -498,7 +498,7 @@ class SessionController {
     {
         $mode = (string)($session['mode'] ?? 'chat');
         $sessionStatus = strtolower((string)($session['status'] ?? 'draft'));
-        $status = (string)($raw['status'] ?? ($sessionStatus === 'completed' ? 'completed' : ($sessionStatus === 'running' ? 'running' : 'blocked')));
+        $status = (string)($raw['status'] ?? ($sessionStatus === 'completed' ? 'completed' : ($sessionStatus === 'running' ? 'running' : 'idle')));
 
         $events = $this->normalizeRuntimeEvents($raw['events'] ?? []);
         $lastEvent = !empty($events) ? $events[count($events) - 1] : null;
@@ -526,6 +526,14 @@ class SessionController {
         $percent = isset($rawProgress['percent'])
             ? (int)$rawProgress['percent']
             : $this->estimatedPercent($status, $mode, $currentRound, $totalRounds, $currentPhase);
+        // Stale guard: persisted percent can stay high while round/phase show "not started" yet.
+        if ($status === 'running' && $currentRound <= 0
+            && in_array($currentPhase, ['idle', '', 'session_started'], true)
+            && count($events) === 0
+            && $percent > 15
+        ) {
+            $percent = $this->estimatedPercent($status, $mode, $currentRound, $totalRounds, $currentPhase);
+        }
         if ($status !== 'completed') {
             $percent = min(99, max(0, $percent));
         } else {
@@ -587,8 +595,18 @@ class SessionController {
         if ($status === 'completed') {
             return 100;
         }
-        if ($status === 'failed' || $status === 'blocked') {
-            return 99;
+        if (in_array($status, ['idle', 'pending', 'draft'], true)) {
+            if ($currentRound <= 0) {
+                return 0;
+            }
+            $safeTotal = max(1, $totalRounds);
+            return (int)round(min(0.99, $currentRound / $safeTotal) * 100);
+        }
+        if ($status === 'failed') {
+            return 0;
+        }
+        if ($status === 'blocked') {
+            return 10;
         }
         $safeTotal = max(1, $totalRounds);
         $ratio = ($currentRound > 0 ? $currentRound / $safeTotal : 0.02);

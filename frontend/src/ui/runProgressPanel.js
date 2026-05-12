@@ -45,8 +45,17 @@ function pollingLabel(meta, t) {
 }
 
 function computeEstimatedPercent(status, progress) {
+  const s = String(status || '').toLowerCase();
+  if (s === 'completed') return 100;
+  if (s === 'failed' || s === 'error') return 0;
+  // Hors run actif : ne pas afficher ~100 % sur un pourcentage persistant ou erroné côté API.
+  if (s !== 'running') {
+    const cr = Number(progress?.current_round || 0);
+    const tr = Number(progress?.total_rounds || 0);
+    if (cr <= 0) return 0;
+    return Math.min(99, Math.max(0, Math.floor((cr / Math.max(1, tr)) * 100)));
+  }
   const raw = Number(progress?.percent);
-  if (status === 'completed') return 100;
   if (Number.isFinite(raw)) return Math.max(0, Math.min(99, Math.floor(raw)));
   return Math.max(5, Math.min(90, Number(progress?.current_round) > 0 ? 40 : 5));
 }
@@ -81,7 +90,7 @@ function renderRunProgressPanel(payloadOrRunStatus, rawOpts = {}) {
   const currentAgent = progress.current_agent_name || progress.current_agent_id || '—';
   const currentTeam = progress.current_team || null;
   const elapsed = formatElapsed(runStatus.elapsed_seconds || 0);
-  const estimatedPercent = computeEstimatedPercent(String(runStatus.status || ''), progress);
+  const estimatedPercent = computeEstimatedPercent(String(runStatus.status || '').toLowerCase(), progress);
   const lastEventTs = lastEvent?.ts || runStatus.updated_at || null;
   const noEventSinceSec = relativeSecondsSince(lastEventTs);
   const modeLine = [
