@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace Domain\StrategicContext;
 
 use Domain\CognitiveGovernance\RuntimeFilesystemGuard;
+use Domain\Sessions\SessionAgentResolver;
 
 /**
  * Mémoire markdown par couple (strategic_context_id, agent_id) — confinement filesystem strict.
@@ -325,6 +326,385 @@ MD;
             'sections_touched' => [trim($heading, '# ')],
             'warnings' => $warnings,
         ];
+    }
+
+    /**
+     * Liste les agent_id ayant un fichier memory.md existant pour ce contexte (read-only sur le disque).
+     *
+     * @return list<string>
+     */
+    public function listAgentIdsWithExistingMemoryFile(string $contextUuid): array
+    {
+        if (!$this->isValidContextUuid($contextUuid)) {
+            return [];
+        }
+        $base = realpath($this->storageRoot);
+        if ($base === false) {
+            return [];
+        }
+        $agentsDir = $base . DIRECTORY_SEPARATOR . strtolower($contextUuid) . DIRECTORY_SEPARATOR . 'agents';
+        if (!is_dir($agentsDir)) {
+            return [];
+        }
+        $out = [];
+        foreach (scandir($agentsDir) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            if (!$this->isValidAgentId($entry)) {
+                continue;
+            }
+            $sub = $agentsDir . DIRECTORY_SEPARATOR . $entry;
+            if (!is_dir($sub)) {
+                continue;
+            }
+            $md = $sub . DIRECTORY_SEPARATOR . 'memory.md';
+            if (!is_file($md)) {
+                continue;
+            }
+            $realMd = realpath($md);
+            if ($realMd === false || !str_starts_with($realMd, $base)) {
+                continue;
+            }
+            $out[] = strtolower($entry);
+        }
+        $out = array_values(array_unique($out));
+        sort($out, SORT_STRING);
+        return $out;
+    }
+
+    /**
+     * Ajoute un bloc factuel sous ## Decisions Remembered (flux propagation explicite).
+     * Déduplication par commentaire HTML `da-propagated-decision:{memory_id}`.
+     *
+     * @return array{ok:bool,changed:bool,sections_touched:list<string>,warnings:list<string>,message?:string,skipped_duplicate?:bool}
+     */
+    public function appendPropagatedDecisionBlock(
+        string $contextUuid,
+        string $agentId,
+        string $memoryId,
+        string $markdownBlock
+    ): array {
+        $memoryId = trim($memoryId);
+        $markdownBlock = trim(str_replace("\r\n", "\n", $markdownBlock));
+        if ($memoryId === '' || $markdownBlock === '') {
+            return ['ok' => false, 'changed' => false, 'sections_touched' => [], 'warnings' => [], 'message' => 'empty_payload'];
+        }
+        $marker = '<!-- da-propagated-decision:' . $memoryId . ' -->';
+        $r = $this->resolveMemoryFile($contextUuid, $agentId);
+        if (!$r['ok'] || $r['path'] === null) {
+            return ['ok' => false, 'changed' => false, 'sections_touched' => [], 'warnings' => [], 'message' => $r['error'] ?? 'resolve_failed'];
+        }
+        $this->ensureFile($contextUuid, $agentId);
+        $body = str_replace("\r\n", "\n", $this->read($contextUuid, $agentId));
+        if (str_contains($body, $marker)) {
+            return [
+                'ok' => true,
+                'changed' => false,
+                'sections_touched' => [],
+                'warnings' => [],
+                'skipped_duplicate' => true,
+            ];
+        }
+        $merge = $this->softMergeMissingSections($body);
+        $body = $merge['body'];
+        $warnings = $merge['warnings'];
+        $heading = '## Decisions Remembered';
+        if (!str_contains($body, $heading)) {
+            $body = rtrim($body) . "\n\n" . $heading . "\n\n";
+            $warnings[] = 'Added missing section: Decisions Remembered';
+        }
+        $block = "- {$marker}\n" . $markdownBlock;
+        $newBody = $this->insertBlockAfterHeadingLine($body, $heading, $block);
+        if ($newBody === null) {
+            return ['ok' => false, 'changed' => false, 'sections_touched' => [], 'warnings' => $warnings, 'message' => 'append_failed'];
+        }
+        $w = $this->write($contextUuid, $agentId, $newBody);
+        if (!$w['ok']) {
+            return ['ok' => false, 'changed' => false, 'sections_touched' => [], 'warnings' => $warnings, 'message' => $w['message'] ?? 'write_failed'];
+        }
+        return [
+            'ok' => true,
+            'changed' => true,
+            'sections_touched' => ['Decisions Remembered'],
+            'warnings' => $warnings,
+        ];
+    }
+
+    /**
+     * Synchronisation automatique depuis une Decision Memory (factuel, idempotent).
+     *
+     * @param array{
+     *   memory_id:string,
+     *   session_id:string,
+     *   mode:string,
+     *   playbook_id:string,
+     *   decision_status:string,
+     *   decision_summary:string,
+     *   required_next_actions:list<string>,
+     *   risk_level:string,
+     *   created_at:string
+     * } $payload
+     *
+     * @return array{ok:bool,changed:bool,sections_touched:list<string>,warnings:list<string>,message?:string,skipped_duplicate?:bool}
+     */
+    public function appendDecisionMemoryAutoSync(string $contextUuid, string $agentId, array $payload): array
+    {
+        $memoryId = trim((string)($payload['memory_id'] ?? ''));
+        if ($memoryId === '') {
+            return ['ok' => false, 'changed' => false, 'sections_touched' => [], 'warnings' => [], 'message' => 'empty_memory_id'];
+        }
+        $markerMain = '<!-- da-decision-memory-sync:' . $memoryId . ' -->';
+        $markerLegacy = '<!-- da-propagated-decision:' . $memoryId . ' -->';
+        $markerRecent = '<!-- da-decision-memory-sync-recent:' . $memoryId . ' -->';
+
+        $r = $this->resolveMemoryFile($contextUuid, $agentId);
+        if (!$r['ok'] || $r['path'] === null) {
+            return ['ok' => false, 'changed' => false, 'sections_touched' => [], 'warnings' => [], 'message' => $r['error'] ?? 'resolve_failed'];
+        }
+        $this->ensureFile($contextUuid, $agentId);
+        $body = str_replace("\r\n", "\n", $this->read($contextUuid, $agentId));
+        if (str_contains($body, $markerMain) || str_contains($body, $markerLegacy)) {
+            return [
+                'ok' => true,
+                'changed' => false,
+                'sections_touched' => [],
+                'warnings' => [],
+                'skipped_duplicate' => true,
+            ];
+        }
+
+        $merge = $this->softMergeMissingSections($body);
+        $body = $merge['body'];
+        $warnings = $merge['warnings'];
+        $headingDr = '## Decisions Remembered';
+        if (!str_contains($body, $headingDr)) {
+            $body = rtrim($body) . "\n\n" . $headingDr . "\n\n";
+            $warnings[] = 'Added missing section: Decisions Remembered';
+        }
+
+        $sessionId = trim((string)($payload['session_id'] ?? ''));
+        $mode = trim((string)($payload['mode'] ?? ''));
+        $playbook = trim((string)($payload['playbook_id'] ?? ''));
+        $status = trim((string)($payload['decision_status'] ?? ''));
+        $summary = trim((string)($payload['decision_summary'] ?? ''));
+        $risk = trim((string)($payload['risk_level'] ?? ''));
+        $createdRaw = trim((string)($payload['created_at'] ?? ''));
+        $date = $createdRaw !== '' ? substr($createdRaw, 0, 10) : gmdate('Y-m-d');
+        $next = is_array($payload['required_next_actions'] ?? null)
+            ? array_values(array_filter(array_map('strval', $payload['required_next_actions'])))
+            : [];
+
+        $lines = [];
+        $lines[] = '- [' . $date . '] Participated in decision memory `' . $memoryId . '` ' . $markerMain;
+        $lines[] = '  - Session: `' . $sessionId . '`';
+        $lines[] = '  - Mode: `' . ($mode !== '' ? $mode : '—') . '`';
+        $lines[] = '  - Playbook: `' . ($playbook !== '' ? $playbook : '—') . '`';
+        $lines[] = '  - Status: `' . ($status !== '' ? $status : '—') . '`';
+        $lines[] = '  - Summary: ' . str_replace(["\r", "\n"], ' ', $this->truncatePlain($summary, 400));
+        if ($risk !== '') {
+            $lines[] = '  - Risk level: `' . $risk . '`';
+        }
+        if ($next !== []) {
+            $lines[] = '  - Next actions:';
+            foreach (array_slice($next, 0, 12) as $n) {
+                $lines[] = '    - ' . str_replace(["\r", "\n"], ' ', $this->truncatePlain((string)$n, 240));
+            }
+        } else {
+            $lines[] = '  - Next actions: —';
+        }
+        $lines[] = '  - Source: decision_memory_auto_sync';
+
+        $block = implode("\n", $lines);
+        $newBody = $this->insertBlockAfterHeadingLine($body, $headingDr, $block);
+        if ($newBody === null) {
+            return ['ok' => false, 'changed' => false, 'sections_touched' => [], 'warnings' => $warnings, 'message' => 'append_decisions_failed'];
+        }
+        $sectionsTouched = ['Decisions Remembered'];
+
+        if (!str_contains($newBody, $markerRecent)) {
+            $primary = '## Recent Notes';
+            $fallback = '## Recent Learnings';
+            $headingRn = str_contains($newBody, $primary) || !str_contains($newBody, $fallback) ? $primary : $fallback;
+            if (!str_contains($newBody, $headingRn)) {
+                $newBody = rtrim($newBody) . "\n\n" . $primary . "\n\n";
+                $headingRn = $primary;
+            }
+            $noteLine = '- [' . $date . '] Decision memory `' . $memoryId . '` synced from session `' . $sessionId . '`. ' . $markerRecent;
+            $withRecent = $this->insertLineAfterHeading($newBody, $headingRn, $noteLine);
+            if (is_string($withRecent) && $withRecent !== $newBody) {
+                $newBody = $withRecent;
+                $sectionsTouched[] = trim($headingRn, '# ');
+            }
+        }
+
+        $w = $this->write($contextUuid, $agentId, $newBody);
+        if (!$w['ok']) {
+            return ['ok' => false, 'changed' => false, 'sections_touched' => [], 'warnings' => $warnings, 'message' => $w['message'] ?? 'write_failed'];
+        }
+
+        return [
+            'ok' => true,
+            'changed' => true,
+            'sections_touched' => array_values(array_unique($sectionsTouched)),
+            'warnings' => $warnings,
+        ];
+    }
+
+    /**
+     * Crée ou met à jour memory.md pour chaque agent participant d’une session contextualisée terminée.
+     * Trace factuelle idempotente par session : <!-- participant_context_sync:{session_uuid} -->
+     * (distinct du flux Decision Memory / da-decision-memory-sync).
+     *
+     * @param array<string,mixed> $session Ligne session (status, strategic_context_id, …).
+     *
+     * @return array{
+     *   ok:bool,
+     *   skipped?:string,
+     *   context_id?:string,
+     *   session_id?:string,
+     *   agents?:list<array<string,mixed>>
+     * }
+     */
+    /**
+     * @param array{include_synthesizer?:bool,include_devil_advocate?:bool} $resolverOptions
+     */
+    public function syncParticipantMemoryOnSessionCompleted(
+        string $sessionId,
+        array $session,
+        ?string $strategicContextIdOverride = null,
+        ?string $contextDisplayLabel = null,
+        array $resolverOptions = []
+    ): array {
+        $sessionId = trim($sessionId);
+        if ($sessionId === '') {
+            return ['ok' => false, 'skipped' => 'empty_session_id', 'agents' => []];
+        }
+        $sidNorm = strtolower($sessionId);
+        $contextId = trim((string)($strategicContextIdOverride ?? ($session['strategic_context_id'] ?? '')));
+        if (!$this->isValidContextUuid($contextId)) {
+            return ['ok' => false, 'skipped' => 'invalid_or_missing_context_id', 'agents' => []];
+        }
+        $st = strtolower(trim((string)($session['status'] ?? '')));
+        if ($st !== 'completed') {
+            return ['ok' => false, 'skipped' => 'not_completed', 'agents' => []];
+        }
+
+        $ctxLabel = trim((string)($contextDisplayLabel ?? ''));
+        if ($ctxLabel === '') {
+            $ctxLabel = $contextId;
+        }
+        $ctxEsc = str_replace(["\r", "\n", '`'], [' ', ' ', "'"], $ctxLabel);
+
+        $resolver = new SessionAgentResolver();
+        $agentIds = $resolver->resolveParticipants($sessionId, $resolverOptions);
+        $agentIds = $resolver->filterParticipantsForMemorySync($sessionId, $session, $agentIds);
+        $marker = '<!-- participant_context_sync:' . $sidNorm . ' -->';
+        $date = gmdate('Y-m-d');
+        $block = "- [{$date}] Participated in session `{$sidNorm}` in context `{$ctxEsc}`.\n  {$marker}\n  Source: participant_context_sync";
+
+        $agentsOut = [];
+        foreach ($agentIds as $agentId) {
+            $agentId = strtolower(trim($agentId));
+            if ($agentId === '' || !$this->isValidAgentId($agentId)) {
+                $agentsOut[] = ['agent_id' => $agentId, 'ok' => false, 'skipped' => 'invalid_agent_id'];
+                continue;
+            }
+            $r = $this->resolveMemoryFile($contextId, $agentId);
+            if (!$r['ok'] || $r['path'] === null) {
+                $agentsOut[] = ['agent_id' => $agentId, 'ok' => false, 'skipped' => $r['error'] ?? 'resolve_failed'];
+                continue;
+            }
+            $this->ensureFile($contextId, $agentId);
+            $body = str_replace("\r\n", "\n", $this->read($contextId, $agentId));
+            if (str_contains($body, $marker)) {
+                $agentsOut[] = ['agent_id' => $agentId, 'ok' => true, 'changed' => false, 'skipped_duplicate' => true];
+                continue;
+            }
+            $merge = $this->softMergeMissingSections($body);
+            $body = $merge['body'];
+            $headingPrimary = '## Recent Notes';
+            $headingFb = '## Recent Learnings';
+            $headingRn = str_contains($body, $headingPrimary) || !str_contains($body, $headingFb)
+                ? $headingPrimary
+                : $headingFb;
+            if (!str_contains($body, $headingRn)) {
+                $body = rtrim($body) . "\n\n" . $headingPrimary . "\n\n";
+                $headingRn = $headingPrimary;
+            }
+            $newBody = $this->insertBlockAfterHeadingLine($body, $headingRn, $block);
+            if ($newBody === null) {
+                $newBody = $this->insertBlockAfterHeadingLine($body, $headingPrimary, $block);
+            }
+            if ($newBody === null) {
+                $agentsOut[] = ['agent_id' => $agentId, 'ok' => false, 'message' => 'append_failed'];
+                continue;
+            }
+            $w = $this->write($contextId, $agentId, $newBody);
+            $agentsOut[] = [
+                'agent_id' => $agentId,
+                'ok' => $w['ok'],
+                'changed' => $w['ok'],
+            ];
+        }
+
+        return [
+            'ok' => true,
+            'context_id' => $contextId,
+            'session_id' => $sessionId,
+            'agents' => $agentsOut,
+        ];
+    }
+
+    /**
+     * Alias produit : même comportement que {@see syncParticipantMemoryOnSessionCompleted}.
+     *
+     * @param array<string,mixed> $session
+     *
+     * @return array<string,mixed>
+     */
+    /**
+     * @param array{include_synthesizer?:bool,include_devil_advocate?:bool} $resolverOptions
+     */
+    public function ensureParticipantMemoryForContext(
+        string $sessionId,
+        array $session,
+        ?string $strategicContextIdOverride = null,
+        ?string $contextDisplayLabel = null,
+        array $resolverOptions = []
+    ): array {
+        return $this->syncParticipantMemoryOnSessionCompleted(
+            $sessionId,
+            $session,
+            $strategicContextIdOverride,
+            $contextDisplayLabel,
+            $resolverOptions
+        );
+    }
+
+    private function truncatePlain(string $s, int $max): string
+    {
+        $x = preg_replace('/\s+/', ' ', $s);
+        $x = trim((string)$x);
+        if (function_exists('mb_strlen') && mb_strlen($x) > $max) {
+            return mb_substr($x, 0, max(0, $max - 1)) . '…';
+        }
+        if (strlen($x) > $max) {
+            return substr($x, 0, $max - 1) . '…';
+        }
+
+        return $x;
+    }
+
+    private function insertBlockAfterHeadingLine(string $body, string $heading, string $block): ?string
+    {
+        $pos = strpos($body, $heading);
+        if ($pos === false) {
+            return null;
+        }
+        $lineEnd = strpos($body, "\n", $pos);
+        $insertAt = $lineEnd !== false ? $lineEnd + 1 : ($pos + strlen($heading));
+        return substr($body, 0, $insertAt) . $block . "\n" . substr($body, $insertAt);
     }
 
     /**

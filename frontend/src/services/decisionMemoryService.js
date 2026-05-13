@@ -46,6 +46,21 @@ const DecisionMemoryService = {
     });
   },
 
+  async agentMemoryPreview(sessionId, memoryId, opts = {}) {
+    const qs = new URLSearchParams();
+    qs.set('memory_id', String(memoryId || '').trim());
+    if (opts.include_synthesizer) qs.set('include_synthesizer', '1');
+    if (opts.include_devil_advocate) qs.set('include_devil_advocate', '1');
+    return apiFetch(`/api/sessions/${encodeURIComponent(String(sessionId))}/decision-memory/agent-memory-preview?${qs.toString()}`);
+  },
+
+  async propagateToAgentMemories(sessionId, body) {
+    return apiFetch(`/api/sessions/${encodeURIComponent(String(sessionId))}/decision-memory/propagate-to-agent-memories`, {
+      method: 'POST',
+      body: JSON.stringify(body || {}),
+    });
+  },
+
   async link(fromMemoryId, toMemoryId, linkType) {
     return apiFetch(`/api/decision-memories/${encodeURIComponent(String(fromMemoryId))}/link`, {
       method: 'POST',

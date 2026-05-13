@@ -115,6 +115,21 @@ const StrategicContextService = {
     return apiFetch(`/api/strategic-contexts/${id}/timeline${qs}`);
   },
 
+  /** Agrégation read-only pour l’aperçu mémoire du contexte (GET /api/strategic-contexts/{id}/memory-overview). */
+  async getMemoryOverview(contextId) {
+    const id = encodeURIComponent(String(contextId || '').trim());
+    return apiFetch(`/api/strategic-contexts/${id}/memory-overview`);
+  },
+
+  /** POST /api/strategic-contexts/{id}/agent-memories/sync — reconstruction idempotente memory.md agents (Expert). */
+  async syncAgentMemories(contextId, payload = {}) {
+    const id = encodeURIComponent(String(contextId || '').trim());
+    return apiFetch(`/api/strategic-contexts/${id}/agent-memories/sync`, {
+      method: 'POST',
+      body: JSON.stringify(payload && typeof payload === 'object' ? payload : {}),
+    });
+  },
+
   /** Strategic Narrative (lecture seule persistée). GET /api/strategic-contexts/{id}/narrative */
   async getNarrative(contextId) {
     const id = encodeURIComponent(String(contextId || '').trim());

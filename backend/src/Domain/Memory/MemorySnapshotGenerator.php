@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace Domain\Memory;
 
 use Infrastructure\Persistence\Database;
+use Infrastructure\Persistence\DecisionMemoryRepository;
 use Infrastructure\Persistence\DecisionRoomRepository;
 use Infrastructure\Persistence\StrategicContextRepository;
 
@@ -16,6 +17,7 @@ final class MemorySnapshotGenerator
     private \PDO $pdo;
     private StrategicContextRepository $contexts;
     private DecisionRoomRepository $rooms;
+    private DecisionMemoryRepository $decisionMemories;
 
     private const DEFAULT_MAX_MEMORIES = 20;
     private const STALE_AFTER_DAYS = 90;
@@ -25,6 +27,7 @@ final class MemorySnapshotGenerator
         $this->pdo = Database::getConnection();
         $this->contexts = new StrategicContextRepository();
         $this->rooms = new DecisionRoomRepository();
+        $this->decisionMemories = new DecisionMemoryRepository();
     }
 
     /** @param array{include_stale?:bool, include_archived?:bool, include_expert_metadata?:bool, max_memories?:int, now?:string, perspective?:string} $options */
@@ -89,6 +92,8 @@ final class MemorySnapshotGenerator
         $md .= '- Latest next step: ' . $this->inline((string)($state['latest_next_step'] ?? '')) . "\n";
         $md .= '- Latest memory: ' . $this->inline((string)($state['latest_memory_id'] ?? '')) . "\n";
         $md .= '- Last updated: ' . $this->inline((string)($ctx['updated_at'] ?? '')) . "\n\n";
+
+        $md .= $this->buildDecisionsRememberedSection($contextId, $opts);
 
         $md .= "## Active Risks\n";
         $md .= $this->bullets($this->uniqueSortedStrings($this->collectStrings($allMemRows, 'unresolved_risks')), 50) . "\n";
@@ -241,6 +246,77 @@ final class MemorySnapshotGenerator
             'now' => $now,
             'perspective' => $perspective,
         ];
+    }
+
+    /**
+     * Section dédiée : liaisons `strategic_context_memories` (inclut mémoires non confirmées, étiquetées).
+     *
+     * @param array{include_stale:bool, include_archived:bool, include_expert_metadata:bool, max_memories:int, now:string, perspective:string} $opts
+     */
+    private function buildDecisionsRememberedSection(string $contextId, array $opts): string
+    {
+        $rows = $this->decisionMemories->findLinkedMemoriesForStrategicContextMarkdownExport(
+            $contextId,
+            $opts['max_memories']
+        );
+        $md = "## Decisions Remembered\n";
+        $md .= '_Linked via `strategic_context_memories` (read-only projection from `decision_memories`)._ ' . "\n\n";
+        if ($rows === []) {
+            $md .= "_No decision memories linked to this strategic context._\n\n";
+            return $md;
+        }
+        foreach ($rows as $m) {
+            $emit = $this->decisionsRememberedEmitsInContextMarkdown($m, $opts);
+            if (!$emit['emits']) {
+                continue;
+            }
+            $mid = (string)($m['memory_id'] ?? '');
+            if ($mid === '') {
+                continue;
+            }
+            $state = (string)($m['memory_state'] ?? 'active');
+            $isStale = $this->isStale($m, $opts['now']);
+            $staleTag = $isStale ? 'yes' : 'no';
+            $confirmed = ((int)($m['user_confirmed'] ?? 0) === 1) ? 'yes' : 'no';
+            $md .= '### ' . $this->h($mid) . "\n";
+            $md .= '- memory_id: ' . $this->inline($mid) . "\n";
+            $md .= '- session_id: ' . $this->inline((string)($m['session_id'] ?? '')) . "\n";
+            $md .= '- playbook_id: ' . $this->inline((string)($m['playbook_id'] ?? '')) . "\n";
+            $md .= '- decision_status: ' . $this->inline((string)($m['decision_status'] ?? '')) . "\n";
+            $md .= '- user_confirmed: ' . $this->inline($confirmed) . "\n";
+            $md .= '- memory_state: ' . $this->inline($state) . "\n";
+            $md .= '- stale (>=' . self::STALE_AFTER_DAYS . 'd): ' . $this->inline($staleTag) . "\n";
+            $md .= '- summary: ' . $this->inline((string)($m['decision_summary'] ?? '')) . "\n";
+            $md .= '- risks: ' . $this->inline(implode('; ', $this->uniqueSortedStrings($this->collectStrings([$m], 'unresolved_risks')))) . "\n";
+            $md .= '- next_steps: ' . $this->inline(implode('; ', $this->uniqueSortedStrings($this->collectStrings([$m], 'recommended_next_steps')))) . "\n";
+            $md .= '- created_at: ' . $this->inline((string)($m['created_at'] ?? '')) . "\n\n";
+        }
+        return $md;
+    }
+
+    /**
+     * Même logique que l’itération « Decisions Remembered » du markdown contexte (hors limite max_memories).
+     *
+     * @param array<string,mixed> $m ligne hydratée decision_memories
+     * @param array{include_stale:bool, include_archived:bool, include_expert_metadata?:bool, max_memories?:int, now?:string, perspective?:string} $opts
+     * @return array{emits: bool, exclusion: ?string} exclusion: invalidated|archived|filtered|null
+     */
+    public function decisionsRememberedEmitsInContextMarkdown(array $m, array $opts): array
+    {
+        $opts = $this->normalizeOptions($opts);
+        $state = (string)($m['memory_state'] ?? 'active');
+        if ($state === 'invalidated') {
+            return ['emits' => false, 'exclusion' => 'invalidated'];
+        }
+        if (!$opts['include_archived'] && $state === 'archived') {
+            return ['emits' => false, 'exclusion' => 'archived'];
+        }
+        $isStale = $this->isStale($m, $opts['now']);
+        if (!$opts['include_stale'] && $isStale) {
+            return ['emits' => false, 'exclusion' => 'filtered'];
+        }
+
+        return ['emits' => true, 'exclusion' => null];
     }
 
     /** @return list<string> */
@@ -481,6 +557,8 @@ final class MemorySnapshotGenerator
             . '- Latest next step: ' . $this->inline((string)($state['latest_next_step'] ?? '')) . "\n"
             . '- Latest memory: ' . $this->inline((string)($state['latest_memory_id'] ?? '')) . "\n"
             . '- Last updated: ' . $this->inline((string)($ctx['updated_at'] ?? '')) . "\n\n";
+
+        $sections['decisions_remembered'] = $this->buildDecisionsRememberedSection($contextId, $opts);
 
         $risks = $this->uniqueSortedStrings($this->collectStrings($allMemRows, 'unresolved_risks'));
         $hypotheses = $this->uniqueSortedStrings($this->collectStrings($allMemRows, 'validated_hypotheses'));

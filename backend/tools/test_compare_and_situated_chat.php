@@ -22,6 +22,7 @@ use Domain\StrategicContext\AgentContextChatService;
 use Domain\StrategicContext\StrategicContextComparisonService;
 use Infrastructure\Persistence\Database;
 use Infrastructure\Persistence\Migration;
+use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\StrategicContextRepository;
 
 final class DaStubSituatedChatRouter extends ProviderRouter
@@ -63,6 +64,7 @@ echo "Compare + Situated Chat (stub) checks\n\n";
 
 $db = Database::getInstance();
 (new Migration($db))->run();
+$pdo = Database::getConnection();
 
 $repo = new StrategicContextRepository();
 $a = $repo->create('CompareCtxA', 'A', 'active');
@@ -74,12 +76,71 @@ if ($aid === '' || $bid === '') {
     exit(1);
 }
 
+$sessionsCmp = new SessionRepository();
+$sidUnion = sprintf(
+    '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
+    mt_rand(0, 0xffff), mt_rand(0, 0xffff),
+    mt_rand(0, 0xffff),
+    mt_rand(0, 0x0fff) | 0x4000,
+    mt_rand(0, 0x3fff) | 0x8000,
+    mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
+);
+$now = gmdate('c');
+$sessionsCmp->create([
+    'id' => $sidUnion,
+    'title' => 'Union compare session',
+    'mode' => 'chat',
+    'initial_prompt' => 'compare union',
+    'selected_agents' => ['custom_a'],
+    'rounds' => 1,
+    'language' => 'en',
+    'status' => 'completed',
+    'strategic_context_id' => $aid,
+    'created_at' => $now,
+    'updated_at' => $now,
+]);
+$pdo->prepare('INSERT INTO messages (id, session_id, role, agent_id, content, created_at) VALUES (?,?,?,?,?,?)')
+    ->execute(['msg-union-' . $sidUnion, $sidUnion, 'assistant', 'custom_a', 'x', $now]);
+
+$memSvc = new \Domain\StrategicContext\AgentContextMemoryService();
+$memSvc->write($aid, 'custom_a', "# Agent Context Memory\n\n## Open Questions\n\n- union-tag-a\n");
+$memSvc->write($bid, 'custom_b', "# Agent Context Memory\n\n## Open Questions\n\n- union-tag-b\n");
+
 $cmp = new StrategicContextComparisonService();
+$activeBefore = $repo->getActiveContext();
 $r = $cmp->compare($aid, $bid, false, false, true, false, false);
 if (($r['ok'] ?? false) !== true) {
     echo "FAIL: compare not ok: " . json_encode($r) . "\n";
     exit(1);
 }
+$activeAfter = $repo->getActiveContext();
+$ab = strtolower(trim((string)($activeBefore['context_id'] ?? '')));
+$aa = strtolower(trim((string)($activeAfter['context_id'] ?? '')));
+if ($ab !== $aa) {
+    echo "FAIL: active workspace context changed by compare (before=$ab after=$aa)\n";
+    exit(1);
+}
+$seenAgents = [];
+foreach (($r['diff']['agent_memory_differences'] ?? []) as $d) {
+    if (!empty($d['agent_id'])) {
+        $seenAgents[strtolower((string)$d['agent_id'])] = true;
+    }
+}
+if (!isset($seenAgents['custom_a']) || !isset($seenAgents['custom_b'])) {
+    echo "FAIL: expected custom_a and custom_b in agent_memory_differences, got keys: " . implode(',', array_keys($seenAgents)) . "\n";
+    exit(1);
+}
+$amMeta = $r['diff']['runtime_meta']['agent_memory_compare'] ?? null;
+if (!is_array($amMeta) || ($amMeta['source'] ?? '') === '') {
+    echo "FAIL: runtime_meta.agent_memory_compare missing\n";
+    exit(1);
+}
+if (($amMeta['source'] ?? '') !== 'StrategicContextWorkspaceAgentsCatalog::unionAgentIdsForCrossContextMemoryDiff') {
+    echo "FAIL: unexpected agent_memory_compare source\n";
+    exit(1);
+}
+echo "PASS: compare uses dynamic agent union (custom_a, custom_b) + read-only (active context unchanged)\n";
+
 if (($r['left']['context_id'] ?? '') !== strtolower($aid) || ($r['right']['context_id'] ?? '') !== strtolower($bid)) {
     echo "FAIL: compare left/right context ids\n";
     exit(1);
@@ -90,7 +151,6 @@ if (!isset($r['diff']['agent_memory_differences']) || !is_array($r['diff']['agen
 }
 echo "PASS: StrategicContextComparisonService::compare (read-only)\n";
 
-$memSvc = new \Domain\StrategicContext\AgentContextMemoryService();
 $memSvc->write($aid, 'pm', "# Agent Context Memory\n\n## Open Questions\n\n- Q unique A\n");
 $memSvc->write($bid, 'pm', "# Agent Context Memory\n\n## Open Questions\n\n- Q unique B\n");
 

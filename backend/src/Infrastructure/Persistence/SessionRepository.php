@@ -91,6 +91,7 @@ class SessionRepository {
         if (!empty($extras)) {
             try { $this->update($data['id'], $extras); } catch (\Throwable $e) {}
         }
+        ParticipantMemorySyncTrigger::onSessionLikelyParticipantChange((string)$data['id']);
         return $this->findById($data['id']);
     }
 
@@ -106,6 +107,7 @@ class SessionRepository {
         $sets[] = 'updated_at = :updated_at';
         $sql = 'UPDATE sessions SET ' . implode(', ', $sets) . ' WHERE id = :id';
         $this->pdo->prepare($sql)->execute($params);
+        ParticipantMemorySyncTrigger::onSessionLikelyParticipantChange($id);
     }
 
     private function decodeRow(array $row): array {

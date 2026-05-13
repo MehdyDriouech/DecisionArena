@@ -459,11 +459,7 @@ class SessionController {
         if (!in_array($status, self::LIFECYCLE_ALLOWED, true)) {
             return Response::error('Invalid status. Allowed: draft|running|completed|archived', 400);
         }
-        $this->pdo()->exec(
-            "UPDATE sessions SET status = " . $this->pdo()->quote($status) .
-            ", updated_at = " . $this->pdo()->quote(date('c')) .
-            " WHERE id = " . $this->pdo()->quote($id)
-        );
+        $this->sessionRepo->update($id, ['status' => $status]);
         return ['success' => true, 'status' => $status];
     }
 

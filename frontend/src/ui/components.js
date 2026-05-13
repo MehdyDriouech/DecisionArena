@@ -546,6 +546,10 @@ function renderDecisionOutcomeCard(data, opts = {}) {
   const canPersistFromUi = !!sessionId && (safeToPersist || (requiresConfirm && missingCritical.length === 0));
   const persistReason = cleanDecisionBriefText(persistenceSafety?.reason || '');
   const isPersisting = window.DecisionArena?.store?.state?.memoryConfirmingSessionId === sessionId;
+  const ppm = sessionId
+    ? (window.DecisionArena?.store?.state?.postPersistDecisionMemoryBySession?.[sessionId] || null)
+    : null;
+  const ams = ppm?.agent_memory_sync;
   const statusKey = safeToPersist
     ? 'decisionMemory.persist.status.persistable'
     : ((requiresConfirm && missingCritical.length === 0) ? 'decisionMemory.persist.status.confirmRequired' : 'decisionMemory.persist.status.nonPersistable');
@@ -678,6 +682,23 @@ function renderDecisionOutcomeCard(data, opts = {}) {
       ` : ''}
       ${canPersistFromUi ? `<span style="font-size:11px;color:var(--text-muted);">${escHtml(t('decisionMemory.persistResultHint'))}</span>` : ''}
     </div>
+    ${ppm && ppm.memory_id ? `
+    <div style="margin-top:10px;border-top:1px dashed var(--border-color);padding-top:10px;">
+      <div style="font-size:12px;font-weight:600;">${escHtml(t('decisionMemory.postPersist.title'))}</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
+        ${escHtml(t('decisionMemory.postPersist.memoryId'))}: <code>${escHtml(ppm.memory_id)}</code>
+        · ${escHtml(t('decisionMemory.postPersist.contextLinked'))}: ${escHtml((ppm.context_memory_linked ?? ppm.strategic_context_linked) ? t('common.yes') : t('common.no'))}
+      </div>
+      ${ams && ams.enabled && Array.isArray(ams.updated) && ams.updated.length ? `
+        <div style="font-size:12px;margin-top:8px;">
+          <strong>${escHtml(t('decisionMemory.postPersist.agentMemUpdated'))}</strong>
+          <ul style="margin:4px 0 0 16px;line-height:1.45;">
+            ${ams.updated.map((u) => `<li><code>${escHtml(String(u.agent_id || ''))}</code>${(u.changed === false) ? ` <span style="color:var(--text-muted);">(${escHtml(t('decisionMemory.postPersist.agentMemUnchanged'))})</span>` : ''}</li>`).join('')}
+          </ul>
+        </div>
+      ` : (ams && Array.isArray(ams.warnings) && ams.warnings.length ? `<div style="font-size:11px;margin-top:6px;color:var(--text-muted);">${escHtml(ams.warnings.join(' · '))}</div>` : '')}
+    </div>
+    ` : ''}
     ${!canPersistFromUi && missingCritical.length ? `
       <div style="margin-top:6px;font-size:12px;color:var(--text-muted);">
         ${escHtml(t('decisionMemory.persistUnavailableUntilCritical'))}

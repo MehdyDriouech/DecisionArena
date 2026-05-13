@@ -99,7 +99,9 @@ class MessageRepository {
         ]);
         $stmt2 = $this->pdo->prepare('SELECT * FROM messages WHERE id = ?');
         $stmt2->execute([$data['id']]);
-        return $stmt2->fetch(\PDO::FETCH_ASSOC);
+        $out = $stmt2->fetch(\PDO::FETCH_ASSOC);
+        ParticipantMemorySyncTrigger::onSessionLikelyParticipantChange((string)$data['session_id']);
+        return $out;
     }
 
     private function enrichMetaJson(array $data): ?string

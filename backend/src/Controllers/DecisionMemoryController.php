@@ -5,6 +5,7 @@ namespace Controllers;
 
 use Http\Request;
 use Http\Response;
+use Domain\DecisionMemory\DecisionMemoryAgentPropagationService;
 use Infrastructure\Persistence\DecisionMemoryRepository;
 use Infrastructure\Persistence\DecisionMemoryEmbeddingsRepository;
 use Infrastructure\Persistence\SessionRepository;
@@ -129,12 +130,70 @@ final class DecisionMemoryController
         if (!$mem) {
             return Response::error('Memory could not be persisted (unsafe outcome)', 400);
         }
+        $ams = is_array($mem['agent_memory_sync'] ?? null) ? $mem['agent_memory_sync'] : [
+            'enabled' => false,
+            'participants' => [],
+            'updated' => [],
+            'skipped' => [],
+            'warnings' => [],
+        ];
+
         return [
             'memory' => $mem,
+            'memory_id' => (string)($mem['memory_id'] ?? ''),
             'strategic_context_linked' => (bool)($mem['strategic_context_linked'] ?? false),
+            'context_memory_linked' => (bool)($mem['strategic_context_linked'] ?? false),
             'strategic_context_id' => $mem['strategic_context_id'] ?? null,
             'warning' => $mem['warning'] ?? null,
+            'agent_memory_sync' => $ams,
         ];
+    }
+
+    /** GET /api/sessions/{id}/decision-memory/agent-memory-preview?memory_id=… */
+    public function agentMemoryPreview(Request $req): array
+    {
+        $sessionId = (string)$req->param('id');
+        $memoryId = trim((string)($req->query('memory_id') ?? ''));
+        if ($memoryId === '') {
+            return Response::error('memory_id query parameter is required', 400);
+        }
+        $opts = [
+            'include_synthesizer' => trim((string)($req->query('include_synthesizer') ?? '')) === '1',
+            'include_devil_advocate' => trim((string)($req->query('include_devil_advocate') ?? '')) === '1',
+        ];
+        $svc = new DecisionMemoryAgentPropagationService();
+        $out = $svc->preview($sessionId, $memoryId, $opts);
+        if (isset($out['error'])) {
+            return Response::error((string)$out['error'], (int)($out['http'] ?? 400));
+        }
+        return $out;
+    }
+
+    /** POST /api/sessions/{id}/decision-memory/propagate-to-agent-memories */
+    public function propagateToAgentMemories(Request $req): array
+    {
+        $sessionId = (string)$req->param('id');
+        $body = $req->body();
+        if (!is_array($body)) {
+            $body = [];
+        }
+        $memoryId = trim((string)($body['memory_id'] ?? ''));
+        $confirm = ($body['confirm'] ?? false) === true;
+        $expertOverride = ($body['expert_override'] ?? false) === true;
+        $agentIds = isset($body['agent_ids']) && is_array($body['agent_ids']) ? $body['agent_ids'] : [];
+        if ($memoryId === '') {
+            return Response::error('memory_id is required', 400);
+        }
+        $opts = [
+            'include_synthesizer' => ($body['include_synthesizer'] ?? false) === true,
+            'include_devil_advocate' => ($body['include_devil_advocate'] ?? false) === true,
+        ];
+        $svc = new DecisionMemoryAgentPropagationService();
+        $out = $svc->propagate($sessionId, $memoryId, $agentIds, $confirm, $expertOverride, $opts);
+        if (isset($out['error'])) {
+            return Response::error((string)$out['error'], (int)($out['http'] ?? 400));
+        }
+        return $out;
     }
 
     /** POST /api/decision-memories/{id}/link */

@@ -104,6 +104,53 @@ function parseSelectedAgents(raw) {
   return [];
 }
 
+/** Sélecteur principal « Mémoire agents » : participants ou memory.md ; exclut synthesizer / devil_advocate. */
+function resolvePrimaryWorkspaceAgentIds(selected) {
+  const wa = Array.isArray(selected?.workspace_agents) ? selected.workspace_agents : [];
+  const out = [];
+  for (const a of wa) {
+    const id = String(a.agent_id || '').trim().toLowerCase();
+    if (!id || id === 'synthesizer' || id === 'devil_advocate') continue;
+    if (!a.participated && !a.memory_md_exists) continue;
+    out.push(id);
+  }
+  return Array.from(new Set(out));
+}
+
+/** @deprecated Préférer resolvePrimaryWorkspaceAgentIds pour l’UI mémoire ; conservé pour compat. */
+function resolveWorkspaceAgentIds(selected, state) {
+  const primary = resolvePrimaryWorkspaceAgentIds(selected);
+  if (primary.length) return primary;
+  const wa = Array.isArray(selected?.workspace_agents) ? selected.workspace_agents : [];
+  const ids = wa.map((a) => String(a.agent_id || '').trim().toLowerCase()).filter(Boolean);
+  if (ids.length) return Array.from(new Set(ids));
+  return [];
+}
+
+function workspaceAgentLabelForSelect(agentId, selected, t) {
+  const wa = Array.isArray(selected?.workspace_agents) ? selected.workspace_agents : [];
+  const expert = Array.isArray(selected?.workspace_agents_expert_personas)
+    ? selected.workspace_agents_expert_personas
+    : [];
+  const idl = String(agentId).trim().toLowerCase();
+  const row = wa.find((a) => String(a.agent_id || '').trim().toLowerCase() === idl)
+    || expert.find((a) => String(a.agent_id || '').trim().toLowerCase() === idl);
+  const name = row ? String(row.agent_name || row.display_name || row.agent_id || '').trim() : String(agentId);
+  const badges = Array.isArray(row?.badges) ? row.badges : [];
+  const parts = [];
+  if (badges.includes('participated')) parts.push(t('contexts.workspaceAgentBadge.participated'));
+  if (badges.includes('memory_md_exists')) parts.push(t('contexts.workspaceAgentBadge.memoryFile'));
+  if (badges.includes('participant_memory_needs_repair')) parts.push(t('contexts.workspaceAgentBadge.needsRepair'));
+  if (badges.includes('participation_context_sync')) parts.push(t('contexts.workspaceAgentBadge.participationSync'));
+  if (badges.includes('no_confirmed_decision_memory')) parts.push(t('contexts.workspaceAgentBadge.noConfirmedDm'));
+  if (badges.includes('no_context_memory_file')) parts.push(t('contexts.agentBadges.no_context_memory_file'));
+  if (badges.includes('persona_fallback_no_memory')) parts.push(t('contexts.workspaceAgentBadge.personaNoMemory'));
+  if (badges.includes('not_participant')) parts.push(t('contexts.workspaceAgentBadge.notParticipant'));
+  if (badges.includes('agent_memory_updated')) parts.push(t('contexts.workspaceAgentBadge.updated'));
+  const suf = parts.length ? ` — ${parts.join(', ')}` : '';
+  return `${name} (${agentId})${suf}`;
+}
+
 function buildRunPersonaPerspectiveItems(selected, state) {
   const sessions = Array.isArray(state.sessions) ? state.sessions : [];
   const personas = Array.isArray(state.personas) ? state.personas : [];
@@ -489,69 +536,333 @@ function renderStrategicContexts() {
     const risks = Array.isArray(cs.active_risks) ? cs.active_risks : [];
     const isDeleteConfirm = ui.deleteConfirmContextId && ui.deleteConfirmContextId === selected.context_id;
 
-    const shortMid = cs.latest_memory_id ? String(cs.latest_memory_id).slice(0, 10) + (String(cs.latest_memory_id).length > 10 ? '…' : '') : '';
-    const lastWhen = cs.latest_memory_at ? formatDate(cs.latest_memory_at) : '—';
-
-    const decLabel = readableDecisionStatusForContext(t, cs.current_decision_status);
-    const confLabelShort = readableConfidenceShortForContext(t, cs.current_confidence);
-
-    const summarySnippet = truncateContextSummary(cs.decision_summary, 220);
     const riskPreview = risks.slice(0, 2)
       .map((r) => `<div style="font-size:11px;color:var(--text-secondary);line-height:1.35;">• ${escHtml(String(r))}</div>`)
       .join('');
 
-    const expressCard = `
-      <div class="card sc-express-summary" style="padding:14px 16px;margin-bottom:14px;background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.22);">
-        <div style="font-size:11px;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">
-          ${escHtml(t('contexts.express.whereWeAre'))}
+    const mo = ui.memoryOverview || { loading: false, error: '', data: null };
+    const amf = ui.agentMemoryForceSync || { loading: false, error: '', report: null };
+    const ovPayload = mo.data && typeof mo.data === 'object' ? mo.data : null;
+    const ov = ovPayload?.overview && typeof ovPayload.overview === 'object' ? ovPayload.overview : null;
+    const decPreview = Array.isArray(ovPayload?.decisions_preview) ? ovPayload.decisions_preview : [];
+    const diagList = Array.isArray(ovPayload?.diagnostics) ? ovPayload.diagnostics : [];
+    const expertAutoNotes = Array.isArray(ovPayload?.expert_automation_notes) ? ovPayload.expert_automation_notes : [];
+    const diagCritical = diagList.some((d) => {
+      const s = String(d.severity || '').toLowerCase();
+      return s === 'error' || s === 'warning';
+    });
+    const bc = ui.basicCompare || { targetId: null, loading: false, error: '', result: null };
+    const otherContexts = items.filter((c) => String(c.context_id) !== String(selected.context_id));
+    const basicComparePick = String(bc.targetId || '').trim();
+    const mh = ov?.memory_health && typeof ov.memory_health === 'object' ? ov.memory_health : { level: 'ok', warnings: [] };
+    const healthLevel = String(mh.level || 'ok');
+    const healthWarns = Array.isArray(mh.warnings) ? mh.warnings : [];
+    const shortId = (s) => {
+      const x = String(s || '').trim();
+      if (!x) return '—';
+      return x.length <= 14 ? x : `${x.slice(0, 10)}…`;
+    };
+    const healthBadgeVariant = healthLevel === 'ok' ? 'success' : healthLevel === 'incomplete' ? 'warning' : 'warning';
+    const healthLabelKey = healthLevel === 'ok'
+      ? 'contexts.memoryOverview.healthOk'
+      : (healthLevel === 'incomplete' ? 'contexts.memoryOverview.healthIncomplete' : 'contexts.memoryOverview.healthWarning');
+
+    const workspaceAgents = Array.isArray(selected.workspace_agents) ? selected.workspace_agents : [];
+
+    const expressCard = '';
+
+    const memoryOverviewBlock = `
+        <div class="card sc-memory-overview" style="margin-top:14px;padding:12px 14px;border:1px solid var(--border-subtle);background:var(--bg-secondary);">
+          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;">
+            <div>
+              <div style="font-weight:800;font-size:14px;">${escHtml(t('contexts.memoryOverview.title'))}</div>
+              <div style="font-size:11px;color:var(--text-muted);line-height:1.45;margin-top:4px;">${escHtml(t('contexts.memoryOverview.subtitle'))}</div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <button type="button" class="btn btn-secondary btn-sm" data-action="load-context-memory-overview" data-context-id="${escHtml(selected.context_id)}">${escHtml(t('contexts.memoryOverview.refresh'))}</button>
+              ${mo.loading ? `<span class="badge badge-muted">${escHtml(t('contexts.memoryOverview.loading'))}</span>` : ''}
+            </div>
+          </div>
+          ${mo.error ? `<div class="error-banner" style="margin-top:8px;">⚠️ ${escHtml(mo.error)}</div>` : ''}
+          ${ov ? `
+            <div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
+              ${renderBadge({ text: t(healthLabelKey), variant: healthBadgeVariant })}
+              <span class="badge badge-muted">${escHtml(t('contexts.memoryOverview.sessions'))}: ${escHtml(String(ov.sessions_count ?? 0))}</span>
+              <span class="badge badge-muted">${escHtml(t('contexts.memoryOverview.decisions'))}: ${escHtml(String(ov.decision_memories_count ?? 0))}</span>
+              <span class="badge badge-muted">${escHtml(t('contexts.memoryOverview.participants'))}: ${escHtml(String(ov.participants_count ?? 0))}</span>
+              <span class="badge badge-muted">${escHtml(t('contexts.memoryOverview.agentFiles'))}: ${escHtml(String(ov.agent_memories_count ?? 0))}</span>
+              ${ov.last_decision_at ? `<span class="badge badge-info">${escHtml(t('contexts.memoryOverview.lastDecision'))}: ${escHtml(formatDate(ov.last_decision_at))}</span>` : ''}
+            </div>
+            ${healthWarns.length ? `<div style="margin-top:10px;font-size:12px;color:var(--text-secondary);line-height:1.45;">
+              <strong>${escHtml(t('contexts.memoryOverview.warningsTitle'))}</strong>
+              <ul style="margin:6px 0 0 18px;">${healthWarns.map((w) => `<li>${escHtml(String(w))}</li>`).join('')}</ul>
+            </div>` : ''}
+            <div style="margin-top:10px;font-size:12px;color:var(--text-muted);line-height:1.5;">${escHtml(t('contexts.memoryOverview.canonNote'))}</div>
+            ${isExpert ? (() => {
+      const rep = amf.report && typeof amf.report === 'object' ? amf.report : null;
+      const sum = rep && typeof rep.summary === 'object' ? rep.summary : null;
+      const sumLines = sum ? `
+              <div style="margin-top:8px;font-size:12px;color:var(--text-secondary);line-height:1.5;">
+                <div><strong>${escHtml(t('contexts.agentMemorySync.lineSessions'))}</strong> : ${escHtml(String(sum.sessions_scanned ?? 0))}</div>
+                <div><strong>${escHtml(t('contexts.agentMemorySync.lineMemories'))}</strong> : ${escHtml(String(sum.decision_memories_scanned ?? 0))}</div>
+                <div><strong>${escHtml(t('contexts.agentMemorySync.lineCreated'))}</strong> : ${escHtml(String(sum.files_created ?? 0))}</div>
+                <div><strong>${escHtml(t('contexts.agentMemorySync.lineUpdated'))}</strong> : ${escHtml(String(sum.files_updated ?? 0))}</div>
+                <div><strong>${escHtml(t('contexts.agentMemorySync.lineDup'))}</strong> : ${escHtml(String(sum.duplicates_skipped ?? 0))}</div>
+                <div><strong>${escHtml(t('contexts.agentMemorySync.lineWarn'))}</strong> : ${escHtml(String(sum.warnings_count ?? 0))}</div>
+                ${rep?.dry_run ? `<div style="margin-top:6px;"><span class="badge badge-info">${escHtml(t('contexts.agentMemorySync.preview'))}</span></div>` : ''}
+              </div>` : '';
+      return `
+            <div style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--border-color);" data-ui="expert-only">
+              <div style="font-size:12px;color:var(--text-secondary);line-height:1.45;margin-bottom:8px;">${escHtml(t('contexts.agentMemorySync.blurb'))}</div>
+              <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+                <button type="button" class="btn btn-secondary btn-sm" data-action="preview-agent-context-memories-sync" data-context-id="${escHtml(selected.context_id)}">${escHtml(t('contexts.agentMemorySync.preview'))}</button>
+                <button type="button" class="btn btn-primary btn-sm" data-action="apply-agent-context-memories-sync" data-context-id="${escHtml(selected.context_id)}">${escHtml(t('contexts.agentMemorySync.apply'))}</button>
+                ${amf.loading ? `<span class="badge badge-muted">${escHtml(t('contexts.memoryOverview.loading'))}</span>` : ''}
+              </div>
+              ${amf.error ? `<div class="error-banner" style="margin-top:8px;">⚠️ ${escHtml(amf.error)}</div>` : ''}
+              ${rep ? `<div style="margin-top:10px;padding:10px;background:var(--bg-secondary);border:1px solid var(--border-subtle);border-radius:8px;">
+                <div style="font-weight:700;font-size:13px;margin-bottom:4px;">${escHtml(t('contexts.agentMemorySync.summaryTitle'))}</div>
+                ${sumLines}
+              </div>` : ''}
+            </div>`;
+    })() : ''}
+          ` : (!mo.loading ? `<div style="margin-top:10px;font-size:12px;color:var(--text-muted);">${escHtml(t('contexts.memoryOverview.empty'))}</div>` : '')}
+        </div>`;
+
+    const basicActionsBar = `
+        <div class="sc-basic-actions" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border-subtle);display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+          <button type="button" class="btn btn-primary btn-sm" data-action="toggle-context-memory-md" data-context-id="${escHtml(selected.context_id)}">${escHtml(t('contexts.basicActions.memoryMd'))}</button>
+          <button type="button" class="btn btn-secondary btn-sm" data-action="load-workspace-timeline" data-context-id="${escHtml(selected.context_id)}">${escHtml(t('contexts.basicActions.timeline'))}</button>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
-          <button type="button" class="btn btn-secondary btn-sm" data-action="toggle-context-memory-md" data-context-id="${escHtml(selected.context_id)}">
-            ${escHtml(t('snapshots.viewMemoryMd'))}
-          </button>
-          ${ui.memoryMdLoading ? `<span class="badge badge-muted">${escHtml(t('snapshots.loading'))}</span>` : ''}
-          ${ui.memoryMdError ? `<span class="badge badge-danger">${escHtml(t('snapshots.error'))}</span>` : ''}
-        </div>
-        <div style="display:grid;gap:10px;">
+        ${!isExpert ? `
+        <div class="sc-basic-compare-row" data-sc-basic-compare="1" style="margin-top:12px;padding:12px 14px;border:1px solid var(--border-subtle);border-radius:8px;background:var(--bg-secondary);">
+          <div style="font-weight:800;font-size:13px;margin-bottom:8px;">${escHtml(t('contexts.basicCompare.sectionTitle'))}</div>
+          ${otherContexts.length === 0
+      ? `<div style="font-size:12px;color:var(--text-muted);">${escHtml(t('contexts.basicCompare.noOther'))}</div>`
+      : `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+              <label style="font-size:12px;color:var(--text-secondary);margin:0;">${escHtml(t('contexts.basicCompare.withLabel'))}</label>
+              <select class="input" style="min-width:220px;" data-action="set-basic-compare-target">
+                <option value="">${escHtml(t('contexts.basicCompare.pick'))}</option>
+                ${otherContexts.map((c) => {
+      const id = String(c.context_id || '');
+      const sel = basicComparePick === id ? ' selected' : '';
+      return `<option value="${escHtml(id)}"${sel}>${escHtml(String(c.title || id).slice(0, 56))}</option>`;
+    }).join('')}
+              </select>
+              <button type="button" class="btn btn-primary btn-sm" data-action="run-basic-strategic-context-compare-basic" data-context-id="${escHtml(selected.context_id)}"${(!basicComparePick || bc.loading) ? ' disabled' : ''}>${escHtml(t('contexts.basicCompare.run'))}</button>
+              ${bc.loading ? `<span class="badge badge-muted">${escHtml(t('contexts.memoryOverview.loading'))}</span>` : ''}
+            </div>`}
+          ${bc.error ? `<div class="error-banner" style="margin-top:8px;">⚠️ ${escHtml(bc.error)}</div>` : ''}
+        </div>` : ''}
+        <div style="margin-top:8px;font-size:11px;color:var(--text-muted);line-height:1.45;">${escHtml(t('contexts.memoryMdDisclaimers.contextView'))}</div>`;
+
+    const decisionsMemorizedSection = (() => {
+      const rows = decPreview.map((d) => {
+        const mid = String(d.memory_id || '');
+        const sid = String(d.session_id || '');
+        const sum = String(d.summary || '').trim();
+        const pb = String(d.playbook_id || '—');
+        const st = String(d.decision_status || d.memory_state || '—');
+        const na = String(d.next_action || '').trim();
+        const when = d.created_at ? formatDate(d.created_at) : '—';
+        const unconfirmed = d.user_confirmed === false ? `<span class="badge badge-warning" style="margin-left:6px;">${escHtml(t('contexts.decisionsMemorized.unconfirmed'))}</span>` : '';
+        return `<div class="sc-decision-row" style="padding:10px 0;border-bottom:1px solid var(--border-subtle);">
+          <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+            ${renderBadge({ text: escHtml(st), variant: 'info' })}
+            ${unconfirmed}
+            <span style="font-size:11px;color:var(--text-muted);">${escHtml(when)}</span>
+          </div>
+          <div style="margin-top:6px;font-size:13px;color:var(--text-primary);line-height:1.45;">${sum ? escHtml(sum) : escHtml(t('contexts.decisionsMemorized.noSummary'))}</div>
+          <div style="margin-top:6px;font-size:11px;color:var(--text-muted);line-height:1.5;">
+            <span><strong>session</strong> <code>${escHtml(shortId(sid))}</code></span>
+            · <span><strong>memory</strong> <code>${escHtml(shortId(mid))}</code></span>
+            · <span><strong>${escHtml(t('contexts.decisionsMemorized.playbook'))}</strong> ${escHtml(pb)}</span>
+          </div>
+          ${na ? `<div style="margin-top:6px;font-size:12px;color:var(--text-secondary);"><strong>${escHtml(t('contexts.next'))}:</strong> ${escHtml(na)}</div>` : ''}
+          <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;">
+            <button type="button" class="btn btn-secondary btn-sm" data-action="open-decision-memory-for-context" data-context-id="${escHtml(selected.context_id)}" data-memory-id="${escHtml(mid)}">${escHtml(t('contexts.decisionsMemorized.viewSource'))}</button>
+            ${sid ? `<button type="button" class="btn btn-secondary btn-sm" data-action="open-session" data-session-id="${escHtml(sid)}" data-mode="session-history">${escHtml(t('contexts.decisionsMemorized.openAnalysis'))}</button>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+      const empty = `<div style="font-size:13px;color:var(--text-secondary);line-height:1.5;">${escHtml(t('contexts.decisionsMemorized.empty'))}</div>
+        <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">${escHtml(t('contexts.decisionsMemorized.hint'))}</div>`;
+      return `
+        <div class="card sc-decisions-memorized" style="margin-top:12px;padding:12px 14px;">
+          <div style="font-weight:800;font-size:14px;margin-bottom:4px;">${escHtml(t('contexts.decisionsMemorized.title'))}</div>
+          <div style="font-size:11px;color:var(--text-muted);line-height:1.45;margin-bottom:10px;">${escHtml(t('contexts.decisionsMemorized.subtitle'))}</div>
+          ${decPreview.length ? rows : empty}
+        </div>`;
+    })();
+
+    const agentsInvolvedSection = (() => {
+      const coreRows = workspaceAgents.filter((ag) => {
+        const aid = String(ag.agent_id || '').trim().toLowerCase();
+        return aid && aid !== 'synthesizer' && aid !== 'devil_advocate';
+      });
+      const expertPersonas = isExpert && Array.isArray(selected.workspace_agents_expert_personas)
+        ? selected.workspace_agents_expert_personas
+        : [];
+      if (!coreRows.length) {
+        return `<div class="card sc-agents-involved" style="margin-top:12px;padding:12px 14px;">
+          <div style="font-weight:800;font-size:14px;">${escHtml(t('contexts.agentsInvolved.title'))}</div>
+          <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">${escHtml(t('contexts.workspaceAgents.noParticipantsYet'))}</div>
+        </div>`;
+      }
+      const badgeForCatalog = (bid) => {
+        const k = `contexts.agentBadges.${bid}`;
+        const tr = t(k);
+        return tr === k ? bid : tr;
+      };
+      const showNoLinkedDmHint = memIds.length === 0 && (
+        (ov && Number(ov.sessions_count ?? 0) > 0 && Number(ov.decision_memories_count ?? 0) === 0)
+        || (!ov && (sesIds.length > 0 || coreRows.some((x) => x.participated)))
+      );
+      const rows = coreRows.map((ag) => {
+        const aid = String(ag.agent_id || '').trim().toLowerCase();
+        const name = String(ag.agent_name || aid);
+        const badges = Array.isArray(ag.badges) ? ag.badges : [];
+        const bHtml = badges.map((b) => renderBadge({ text: escHtml(badgeForCatalog(String(b))), variant: 'muted' })).join(' ');
+        const isSynthDa = aid === 'synthesizer' || aid === 'devil_advocate';
+        const excludedNote = isSynthDa ? `<span class="badge badge-warning" style="margin-left:6px;">${escHtml(t('contexts.agentBadges.synthesizer_devil_excluded'))}</span>` : '';
+        const chatBtn = isExpert
+          ? `<button type="button" class="btn btn-secondary btn-sm" data-action="open-context-agent-chat">${escHtml(t('contexts.agentsInvolved.chat'))}</button>`
+          : '';
+        return `<div class="sc-agent-row" style="padding:10px 0;border-bottom:1px solid var(--border-subtle);">
           <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
-            <span style="font-size:12px;color:var(--text-muted);font-weight:700;">${escHtml(t('contexts.express.currentDecision'))}</span>
-            ${cs.current_decision_status ? `<span class="badge badge-info">${escHtml(decLabel)}</span>` : `<span class="badge badge-muted">${escHtml(t('contexts.noDecision'))}</span>`}
-            ${cs.current_confidence ? `<span class="badge ${badgeForConfidenceUx(cs.current_confidence)}">${escHtml(confLabelShort)}</span>` : ''}
+            <strong style="font-size:13px;">${escHtml(name)}</strong>
+            <code style="font-size:11px;">${escHtml(aid)}</code>
+            ${excludedNote}
           </div>
-          ${summarySnippet ? `<div style="font-size:13px;line-height:1.5;color:var(--text-primary);">${escHtml(summarySnippet)}</div>` : `<div style="font-size:12px;color:var(--text-muted);">${escHtml(t('contexts.express.noSummaryYet'))}</div>`}
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-            <div>
-              <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;">${escHtml(t('contexts.next'))}</div>
-              <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">${cs.latest_next_step ? escHtml(truncateContextSummary(cs.latest_next_step, 140)) : '—'}</div>
-            </div>
-            <div>
-              <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;">${escHtml(t('contexts.express.openRisks'))}</div>
-              <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;"><strong>${risks.length}</strong>${riskPreview ? ` ${riskPreview}` : ''}</div>
-            </div>
+          <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">${bHtml}</div>
+          <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;">
+            <button type="button" class="btn btn-secondary btn-sm" data-action="open-agent-context-memory" data-agent-id="${escHtml(aid)}">${escHtml(t('contexts.agentsInvolved.viewMemoryMd'))}</button>
+            ${chatBtn}
           </div>
-          <div style="font-size:11px;color:var(--text-muted);">
-            ${escHtml(t('contexts.express.lastMemory'))}: ${lastWhen}${isExpert && shortMid ? ` · <code>${escHtml(shortMid)}</code>` : ''}
+        </div>`;
+      }).join('');
+      return `
+        <div class="card sc-agents-involved" style="margin-top:12px;padding:12px 14px;">
+          <div style="font-weight:800;font-size:14px;margin-bottom:4px;">${escHtml(t('contexts.agentsInvolved.title'))}</div>
+          <div style="font-size:11px;color:var(--text-muted);line-height:1.45;margin-bottom:10px;">${escHtml(t('contexts.agentsInvolved.subtitle'))}</div>
+          ${showNoLinkedDmHint
+      ? `<div class="sc-agents-dm-hint" style="margin-bottom:10px;padding:8px 10px;background:var(--bg-secondary);border:1px solid var(--border-subtle);border-radius:8px;font-size:12px;color:var(--text-secondary);line-height:1.45;">${escHtml(t('contexts.agentsInvolved.noLinkedDmHint'))}</div>`
+      : ''}
+          ${rows}
+          ${expertPersonas.length ? `
+          <details class="sc-expert-details" data-ui="expert-only" style="margin-top:12px;">
+            <summary style="cursor:pointer;font-weight:700;font-size:13px;color:var(--text-secondary);">${escHtml(t('contexts.agentsInvolved.expertOtherPersonas'))}</summary>
+            <div style="margin-top:10px;font-size:12px;color:var(--text-muted);line-height:1.45;">
+              ${expertPersonas.map((ag) => {
+    const aid = String(ag.agent_id || '').trim().toLowerCase();
+    const name = String(ag.agent_name || aid);
+    return `<div style="padding:6px 0;border-bottom:1px solid var(--border-subtle);"><code>${escHtml(aid)}</code> — ${escHtml(name)}</div>`;
+  }).join('')}
+            </div>
+          </details>` : ''}
+          <div style="margin-top:10px;font-size:11px;color:var(--text-muted);line-height:1.45;">${escHtml(t('contexts.memoryMdDisclaimers.agentView'))}</div>
+        </div>`;
+    })();
+
+    const expertMemoryDiagnostics = isExpert ? `
+        <details class="sc-expert-details sc-expert-drawer" data-ui="expert-only" style="margin-top:12px;"${diagCritical ? ' open' : ''}>
+          <summary style="cursor:pointer;font-weight:800;font-size:14px;color:var(--text-primary);">${escHtml(t('contexts.expertLayers.memoryDiagnostic'))}</summary>
+          <div style="margin-top:10px;font-size:12px;color:var(--text-secondary);line-height:1.5;">
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;padding:8px 10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-subtle);line-height:1.45;">
+              <div style="font-weight:700;margin-bottom:4px;color:var(--text-secondary);">${escHtml(t('contexts.memoryDiagnostics.limitsTitle'))}</div>
+              <ul style="margin:4px 0 0 16px;padding:0;">
+                <li>${escHtml(t('contexts.memoryDiagnostics.limitsMdDefault'))}</li>
+                <li>${escHtml(t('contexts.memoryDiagnostics.limitsOverview'))}</li>
+              </ul>
+              <div style="margin-top:6px;">${escHtml(t('contexts.memoryDiagnostics.limitsFootnote'))}</div>
+            </div>
+            ${diagList.length ? `<ul style="margin:0 0 0 18px;">${diagList.map((d) => {
+    const sev = String(d.severity || 'info');
+    const sevLabel = t(`contexts.memoryDiagnostics.severity.${sev}`) || sev;
+    const code = d.code ? ` <code>${escHtml(String(d.code))}</code>` : '';
+    const recKey = d.recommended_action ? String(d.recommended_action) : '';
+    const rec = recKey ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">${escHtml(t(recKey))}</div>` : '';
+    return `<li><strong>${escHtml(sevLabel)}</strong>${code} — ${escHtml(String(d.message || ''))}${d.memory_id ? ` <code>${escHtml(shortId(String(d.memory_id)))}</code>` : ''}${d.agent_id ? ` · <code>${escHtml(String(d.agent_id))}</code>` : ''}${rec}</li>`;
+  }).join('')}</ul>` : `<div>${escHtml(t('contexts.memoryDiagnostics.noIssues'))}</div>`}
+            ${expertAutoNotes.length ? `<div style="margin-top:12px;padding-top:10px;border-top:1px dashed var(--border-color);">
+              <div style="font-weight:700;margin-bottom:6px;">${escHtml(t('contexts.memoryDiagnostics.automationChecklist'))}</div>
+              <ul style="margin:0 0 0 18px;">${expertAutoNotes.map((n) => `<li>${escHtml(String(n))}</li>`).join('')}</ul>
+            </div>` : ''}
           </div>
-          ${isExpert && (cs.contract_version || cs.taxonomy_version) ? `
-            <div data-ui="expert-only" style="font-size:11px;color:var(--text-secondary);line-height:1.45;">
-              <div><strong>contract_version</strong> ${escHtml(String(cs.contract_version || '—'))}</div>
-              <div><strong>taxonomy_version</strong> ${escHtml(String(cs.taxonomy_version || '—'))}</div>
-            </div>
-          ` : ''}
-          ${isExpert && cs.latest_memory_id ? `
-            <div data-ui="expert-only">
-              <button type="button" class="btn btn-secondary btn-sm" data-action="open-decision-memory-for-context" data-context-id="${escHtml(selected.context_id)}" data-memory-id="${escHtml(String(cs.latest_memory_id))}">
-                → ${escHtml(t('contexts.express.viewSourceMemory'))}
-              </button>
-            </div>
-          ` : ''}
-        </div>
-      </div>
-    `;
+        </details>` : '';
+
+    const basicCompareSummary = (!isExpert && bc.result && typeof bc.result === 'object') ? (() => {
+      const r = bc.result;
+      const diff = r.diff && typeof r.diff === 'object' ? r.diff : {};
+      const leftT = escHtml(String(r.left?.title || r.left?.context_id || '').slice(0, 72));
+      const rightT = escHtml(String(r.right?.title || r.right?.context_id || '').slice(0, 72));
+      const bullets = [];
+      const objs = Array.isArray(diff.objectives) ? diff.objectives : [];
+      objs.slice(0, 4).forEach((o) => {
+        const ax = String(o.axis || '');
+        if (ax === 'title') {
+          bullets.push(`${escHtml(t('contexts.basicCompare.axisTitle'))}: « ${escHtml(String(o.left || '').slice(0, 120))} » / « ${escHtml(String(o.right || '').slice(0, 120))} »`);
+        } else if (ax === 'status') {
+          bullets.push(`${escHtml(t('contexts.basicCompare.axisStatus'))}: ${escHtml(String(o.left || ''))} → ${escHtml(String(o.right || ''))}`);
+        } else if (ax === 'description') {
+          bullets.push(escHtml(t('contexts.basicCompare.axisDesc')));
+        }
+      });
+      const dec = diff.decisions;
+      if (Array.isArray(dec) && dec.length) {
+        bullets.push(`${escHtml(t('contexts.basicCompare.decisionDiffs'))}: ${dec.length}`);
+      }
+      const sess = diff.sessions_block;
+      if (sess && typeof sess === 'object') {
+        const onlyL = Array.isArray(sess.only_left) ? sess.only_left.length : 0;
+        const onlyR = Array.isArray(sess.only_right) ? sess.only_right.length : 0;
+        if (onlyL + onlyR > 0) {
+          bullets.push(`${escHtml(t('contexts.basicCompare.sessionsDelta'))}: ${onlyL + onlyR}`);
+        }
+      }
+      const listHtml = bullets.length
+        ? `<ul style="margin:8px 0 0 18px;font-size:12px;color:var(--text-secondary);line-height:1.45;">${bullets.map((b) => `<li>${b}</li>`).join('')}</ul>`
+        : `<div style="font-size:12px;color:var(--text-muted);margin-top:6px;">${escHtml(t('contexts.basicCompare.noStructuralDiff'))}</div>`;
+      return `
+        <div class="card sc-basic-compare-summary" style="margin-top:12px;padding:12px 14px;">
+          <div style="font-weight:800;font-size:14px;">${escHtml(t('contexts.basicCompare.summaryTitle'))}</div>
+          <div style="margin-top:6px;font-size:12px;color:var(--text-muted);">${escHtml(t('contexts.basicCompare.pairLine'))}: <strong>${leftT}</strong> ↔ <strong>${rightT}</strong></div>
+          ${listHtml}
+          <div style="margin-top:12px;">
+            <button type="button" class="btn btn-secondary btn-sm" data-action="open-expert-deep-compare-from-basic">${escHtml(t('contexts.basicCompare.openExpert'))}</button>
+          </div>
+        </div>`;
+    })() : '';
 
     const agentMemUi = ui.agentContextMemory || {};
     const agentMemOpen = !!agentMemUi.open;
-    const agentMemIds = ['pm', 'architect', 'critic', 'ux-expert', 'po', 'synthesizer'];
+    const agentMemIds = resolvePrimaryWorkspaceAgentIds(selected);
+    const agentMemExpertIds = isExpert && Array.isArray(selected.workspace_agents_expert_personas)
+      ? selected.workspace_agents_expert_personas
+        .map((a) => String(a.agent_id || '').trim().toLowerCase())
+        .filter((id) => id && id !== 'synthesizer' && id !== 'devil_advocate')
+      : [];
+    const agentMemPickCandidates = [...agentMemIds, ...agentMemExpertIds.filter((id) => !agentMemIds.includes(id))];
+    const agentMemUiId = String(agentMemUi.agentId || '').trim().toLowerCase();
+    const agentMemPick = agentMemPickCandidates.includes(agentMemUiId)
+      ? agentMemUiId
+      : (agentMemPickCandidates[0] || '');
+    let agentMemSelectInner = '';
+    if (agentMemIds.length) {
+      agentMemSelectInner += agentMemIds.map((id) => `<option value="${escHtml(id)}" ${agentMemPick === id ? 'selected' : ''}>${escHtml(workspaceAgentLabelForSelect(id, selected, t))}</option>`).join('');
+    }
+    if (isExpert && agentMemExpertIds.length) {
+      if (agentMemIds.length) {
+        agentMemSelectInner += `<optgroup label="${escHtml(t('contexts.agentsInvolved.expertOtherPersonas'))}">`;
+      }
+      agentMemSelectInner += agentMemExpertIds.map((id) => `<option value="${escHtml(id)}" ${agentMemPick === id ? 'selected' : ''}>${escHtml(workspaceAgentLabelForSelect(id, selected, t))}</option>`).join('');
+      if (agentMemIds.length) {
+        agentMemSelectInner += '</optgroup>';
+      }
+    }
+    if (agentMemSelectInner === '') {
+      agentMemSelectInner = `<option value="">${escHtml(t('contexts.workspaceAgents.noParticipantsYet'))}</option>`;
+    }
     const agentMemoryPanel = `
       <div class="card" style="padding:14px 16px;margin-bottom:14px;border:1px solid rgba(99,102,241,0.25);">
         <div style="font-weight:800;margin-bottom:6px;">${escHtml(t('contexts.agentMemory.title'))}</div>
@@ -568,7 +879,7 @@ function renderStrategicContexts() {
             <div class="form-group" style="margin:0;max-width:280px;">
               <label>${escHtml(t('contexts.agentMemory.agent'))}</label>
               <select class="input" data-action="agent-context-memory-select-agent">
-                ${agentMemIds.map((id) => `<option value="${escHtml(id)}" ${String(agentMemUi.agentId || 'pm') === id ? 'selected' : ''}>${escHtml(id)}</option>`).join('')}
+                ${agentMemSelectInner}
               </select>
             </div>
             <div style="border-top:1px solid var(--border-color);padding-top:10px;margin-top:2px;">
@@ -711,7 +1022,31 @@ function renderStrategicContexts() {
     ` : '';
 
     const scChat = ui.situatedAgentChat || {};
-    const chatAgentIds = ['pm', 'architect', 'critic', 'ux-expert', 'po'];
+    const chatAgentIds = resolvePrimaryWorkspaceAgentIds(selected);
+    const chatExpertIds = isExpert && Array.isArray(selected.workspace_agents_expert_personas)
+      ? selected.workspace_agents_expert_personas
+        .map((a) => String(a.agent_id || '').trim().toLowerCase())
+        .filter((id) => id && id !== 'synthesizer' && id !== 'devil_advocate')
+      : [];
+    const chatPickCandidates = [...chatAgentIds, ...chatExpertIds.filter((id) => !chatAgentIds.includes(id))];
+    const chatUiId = String(scChat.agentId || '').trim().toLowerCase();
+    const chatPick = chatPickCandidates.includes(chatUiId) ? chatUiId : (chatPickCandidates[0] || '');
+    let chatSelectInner = '';
+    if (chatAgentIds.length) {
+      chatSelectInner += chatAgentIds.map((id) => `<option value="${escHtml(id)}" ${chatPick === id ? 'selected' : ''}>${escHtml(workspaceAgentLabelForSelect(id, selected, t))}</option>`).join('');
+    }
+    if (isExpert && chatExpertIds.length) {
+      if (chatAgentIds.length) {
+        chatSelectInner += `<optgroup label="${escHtml(t('contexts.agentsInvolved.expertOtherPersonas'))}">`;
+      }
+      chatSelectInner += chatExpertIds.map((id) => `<option value="${escHtml(id)}" ${chatPick === id ? 'selected' : ''}>${escHtml(workspaceAgentLabelForSelect(id, selected, t))}</option>`).join('');
+      if (chatAgentIds.length) {
+        chatSelectInner += '</optgroup>';
+      }
+    }
+    if (chatSelectInner === '') {
+      chatSelectInner = `<option value="">${escHtml(t('contexts.workspaceAgents.noParticipantsYet'))}</option>`;
+    }
     const cognitiveRuntime = (scChat.lastCognitiveRuntime && typeof scChat.lastCognitiveRuntime === 'object')
       ? scChat.lastCognitiveRuntime
       : null;
@@ -775,7 +1110,7 @@ function renderStrategicContexts() {
             <div class="form-group" style="margin:0;max-width:280px;">
               <label>${escHtml(t('contexts.agentMemory.agent'))}</label>
               <select class="input" data-action="select-context-agent-chat-agent">
-                ${chatAgentIds.map((id) => `<option value="${escHtml(id)}" ${String(scChat.agentId || 'pm') === id ? 'selected' : ''}>${escHtml(id)}</option>`).join('')}
+                ${chatSelectInner}
               </select>
             </div>
             <div style="display:flex;flex-wrap:wrap;gap:12px;font-size:12px;">
@@ -866,6 +1201,11 @@ function renderStrategicContexts() {
             </div>
           </div>
           ${ui.memoryMdError ? `<div class="error-banner" style="margin-top:6px;">⚠️ ${escHtml(ui.memoryMdError)}</div>` : ''}
+          <div class="ps-note" style="margin-top:8px;font-size:12px;color:var(--text-muted);line-height:1.5;padding:8px 10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-subtle);">${escHtml(t('contexts.memoryMdDisclaimers.contextView'))}</div>
+          <div class="ps-note" style="margin-top:6px;font-size:11px;color:var(--text-muted);line-height:1.45;padding:6px 10px;background:var(--bg-secondary);border-radius:8px;border:1px dashed var(--border-subtle);">
+            <div>${escHtml(t('contexts.memoryMdPanel.decisionsWindowCount'))}</div>
+            <div style="margin-top:4px;">${escHtml(t('contexts.memoryMdPanel.decisionsWindowHint'))}</div>
+          </div>
           <div class="ps-scroll" data-snapshot-scroll="strategic-context" tabindex="0">
             ${docHtml}
           </div>
@@ -881,6 +1221,7 @@ function renderStrategicContexts() {
       : ''}
               <span class="badge ${badgeForStatus(selected.status)}">${escHtml(lifecycleStatusLabel(t, selected.status))}</span>
             </div>
+            ${selected.updated_at ? `<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">${escHtml(t('contexts.updatedAt'))}: ${escHtml(formatDate(selected.updated_at))}</div>` : ''}
             ${(() => {
       const st = String(selected.status || '');
       const isAlreadyWorkspace = Number(selected.is_workspace_active) === 1
@@ -909,14 +1250,21 @@ function renderStrategicContexts() {
           </div>
         </div>
 
+        ${memoryOverviewBlock}
+        ${decisionsMemorizedSection}
+        ${agentsInvolvedSection}
+        ${basicActionsBar}
+        ${basicCompareSummary}
+
         ${ui.archiveError ? `<div class="error-banner" style="margin-top:12px;">⚠️ ${escHtml(ui.archiveError)}</div>` : ''}
         ${ui.deleteError ? `<div class="error-banner" style="margin-top:12px;">⚠️ ${escHtml(ui.deleteError)}</div>` : ''}
 
-        ${(() => {
+        ${isExpert ? (() => {
           const sn = ui.strategicNarrative || { loading: false, error: '', data: null };
           const api = sn.data && typeof sn.data === 'object' ? sn.data : null;
           const nar = api && api.narrative && typeof api.narrative === 'object' ? api.narrative : null;
           const warns = Array.isArray(api?.warnings) ? api.warnings.filter(Boolean) : [];
+          const narrOpen = !!(sn.error || warns.length);
           const inner = (() => {
             if (sn.loading) {
               return `<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">${escHtml(t('contexts.strategicNarrative.loading'))}</div>`;
@@ -967,7 +1315,10 @@ function renderStrategicContexts() {
             `;
           })();
           return `
-        <div class="card" style="margin-top:12px;padding:12px 14px;" data-panel="strategic-narrative">
+        <div data-ui="expert-only" style="margin-top:14px;font-weight:800;font-size:13px;color:var(--text-muted);">${escHtml(t('contexts.expertLayers.sectionTitle'))}</div>
+        <details class="sc-expert-details" style="margin-top:12px;" data-panel="strategic-narrative"${narrOpen ? ' open' : ''}>
+          <summary style="cursor:pointer;font-weight:800;font-size:14px;color:var(--text-primary);padding:4px 2px 8px;">${escHtml(t('contexts.expertLayers.strategicNarrative'))}</summary>
+        <div class="card" style="margin-top:0;padding:12px 14px;" data-panel="strategic-narrative-inner">
           <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;">
             <div>
               <div style="font-weight:800;font-size:14px;">${escHtml(t('contexts.strategicNarrative.title'))}</div>
@@ -979,8 +1330,10 @@ function renderStrategicContexts() {
             </div>
           </div>
           ${inner}
-        </div>`;
-        })()}
+        </div></details>`;
+        })() : ''}
+
+        ${expertMemoryDiagnostics}
 
         ${isExpert ? (() => {
           const be = ui.beliefsEngine || {
@@ -1037,8 +1390,11 @@ function renderStrategicContexts() {
               bodyHtml: `<div style="font-weight:800;margin-bottom:6px;">${escHtml(t('contexts.beliefsEngine.tensionsTitle'))}</div><ul style="margin:6px 0 0 18px;">${tension.slice(0, 12).map((b) => `<li><strong>${escHtml(String(b.agent_id || '—'))}</strong> — ${escHtml(String(b.belief_text || '').slice(0, 140))}</li>`).join('')}</ul>`,
             })}`
             : '';
+          const beliefsOpen = !!(be.error || be.formError || tension.length);
           return `
-        <div class="card" style="margin-top:12px;padding:12px 14px;" data-ui="expert-only" data-panel="beliefs-engine">
+        <details class="sc-expert-details" style="margin-top:12px;" data-ui="expert-only" data-panel="beliefs-engine-wrap"${beliefsOpen ? ' open' : ''}>
+          <summary style="cursor:pointer;font-weight:800;font-size:14px;color:var(--text-primary);padding:4px 2px 8px;">${escHtml(t('contexts.expertLayers.beliefs'))}</summary>
+        <div class="card" style="margin-top:0;padding:12px 14px;" data-ui="expert-only" data-panel="beliefs-engine">
           <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;justify-content:space-between;">
             <div>
               <div style="font-weight:800;font-size:14px;">${escHtml(t('contexts.beliefsEngine.title'))}</div>
@@ -1124,7 +1480,7 @@ function renderStrategicContexts() {
               <th style="padding:6px 8px;">${escHtml(t('contexts.beliefsEngine.colActions'))}</th>
             </tr></thead><tbody>${rows}</tbody></table>` : (!be.loading ? renderEmptyState({ icon: '🧠', text: t('contexts.beliefsEngine.empty') }) : '')}
           </div>
-        </div>`;
+        </div></details>`;
         })() : ''}
 
         ${isExpert ? (() => {
@@ -1145,8 +1501,11 @@ function renderStrategicContexts() {
           const selectedBelief = beliefs.find((b) => String(b.id) === selectedId) || beliefs[0] || null;
           const tl = Array.isArray(br.timeline) ? br.timeline : [];
           const rels = Array.isArray(br.relations) ? br.relations : [];
+          const rtOpen = !!br.error;
           return `
-        <div class="card" style="margin-top:12px;padding:12px 14px;" data-ui="expert-only" data-panel="beliefs-runtime">
+        <details class="sc-expert-details" style="margin-top:12px;" data-ui="expert-only" data-panel="beliefs-runtime-wrap"${rtOpen ? ' open' : ''}>
+          <summary style="cursor:pointer;font-weight:800;font-size:14px;color:var(--text-primary);padding:4px 2px 8px;">${escHtml(t('contexts.expertLayers.beliefsRuntime'))}</summary>
+        <div class="card" style="margin-top:0;padding:12px 14px;" data-ui="expert-only" data-panel="beliefs-runtime">
           <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;justify-content:space-between;">
             <div>
               <div style="font-weight:800;font-size:14px;">Beliefs Runtime</div>
@@ -1195,7 +1554,7 @@ function renderStrategicContexts() {
               </div>
             </div>
           ` : ''}
-        </div>`;
+        </div></details>`;
         })() : ''}
 
         ${isExpert ? (() => {
@@ -1243,8 +1602,11 @@ function renderStrategicContexts() {
           const srcLines = detail
             ? Object.entries(src).map(([k, v]) => `<li><code>${escHtml(k)}</code> : <strong>${escHtml(String(v))}</strong></li>`).join('')
             : '';
+          const mcOpen = !!(mc.error || shifts.length || tens.length);
           return `
-        <div class="card" style="margin-top:12px;padding:12px 14px;" data-ui="expert-only" data-panel="memory-compiler">
+        <details class="sc-expert-details" style="margin-top:12px;" data-ui="expert-only" data-panel="memory-compiler-wrap"${mcOpen ? ' open' : ''}>
+          <summary style="cursor:pointer;font-weight:800;font-size:14px;color:var(--text-primary);padding:4px 2px 8px;">${escHtml(t('contexts.expertLayers.memoryCompiler'))}</summary>
+        <div class="card" style="margin-top:0;padding:12px 14px;" data-ui="expert-only" data-panel="memory-compiler">
           <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;justify-content:space-between;">
             <div>
               <div style="font-weight:800;font-size:14px;">${escHtml(t('contexts.memoryCompiler.title'))}</div>
@@ -1296,7 +1658,7 @@ function renderStrategicContexts() {
             <div style="font-weight:700;font-size:13px;">${escHtml(t('contexts.memoryCompiler.sourcesTitle'))}</div>
             ${srcLines ? `<ul style="margin:8px 0 0 18px;font-size:12px;color:var(--text-secondary);">${srcLines}</ul>` : `<div style="margin-top:6px;font-size:12px;color:var(--text-muted);">${escHtml(t('contexts.memoryCompiler.sourcesHint'))}</div>`}
           </div>
-        </div>`;
+        </div></details>`;
         })() : ''}
 
         ${isExpert ? (() => {
@@ -1338,8 +1700,11 @@ function renderStrategicContexts() {
           const longMd = cs.longViewMarkdown
             ? `<pre style="white-space:pre-wrap;font-size:12px;line-height:1.45;padding:10px;background:var(--bg-secondary);border-radius:8px;max-height:260px;overflow:auto;margin-top:8px;">${escHtml(String(cs.longViewMarkdown))}</pre>`
             : (cs.longLoading ? `<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">${escHtml(t('contexts.contextSnapshots.longLoading'))}</div>` : '');
+          const snapOpen = !!(cs.error || cs.longError);
           return `
-        <div class="card" style="margin-top:12px;padding:12px 14px;" data-ui="expert-only" data-panel="context-snapshots">
+        <details class="sc-expert-details" style="margin-top:12px;" data-ui="expert-only" data-panel="context-snapshots-wrap"${snapOpen ? ' open' : ''}>
+          <summary style="cursor:pointer;font-weight:800;font-size:14px;color:var(--text-primary);padding:4px 2px 8px;">${escHtml(t('contexts.expertLayers.snapshots'))}</summary>
+        <div class="card" style="margin-top:0;padding:12px 14px;" data-ui="expert-only" data-panel="context-snapshots">
           <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;justify-content:space-between;">
             <div>
               <div style="font-weight:800;font-size:14px;">${escHtml(t('contexts.contextSnapshots.title'))}</div>
@@ -1402,7 +1767,7 @@ function renderStrategicContexts() {
             <div style="font-weight:700;font-size:13px;">${escHtml(t('contexts.contextSnapshots.longitudinalTitle'))}</div>
             ${longMd}
           </div>
-        </div>`;
+        </div></details>`;
         })() : ''}
 
         ${(() => {

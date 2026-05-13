@@ -86,6 +86,8 @@ $router->post('/api/sessions/from-template', [Controllers\TemplateController::cl
 $router->get('/api/sessions/{id}', [Controllers\SessionController::class, 'show']);
 $router->get('/api/sessions/{id}/decision-memory', [Controllers\DecisionMemoryController::class, 'bySession']);
 $router->post('/api/sessions/{id}/decision-memory/confirm', [Controllers\DecisionMemoryController::class, 'confirm']);
+$router->get('/api/sessions/{id}/decision-memory/agent-memory-preview', [Controllers\DecisionMemoryController::class, 'agentMemoryPreview']);
+$router->post('/api/sessions/{id}/decision-memory/propagate-to-agent-memories', [Controllers\DecisionMemoryController::class, 'propagateToAgentMemories']);
 $router->delete('/api/sessions/{id}', [Controllers\SessionController::class, 'delete']);
 $router->post('/api/sessions/{id}/status', [Controllers\SessionController::class, 'updateStatus']);
 $router->put('/api/sessions/{id}/memory', [Controllers\SessionController::class, 'memory']);
@@ -248,6 +250,8 @@ $router->get('/api/strategic-contexts', [Controllers\StrategicContextController:
 $router->post('/api/strategic-contexts', [Controllers\StrategicContextController::class, 'create']);
 $router->post('/api/strategic-contexts/compare', [Controllers\StrategicContextController::class, 'compare']);
 $router->get('/api/strategic-contexts/{context_id}/timeline', [Controllers\StrategicContextController::class, 'timeline']);
+$router->get('/api/strategic-contexts/{id}/memory-overview', [Controllers\StrategicContextController::class, 'memoryOverview']);
+$router->post('/api/strategic-contexts/{id}/agent-memories/sync', [Controllers\StrategicContextController::class, 'syncAgentMemories']);
 $router->get('/api/strategic-contexts/{id}/narrative', [Controllers\StrategicContextController::class, 'narrativeShow']);
 $router->get('/api/strategic-contexts/{id}/memory-governance', [Controllers\StrategicContextController::class, 'memoryGovernance']);
 $router->post('/api/strategic-contexts/{id}/narrative/recompute', [Controllers\StrategicContextController::class, 'narrativeRecompute']);

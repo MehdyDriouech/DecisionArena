@@ -150,7 +150,7 @@ class JuryRunner {
                     'current_phase' => $phase,
                     'current_phase_label' => $this->phaseHumanLabel($phase),
                     'current_step' => 'round_start',
-                    'percent' => $this->estimatePercent($round, $rounds, 0.05),
+                    'percent' => RunnerProgressPercent::roundRunPercent($round, $rounds, 0.05),
                 ],
                 'running'
             );
@@ -174,7 +174,7 @@ class JuryRunner {
                         'current_phase_label' => $this->phaseHumanLabel($phase),
                         'current_agent_id' => $agentId,
                         'current_step' => 'llm_call',
-                        'percent' => $this->estimatePercent($round, $rounds, 0.2),
+                        'percent' => RunnerProgressPercent::roundRunPercent($round, $rounds, 0.2),
                     ],
                     'running'
                 );
@@ -307,7 +307,7 @@ class JuryRunner {
                             'current_phase_label' => $this->phaseHumanLabel($phase),
                             'current_agent_id' => $agentId,
                             'current_step' => 'response_received',
-                            'percent' => $this->estimatePercent($round, $rounds, 0.65),
+                            'percent' => RunnerProgressPercent::roundRunPercent($round, $rounds, 0.65),
                         ],
                         'running'
                     );
@@ -383,7 +383,7 @@ class JuryRunner {
                             'current_phase_label' => $this->phaseHumanLabel($phase),
                             'current_agent_id' => $agentId,
                             'current_step' => 'failed',
-                            'percent' => $this->estimatePercent($round, $rounds, 0.7),
+                            'percent' => RunnerProgressPercent::roundRunPercent($round, $rounds, 0.7),
                         ],
                         'running',
                         (string)$e->getMessage()
@@ -430,7 +430,7 @@ class JuryRunner {
                     'current_phase' => 'jury-mini-challenge',
                     'current_phase_label' => $this->phaseHumanLabel('jury-mini-challenge'),
                     'current_step' => 'phase_start',
-                    'percent' => $this->estimatePercent($nextRound, $rounds, 0.15),
+                    'percent' => RunnerProgressPercent::roundRunPercent($nextRound, $rounds, 0.15),
                 ],
                 'running'
             );
@@ -482,7 +482,7 @@ class JuryRunner {
                     'current_phase' => 'jury-minority-report',
                     'current_phase_label' => $this->phaseHumanLabel('jury-minority-report'),
                     'current_step' => 'phase_start',
-                    'percent' => $this->estimatePercent($minorityRound, $rounds, 0.2),
+                    'percent' => RunnerProgressPercent::roundRunPercent($minorityRound, $rounds, 0.2),
                 ],
                 'running'
             );
@@ -2073,14 +2073,6 @@ class JuryRunner {
     {
         $step = $started ? 'appel LLM demarre' : 'reponse recue';
         return $this->phaseHumanLabel($phase) . ' · ' . $agentId . ' · ' . $step;
-    }
-
-    private function estimatePercent(int $currentRound, int $totalRounds, float $withinRound): int
-    {
-        $safeTotal = max(1, $totalRounds);
-        $base = max(0.02, (($currentRound - 1) / $safeTotal));
-        $intra = max(0.0, min(1.0, $withinRound)) * (1.0 / $safeTotal);
-        return (int)round(min(0.99, $base + $intra) * 100);
     }
 
     private function computeAssignedTarget(array $allAgentIds, string $agentId, int $round): ?string {

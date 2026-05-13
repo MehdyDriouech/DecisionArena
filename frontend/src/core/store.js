@@ -407,10 +407,15 @@ const createInitialState = () => {
     memoryMdLoading: false,
     memoryMdError: '',
     memoryMdContent: '',
+    /** GET /api/strategic-contexts/{id}/memory-overview — résumé mémoire (Basic + données diagnostics Expert). */
+    memoryOverview: { loading: false, error: '', data: null },
+    agentMemoryForceSync: { loading: false, error: '', report: null },
     /** Comparaison non destructive entre deux contextes (ne modifie pas l’actif workspace). */
     compareOpen: false,
     compareLeftId: null,
     compareRightId: null,
+    /** Comparaison Basic (POST compare) — cible choisie + résultat court, sans ouvrir le panneau Expert. */
+    basicCompare: { targetId: null, loading: false, error: '', result: null },
     /** GET /api/strategic-contexts/{context_id}/timeline — rempli par load-workspace-timeline */
     workspaceTimeline: { loading: false, error: '', data: null },
     /** GET /api/strategic-contexts/{id}/narrative — rempli par load-strategic-narrative */
@@ -512,6 +517,10 @@ const createInitialState = () => {
   decisionMemory: { loading: false, error: null, memories: null },
   selectedMemoryIds: [],
   memoryConfirmingSessionId: null,
+  /** @type {Record<string, { memory_id: string, strategic_context_id: string|null, strategic_context_linked: boolean }>} */
+  postPersistDecisionMemoryBySession: {},
+  agentMemoryPropagationPreview: null,
+  agentMemoryPropagationBusy: false,
   decisionMemoryNav: {
     contextsLoading: false,
     contextsError: null,

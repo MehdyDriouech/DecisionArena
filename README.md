@@ -8,13 +8,13 @@
 |---|---|
 | **Stack** | PHP 8+ · Vanilla JS (ES modules) · SQLite · sans framework · sans npm |
 | **Cible** | Fondateurs, EM, lead devs, PM/PO, équipes produit/tech — pas uniquement un usage “boardroom enterprise” abstrait |
-| **Statut** | **Alpha** — bugs possibles, API et UX encore évolutifs |
+| **Statut** | **Beta fonctionnelle** — API et UX encore évolutifs ; détail dans [release_notes_alpha.md](release_notes_alpha.md) |
 
 **Pitch court :** “Ne plus demander une réponse à une IA, mais observer une décision émerger d’un système.”
 
 Pour une version plus courte et partageable : **[README_marketing.md](README_marketing.md)**.  
-Notes de version alpha : **[release_notes_alpha.md](release_notes_alpha.md)**.  
-Synthese beta (features, forces, limites) : **[release-note-beta.md](release-note-beta.md)**.
+Notes de version détaillées (catalogue beta consolidé, incluant synthèse exécutive et risques) : **[release_notes_alpha.md](release_notes_alpha.md)**.  
+Synthèse courte d’origine (référence) : **[release-note-beta.md](release-note-beta.md)**.
 
 ---
 
@@ -72,6 +72,7 @@ Decision Arena ne promet pas “la bonne réponse”. Il propose :
 - **Personas en Markdown** — définitions versionnables, âmes / dynamiques de décision selon configuration.
 - **Local-first** — vos données et votre stack restent chez vous ; pas de dépendance à un SaaS fermé pour fonctionner.
 - **Mode expert : suppressions en lot** — sélection multiple et suppression groupée des **contextes stratégiques** et des entrées **Decision Memory** (actions “Tout sélectionner (vue)” + “Supprimer sélection”).
+- **Contextes stratégiques — sync mémoires agents (expert)** — action explicite « Synchroniser les mémoires agents » : `POST /api/strategic-contexts/{id}/agent-memories/sync` (prévisualisation `dry_run`), reconstruction idempotente des `memory.md` par agent à partir des sessions **completed** et des Decision Memories liées, sans toucher aux beliefs, narrative, compiler, snapshots ni aux runners.
 
 ---
 
@@ -297,7 +298,7 @@ Optionnel et **secondaire** : aide à découvrir des décisions **similaires** (
 
 ## Limitations
 
-- **Alpha** — comportements inattendus, régressions possibles.
+- **Beta / alpha résiduelle** — comportements inattendus, régressions possibles ; surface experte dense (voir notes de version).
 - **Qualité des modèles** — tout le pipeline est sensible au modèle choisi (respect des formats, profondeur du débat).
 - **Prompts** — utiles et itérés, mais jamais “terminés” ; mauvais réglages produisent des sorties faibles.
 - **Pas un substitut d’équipe** — pas de responsabilité légale, métier ou humaine ; outil d’aide à penser et à documenter.

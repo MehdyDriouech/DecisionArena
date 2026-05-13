@@ -141,7 +141,7 @@ class ConfrontationRunner {
                     'current_phase' => 'round_started',
                     'current_phase_label' => 'Tour demarre',
                     'current_step' => 'round_start',
-                    'percent' => $this->estimatePercent($round, $rounds, 0.05),
+                    'percent' => RunnerProgressPercent::confrontationRunPercent($round, $rounds, 0.05),
                     'estimated' => true,
                 ],
                 'running'
@@ -218,6 +218,28 @@ class ConfrontationRunner {
                         );
                         $daMessages = $governedDa['messages'];
                         $daMetaJson = $governedDa['meta_json'];
+                        $this->runStatusRepo->appendEvent(
+                            $sessionId,
+                            [
+                                'level' => 'info',
+                                'phase' => 'devil-advocate',
+                                'round' => $round,
+                                'agent_id' => 'devil_advocate',
+                                'label' => 'Devil advocate · appel LLM demarre',
+                            ],
+                            [
+                                'current_round' => $round,
+                                'total_rounds' => $rounds,
+                                'current_phase' => 'devil-advocate',
+                                'current_phase_label' => $this->phaseHumanLabel('devil-advocate'),
+                                'current_team' => null,
+                                'current_agent_id' => 'devil_advocate',
+                                'current_step' => 'llm_call',
+                                'percent' => RunnerProgressPercent::confrontationRunPercent($round, $rounds, 0.35),
+                                'estimated' => true,
+                            ],
+                            'running'
+                        );
                         $daRouted  = $this->providerRouter->chat($daMessages, null, null, null);
                         $daContent = $daRouted['content'];
                         $daMsg     = $this->messageRepo->create([
@@ -249,6 +271,28 @@ class ConfrontationRunner {
                             'created_at'               => date('c'),
                         ]);
                         $roundMessages[] = $daMsg;
+                        $this->runStatusRepo->appendEvent(
+                            $sessionId,
+                            [
+                                'level' => 'info',
+                                'phase' => 'devil-advocate',
+                                'round' => $round,
+                                'agent_id' => 'devil_advocate',
+                                'label' => 'Devil advocate · reponse recue',
+                            ],
+                            [
+                                'current_round' => $round,
+                                'total_rounds' => $rounds,
+                                'current_phase' => 'devil-advocate',
+                                'current_phase_label' => $this->phaseHumanLabel('devil-advocate'),
+                                'current_team' => null,
+                                'current_agent_id' => 'devil_advocate',
+                                'current_step' => 'response_received',
+                                'percent' => RunnerProgressPercent::confrontationRunPercent($round, $rounds, 0.45),
+                                'estimated' => true,
+                            ],
+                            'running'
+                        );
                     } catch (\Throwable $e) {
                         error_log('[ConfrontationRunner] Devil advocate failed: ' . $e->getMessage());
                     }
@@ -281,7 +325,7 @@ class ConfrontationRunner {
                     'current_team' => null,
                     'current_agent_id' => 'synthesizer',
                     'current_step' => 'llm_call',
-                    'percent' => $this->estimatePercent($rounds, $rounds, 0.85),
+                    'percent' => RunnerProgressPercent::confrontationRunPercent($rounds, $rounds, 0.85),
                     'estimated' => true,
                 ],
                 'running'
@@ -363,7 +407,7 @@ class ConfrontationRunner {
                         'current_team' => null,
                         'current_agent_id' => 'synthesizer',
                         'current_step' => 'persisted',
-                        'percent' => $this->estimatePercent($rounds, $rounds, 0.92),
+                        'percent' => RunnerProgressPercent::confrontationRunPercent($rounds, $rounds, 0.92),
                         'estimated' => true,
                     ],
                     'running'
@@ -630,7 +674,7 @@ class ConfrontationRunner {
                     'current_team' => $team,
                     'current_agent_id' => (string)$agentId,
                     'current_step' => 'llm_call',
-                    'percent' => $this->estimatePercent($currentRound, $totalRounds, 0.2),
+                    'percent' => RunnerProgressPercent::confrontationRunPercent($currentRound, $totalRounds, 0.2),
                     'estimated' => true,
                 ],
                 'running'
@@ -766,7 +810,7 @@ class ConfrontationRunner {
                         'current_agent_id' => (string)$agentId,
                         'current_agent_name' => (string)($agent->persona->name ?? $agentId),
                         'current_step' => 'persisted',
-                        'percent' => $this->estimatePercent($currentRound, $totalRounds, 0.45),
+                        'percent' => RunnerProgressPercent::confrontationRunPercent($currentRound, $totalRounds, 0.45),
                         'estimated' => true,
                     ],
                     'running'
@@ -853,7 +897,7 @@ class ConfrontationRunner {
                         'current_team' => $team,
                         'current_agent_id' => (string)$agentId,
                         'current_step' => 'failed',
-                        'percent' => $this->estimatePercent($currentRound, $totalRounds, 0.45),
+                        'percent' => RunnerProgressPercent::confrontationRunPercent($currentRound, $totalRounds, 0.45),
                         'estimated' => true,
                     ],
                     'running',
@@ -1158,6 +1202,7 @@ class ConfrontationRunner {
             'blue_opening' => 'Blue Team ouverture',
             'red_attack' => 'Red Team attaque',
             'blue_rebuttal' => 'Blue Team riposte',
+            'devil-advocate' => 'Devil advocate',
             'synthesis' => 'Synthèse',
             default => 'Confrontation',
         };
@@ -1169,15 +1214,6 @@ class ConfrontationRunner {
         $stepLabel = $started ? 'appel LLM demarre' : 'reponse recue';
         $phaseLabel = $this->phaseHumanLabel($phase);
         return $phaseLabel . ' · ' . $teamLabel . ' · ' . $agentId . ' · ' . $stepLabel;
-    }
-
-    private function estimatePercent(int $currentRound, int $totalRounds, float $withinRound): int
-    {
-        $safeTotal = max(1, $totalRounds);
-        $safeCurrent = min(max(1, $currentRound), $safeTotal);
-        $ratio = (($safeCurrent - 1) + min(max($withinRound, 0.0), 0.99)) / $safeTotal;
-        $pct = (int)floor($ratio * 100);
-        return max(1, min(99, $pct));
     }
 
     private function uuid(): string {

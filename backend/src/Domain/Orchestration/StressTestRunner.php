@@ -137,7 +137,7 @@ class StressTestRunner {
                 'current_phase' => 'round_started',
                 'current_phase_label' => 'Round en cours',
                 'current_step' => 'round_start',
-                'percent' => (int)round(min(0.99, max(0.02, ($round - 1) / max(1, $rounds))) * 100),
+                'percent' => RunnerProgressPercent::roundRunPercent($round, $rounds, 0.0),
             ]);
 
             // Synthesizer runs only on the final round
@@ -162,7 +162,7 @@ class StressTestRunner {
                     'current_phase_label' => $phase,
                     'current_agent_id' => $agentId,
                     'current_step' => 'llm_call',
-                    'percent' => (int)round(min(0.99, max(0.02, (($round - 1) / max(1, $rounds)) + 0.15 / max(1, $rounds))) * 100),
+                    'percent' => RunnerProgressPercent::roundRunPercent($round, $rounds, 0.2),
                 ]);
 
                 $assignedTarget = ($round > 1 && $agentId !== 'synthesizer')
@@ -286,6 +286,11 @@ class StressTestRunner {
                         'current_phase_label' => $phase,
                         'current_agent_id' => $agentId,
                         'current_step' => 'response_received',
+                        'percent' => RunnerProgressPercent::roundRunPercent(
+                            $round,
+                            $rounds,
+                            $agentId === 'synthesizer' ? 0.95 : 0.6
+                        ),
                     ]);
                     $targetResolution = $this->resolveTargetAgent($content, $previousRoundMessages, $agentId, $assignedTarget);
                     $targetAgentId = $targetResolution['target_agent_id'];

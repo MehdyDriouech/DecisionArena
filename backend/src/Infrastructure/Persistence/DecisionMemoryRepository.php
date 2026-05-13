@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace Infrastructure\Persistence;
 
+use Domain\DecisionMemory\DecisionMemoryAgentMemoryAutoSyncService;
 use Domain\Orchestration\RuntimeContracts;
 
 final class DecisionMemoryRepository
@@ -81,6 +82,72 @@ final class DecisionMemoryRepository
     }
 
     /**
+     * Mémoires Decision Memory liées au contexte (pour sync forcée agent memory.md).
+     * Même filtre que {@see findLinkedMemoriesForStrategicContext} avec une limite plus large.
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function findLinkedMemoriesForAgentMemorySync(string $contextId, int $limit = 500): array
+    {
+        $contextId = trim($contextId);
+        if ($contextId === '') {
+            return [];
+        }
+        $limit = max(1, min(500, $limit));
+        $stmt = $this->pdo->prepare(
+            'SELECT m.* FROM decision_memories m
+             INNER JOIN strategic_context_memories scm ON scm.memory_id = m.memory_id AND scm.context_id = ?
+             WHERE m.user_confirmed = 1
+               AND (m.memory_state IS NULL OR m.memory_state NOT IN (\'invalidated\',\'archived\',\'stale\'))
+             ORDER BY m.created_at DESC, m.memory_id DESC
+             LIMIT ' . $limit
+        );
+        $stmt->execute([$contextId]);
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC) ?: [];
+
+        return array_map([$this, 'hydrateRow'], $rows);
+    }
+
+    /**
+     * Toutes les Decision Memories liées au contexte (strategic_context_memories), pour export markdown.
+     * Inclut user_confirmed = 0 (étiquetées côté générateur). Exclut uniquement invalidated.
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function findLinkedMemoriesForStrategicContextMarkdownExport(string $contextId, int $limit = 80): array
+    {
+        $contextId = trim($contextId);
+        if ($contextId === '') {
+            return [];
+        }
+        $limit = max(1, min(200, $limit));
+        $stmt = $this->pdo->prepare(
+            'SELECT m.* FROM decision_memories m
+             INNER JOIN strategic_context_memories scm ON scm.memory_id = m.memory_id AND scm.context_id = ?
+             WHERE (m.memory_state IS NULL OR m.memory_state NOT IN (\'invalidated\'))
+             ORDER BY m.created_at DESC, m.memory_id DESC
+             LIMIT ' . $limit
+        );
+        $stmt->execute([$contextId]);
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC) ?: [];
+        return array_map([$this, 'hydrateRow'], $rows);
+    }
+
+    public function isMemoryLinkedToStrategicContext(string $memoryId, string $contextId): bool
+    {
+        $memoryId = trim($memoryId);
+        $contextId = trim($contextId);
+        if ($memoryId === '' || $contextId === '') {
+            return false;
+        }
+        $stmt = $this->pdo->prepare(
+            'SELECT 1 FROM strategic_context_memories WHERE memory_id = ? AND context_id = ? LIMIT 1'
+        );
+        $stmt->execute([$memoryId, $contextId]);
+        return (bool)$stmt->fetchColumn();
+    }
+
+    /**
      * Persist automatically only when outcome is memory-safe.
      * Returns created memory row when persisted; null otherwise.
      *
@@ -132,6 +199,8 @@ final class DecisionMemoryRepository
                 if ($linkMeta['warning'] !== null) {
                     $existing['warning'] = $linkMeta['warning'];
                 }
+                $existing['agent_memory_sync'] = $this->applyAgentMemoryAutoSync($existing, $sessionId);
+
                 return $existing;
             }
             $stmt = $this->pdo->prepare('UPDATE decision_memories SET user_confirmed = 1 WHERE session_id = ?');
@@ -145,7 +214,9 @@ final class DecisionMemoryRepository
                 if ($linkMeta['warning'] !== null) {
                     $updated['warning'] = $linkMeta['warning'];
                 }
+                $updated['agent_memory_sync'] = $this->applyAgentMemoryAutoSync($updated, $sessionId);
             }
+
             return $updated;
         }
 
@@ -622,8 +693,21 @@ final class DecisionMemoryRepository
             if ($linkMeta['warning'] !== null) {
                 $created['warning'] = $linkMeta['warning'];
             }
+            $created['agent_memory_sync'] = $this->applyAgentMemoryAutoSync($created, $sessionId);
         }
         return $created;
+    }
+
+    /**
+     * @param array<string,mixed> $memory
+     * @return array<string,mixed>
+     */
+    private function applyAgentMemoryAutoSync(array $memory, string $sessionId): array
+    {
+        $sessions = new SessionRepository();
+        $session = $sessions->findById($sessionId) ?: [];
+
+        return (new DecisionMemoryAgentMemoryAutoSyncService(null, $sessions))->syncAfterPersist($memory, $session);
     }
 
     /**

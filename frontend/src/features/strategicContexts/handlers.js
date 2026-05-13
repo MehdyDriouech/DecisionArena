@@ -1,6 +1,46 @@
 import { registerAction, registerInputListener } from '../../core/events.js';
 import { isConfirmationConfirmed, requestConfirmation, uiCopy } from '../../utils/confirmationUi.js';
 
+async function loadContextMemoryOverviewForSelected() {
+  const state = window.DecisionArena.store.state;
+  const sel = String(state.strategicContextUi?.selectedContextId || '').trim();
+  if (!sel) return;
+  const ui = state.strategicContextUi || (state.strategicContextUi = {});
+  ui.memoryOverview = { loading: true, error: '', data: null };
+  window.DecisionArena.render?.();
+  try {
+    const res = await window.DecisionArena.services.StrategicContextService.getMemoryOverview(sel);
+    ui.memoryOverview = { loading: false, error: '', data: res };
+  } catch (err) {
+    ui.memoryOverview = { loading: false, error: String(err?.message || err), data: null };
+  }
+  window.DecisionArena.render?.();
+}
+
+/** Aligné sur resolvePrimaryWorkspaceAgentIds (frontend strategicContexts/index.js). */
+function resolvePrimaryAgentIdsForStrategicContext(selected, state) {
+  const wa = Array.isArray(selected?.workspace_agents) ? selected.workspace_agents : [];
+  const out = [];
+  for (const a of wa) {
+    const id = String(a.agent_id || '').trim().toLowerCase();
+    if (!id || id === 'synthesizer' || id === 'devil_advocate') continue;
+    if (!a.participated && !a.memory_md_exists) continue;
+    out.push(id);
+  }
+  const uniq = Array.from(new Set(out));
+  if (uniq.length) return uniq;
+  if (state?.uiMode === 'expert' && Array.isArray(selected?.workspace_agents_expert_personas)) {
+    const ex = [];
+    for (const a of selected.workspace_agents_expert_personas) {
+      const id = String(a.agent_id || '').trim().toLowerCase();
+      if (!id || id === 'synthesizer' || id === 'devil_advocate') continue;
+      ex.push(id);
+    }
+    return Array.from(new Set(ex));
+  }
+  return [];
+}
+
 function registerStrategicContextsHandlers() {
   registerInputListener((e) => {
     const el = e.target;
@@ -257,6 +297,7 @@ function registerStrategicContextsHandlers() {
     state.strategicContextUi.compareOpen = false;
     state.strategicContextUi.compareLeftId = null;
     state.strategicContextUi.compareRightId = null;
+    state.strategicContextUi.basicCompare = { targetId: null, loading: false, error: '', result: null };
     state.strategicContextUi.workspaceTimeline = { loading: false, error: '', data: null };
     state.strategicContextUi.strategicNarrative = { loading: false, error: '', data: null };
     state.strategicContextUi.beliefsEngine = {
@@ -275,14 +316,14 @@ function registerStrategicContextsHandlers() {
       relations: [],
     };
     state.strategicContextUi.agentContextMemory = {
-      open: false, agentId: 'pm', loading: false, saving: false, consolidating: false,
+      open: false, agentId: '', loading: false, saving: false, consolidating: false,
       recentNoteBusy: false, contradictionBusy: false, deprecateBusy: false, compactBusy: false,
       error: '', content: '', appendNote: '', appendSection: 'recent',
       maintenanceRecentNote: '', maintenanceSessionId: '', contradictionText: '', contradictionSource: '',
       deprecateText: '', deprecateReason: '',
     };
     state.strategicContextUi.situatedAgentChat = {
-      open: false, conversationId: null, agentId: 'pm', messages: [], input: '', loading: false,
+      open: false, conversationId: null, agentId: '', messages: [], input: '', loading: false,
       includeMemory: true, includeRecentDecisions: true, includeSocialContext: true, lastWarnings: [],
       lastCognitiveRuntime: null, lastPromptTrace: null, error: '',
     };
@@ -295,7 +336,9 @@ function registerStrategicContextsHandlers() {
       includeSocialDynamics: true, includeTimeline: true,
       loading: false, error: '', result: null,
     };
+    state.strategicContextUi.memoryOverview = { loading: true, error: '', data: null };
     window.DecisionArena.render?.();
+    queueMicrotask(() => { void loadContextMemoryOverviewForSelected(); });
   });
 
   registerAction('open-strategic-context', ({ element }) => {
@@ -308,6 +351,7 @@ function registerStrategicContextsHandlers() {
     state.strategicContextUi.compareOpen = false;
     state.strategicContextUi.compareLeftId = null;
     state.strategicContextUi.compareRightId = null;
+    state.strategicContextUi.basicCompare = { targetId: null, loading: false, error: '', result: null };
     state.strategicContextUi.workspaceTimeline = { loading: false, error: '', data: null };
     state.strategicContextUi.strategicNarrative = { loading: false, error: '', data: null };
     state.strategicContextUi.beliefsEngine = {
@@ -326,14 +370,14 @@ function registerStrategicContextsHandlers() {
       relations: [],
     };
     state.strategicContextUi.agentContextMemory = {
-      open: false, agentId: 'pm', loading: false, saving: false, consolidating: false,
+      open: false, agentId: '', loading: false, saving: false, consolidating: false,
       recentNoteBusy: false, contradictionBusy: false, deprecateBusy: false, compactBusy: false,
       error: '', content: '', appendNote: '', appendSection: 'recent',
       maintenanceRecentNote: '', maintenanceSessionId: '', contradictionText: '', contradictionSource: '',
       deprecateText: '', deprecateReason: '',
     };
     state.strategicContextUi.situatedAgentChat = {
-      open: false, conversationId: null, agentId: 'pm', messages: [], input: '', loading: false,
+      open: false, conversationId: null, agentId: '', messages: [], input: '', loading: false,
       includeMemory: true, includeRecentDecisions: true, includeSocialContext: true, lastWarnings: [],
       lastCognitiveRuntime: null, lastPromptTrace: null, error: '',
     };
@@ -346,7 +390,9 @@ function registerStrategicContextsHandlers() {
       includeSocialDynamics: true, includeTimeline: true,
       loading: false, error: '', result: null,
     };
+    state.strategicContextUi.memoryOverview = { loading: true, error: '', data: null };
     window.DecisionArena.render?.();
+    queueMicrotask(() => { void loadContextMemoryOverviewForSelected(); });
   });
 
   registerAction('load-workspace-timeline', async ({ element }) => {
@@ -361,6 +407,79 @@ function registerStrategicContextsHandlers() {
       ui.workspaceTimeline = { loading: false, error: '', data };
     } catch (err) {
       ui.workspaceTimeline = { loading: false, error: String(err?.message || err), data: null };
+    }
+    window.DecisionArena.render?.();
+  });
+
+  registerAction('load-context-memory-overview', async ({ element }) => {
+    const state = window.DecisionArena.store.state;
+    const fromEl = String(element?.dataset?.contextId || '').trim();
+    const sel = fromEl || String(state.strategicContextUi?.selectedContextId || '').trim();
+    if (!sel) return;
+    const ui = state.strategicContextUi || (state.strategicContextUi = {});
+    ui.memoryOverview = { loading: true, error: '', data: null };
+    window.DecisionArena.render?.();
+    try {
+      const res = await window.DecisionArena.services.StrategicContextService.getMemoryOverview(sel);
+      ui.memoryOverview = { loading: false, error: '', data: res };
+    } catch (err) {
+      ui.memoryOverview = { loading: false, error: String(err?.message || err), data: null };
+    }
+    window.DecisionArena.render?.();
+  });
+
+  registerAction('preview-agent-context-memories-sync', async ({ element } = {}) => {
+    const state = window.DecisionArena.store.state;
+    if (state.uiMode !== 'expert') return;
+    const id = String(element?.dataset?.contextId || '').trim() || resolveSelectedContextId(state);
+    if (!id) return;
+    const ui = state.strategicContextUi || (state.strategicContextUi = {});
+    ui.agentMemoryForceSync = { loading: true, error: '', report: null };
+    window.DecisionArena.render?.();
+    try {
+      const res = await window.DecisionArena.services.StrategicContextService.syncAgentMemories(id, {
+        dry_run: true,
+        include_participation: true,
+        include_decision_memories: true,
+      });
+      ui.agentMemoryForceSync = { loading: false, error: '', report: res };
+      state.toast = window.i18n?.t('contexts.agentMemorySync.toastPreview') ?? 'Preview ready.';
+    } catch (err) {
+      ui.agentMemoryForceSync = { loading: false, error: String(err?.message || err), report: null };
+    }
+    window.DecisionArena.render?.();
+  });
+
+  registerAction('apply-agent-context-memories-sync', async ({ element } = {}) => {
+    const state = window.DecisionArena.store.state;
+    if (state.uiMode !== 'expert') return;
+    const id = String(element?.dataset?.contextId || '').trim() || resolveSelectedContextId(state);
+    if (!id) return;
+    const ui = state.strategicContextUi || (state.strategicContextUi = {});
+    ui.agentMemoryForceSync = { loading: true, error: '', report: ui.agentMemoryForceSync?.report ?? null };
+    window.DecisionArena.render?.();
+    try {
+      const res = await window.DecisionArena.services.StrategicContextService.syncAgentMemories(id, {
+        dry_run: false,
+        include_participation: true,
+        include_decision_memories: true,
+      });
+      ui.agentMemoryForceSync = { loading: false, error: '', report: res };
+      state.toast = window.i18n?.t('contexts.agentMemorySync.toastDone') ?? 'Sync done.';
+      await refreshList(state);
+      try {
+        const ov = await window.DecisionArena.services.StrategicContextService.getMemoryOverview(id);
+        ui.memoryOverview = { loading: false, error: '', data: ov };
+      } catch (_) { /* ignore */ }
+      const am = ui.agentContextMemory;
+      if (am?.open && am.agentId) {
+        try {
+          const data = await window.DecisionArena.services.StrategicContextService.getAgentContextMemory(id, am.agentId);
+          am.content = String(data?.content ?? '');
+        } catch (_) { /* ignore */ }
+      }
+    } catch (err) {
+      ui.agentMemoryForceSync = { loading: false, error: String(err?.message || err), report: ui.agentMemoryForceSync?.report ?? null };
     }
     window.DecisionArena.render?.();
   });
@@ -1098,6 +1217,89 @@ function registerStrategicContextsHandlers() {
     window.DecisionArena.render?.();
   });
 
+  /** Comparaison Basic : flux principal = sélecteur + `run-basic-strategic-context-compare-basic` (état `basicCompare`). */
+  registerAction('set-basic-compare-target', ({ element }) => {
+    const state = window.DecisionArena.store.state;
+    const ui = state.strategicContextUi || (state.strategicContextUi = {});
+    ui.basicCompare = { ...(ui.basicCompare || {}), targetId: String(element?.value || '').trim(), error: '', result: null };
+    window.DecisionArena.render?.();
+  });
+
+  registerAction('run-basic-strategic-context-compare-basic', async ({ element }) => {
+    const state = window.DecisionArena.store.state;
+    if (state.uiMode === 'expert') return;
+    const ui = state.strategicContextUi || (state.strategicContextUi = {});
+    const left = String(element?.dataset?.contextId || ui.selectedContextId || '').trim();
+    const bc = ui.basicCompare || { targetId: null, loading: false, error: '', result: null };
+    const right = String(bc.targetId || '').trim();
+    if (!left || !right) {
+      ui.basicCompare = { ...bc, error: window.i18n?.t('contexts.basicCompare.pickFirst') ?? 'Choisissez un contexte cible.' };
+      window.DecisionArena.render?.();
+      return;
+    }
+    if (left === right) {
+      ui.basicCompare = { ...bc, error: window.i18n?.t('contexts.basicCompare.sameContext') ?? 'Choisissez un autre contexte.' };
+      window.DecisionArena.render?.();
+      return;
+    }
+    ui.basicCompare = { ...bc, loading: true, error: '', result: null };
+    window.DecisionArena.render?.();
+    try {
+      const data = await window.DecisionArena.services.StrategicContextService.compareContexts({
+        left_context_id: left,
+        right_context_id: right,
+        include_sessions: true,
+        include_decisions: true,
+        include_agent_memories: false,
+        include_social_dynamics: true,
+        include_timeline: true,
+      });
+      ui.basicCompare = {
+        ...ui.basicCompare,
+        loading: false,
+        error: '',
+        result: data,
+      };
+      state.toast = window.i18n?.t('contexts.basicCompare.done') ?? 'Comparaison prête.';
+    } catch (err) {
+      ui.basicCompare = {
+        ...ui.basicCompare,
+        loading: false,
+        error: String(err?.message || err),
+        result: null,
+      };
+    }
+    window.DecisionArena.render?.();
+  });
+
+  registerAction('open-expert-deep-compare-from-basic', () => {
+    const state = window.DecisionArena.store.state;
+    const ui = state.strategicContextUi || (state.strategicContextUi = {});
+    const bc = ui.basicCompare || {};
+    const res = bc.result && typeof bc.result === 'object' ? bc.result : null;
+    const left = String(res?.left?.context_id || ui.selectedContextId || '').trim();
+    const right = String(res?.right?.context_id || bc.targetId || '').trim();
+    if (!left || !right || left === right) {
+      state.toast = window.i18n?.t('contexts.basicCompare.needCompareFirst') ?? 'Lancez d’abord une comparaison Basic.';
+      window.DecisionArena.render?.();
+      return;
+    }
+    const normalized = window.DecisionArena.store.setUiMode?.('expert');
+    if (normalized) window.DecisionArena.applyUiModeVisibility?.(normalized);
+    const dc = ensureDeepCompareUi(state);
+    dc.panelOpen = true;
+    dc.leftId = left;
+    dc.rightId = right;
+    dc.result = res;
+    dc.error = '';
+    window.DecisionArena.render?.();
+    try {
+      requestAnimationFrame(() => {
+        document.querySelector('[data-action="toggle-context-deep-compare-panel"]')?.closest?.('.card')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+      });
+    } catch (_) {}
+  });
+
   const loadContextMemoryMd = async (state, contextId) => {
     const ui = state.strategicContextUi || (state.strategicContextUi = {});
     ui.memoryMdLoading = true;
@@ -1460,7 +1662,7 @@ function registerStrategicContextsHandlers() {
 
   const defaultAgentMemoryUi = () => ({
     open: false,
-    agentId: 'pm',
+    agentId: '',
     loading: false,
     saving: false,
     consolidating: false,
@@ -1486,13 +1688,24 @@ function registerStrategicContextsHandlers() {
     return ui.agentContextMemory;
   };
 
-  registerAction('open-agent-context-memory', async () => {
+  registerAction('open-agent-context-memory', async ({ element } = {}) => {
     const state = window.DecisionArena.store.state;
     const selectedId = resolveSelectedContextId(state);
     if (!selectedId) return;
     const am = ensureAgentMemoryUi(state);
+    const items = Array.isArray(state.strategicContexts?.items) ? state.strategicContexts.items : [];
+    const selected = items.find((c) => String(c.context_id) === String(selectedId));
+    const fromBtn = String(element?.dataset?.agentId || '').trim().toLowerCase();
+    const candidates = resolvePrimaryAgentIdsForStrategicContext(selected, state);
+    am.agentId = fromBtn || candidates[0] || '';
     am.open = true;
     am.error = '';
+    if (!am.agentId) {
+      am.loading = false;
+      am.content = '';
+      window.DecisionArena.render?.();
+      return;
+    }
     am.loading = true;
     window.DecisionArena.render?.();
     try {
@@ -1691,7 +1904,12 @@ function registerStrategicContextsHandlers() {
     const selectedId = resolveSelectedContextId(state);
     if (!selectedId) return;
     const am = ensureAgentMemoryUi(state);
-    am.agentId = String(element?.value || 'pm').trim() || 'pm';
+    am.agentId = String(element?.value || '').trim();
+    if (!am.agentId) {
+      am.loading = false;
+      window.DecisionArena.render?.();
+      return;
+    }
     am.error = '';
     am.loading = true;
     window.DecisionArena.render?.();
@@ -1974,7 +2192,7 @@ function registerStrategicContextsHandlers() {
   const defaultSituatedChatUi = () => ({
     open: false,
     conversationId: null,
-    agentId: 'pm',
+    agentId: '',
     messages: [],
     input: '',
     loading: false,
@@ -2000,7 +2218,14 @@ function registerStrategicContextsHandlers() {
       window.DecisionArena.render?.();
       return;
     }
+    const selectedId = resolveSelectedContextId(state);
+    const items = Array.isArray(state.strategicContexts?.items) ? state.strategicContexts.items : [];
+    const selected = items.find((c) => String(c.context_id) === String(selectedId));
     const sc = ensureSituatedChatUi(state);
+    const candidates = resolvePrimaryAgentIdsForStrategicContext(selected, state);
+    if (!sc.agentId || !candidates.includes(String(sc.agentId || '').trim().toLowerCase())) {
+      sc.agentId = candidates[0] || '';
+    }
     sc.open = true;
     sc.error = '';
     window.DecisionArena.render?.();
@@ -2046,7 +2271,7 @@ function registerStrategicContextsHandlers() {
   registerAction('select-context-agent-chat-agent', ({ element }) => {
     const state = window.DecisionArena.store.state;
     const sc = ensureSituatedChatUi(state);
-    sc.agentId = String(element?.value || 'pm').trim() || 'pm';
+    sc.agentId = String(element?.value || '').trim();
     sc.conversationId = null;
     sc.messages = [];
     sc.lastWarnings = [];
@@ -2063,6 +2288,11 @@ function registerStrategicContextsHandlers() {
     if (!cid) return;
     const sc = ensureSituatedChatUi(state);
     const text = String(sc.input || '').trim();
+    if (!sc.agentId) {
+      sc.error = window.i18n?.t('contexts.workspaceAgents.noParticipantsYet') ?? 'Aucun agent.';
+      window.DecisionArena.render?.();
+      return;
+    }
     if (!text) {
       sc.error = window.i18n?.t('contexts.situatedChat.emptyMessage') ?? 'Message required.';
       window.DecisionArena.render?.();

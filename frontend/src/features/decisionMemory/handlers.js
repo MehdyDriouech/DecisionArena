@@ -551,18 +551,77 @@ function registerDecisionMemoryHandlers() {
     state.memoryConfirmingSessionId = sessionId;
     window.DecisionArena.render?.();
     try {
-      await window.DecisionArena.services.DecisionMemoryService.confirmForSession(sessionId);
+      const confirmRes = await window.DecisionArena.services.DecisionMemoryService.confirmForSession(sessionId);
       // Refresh memory list if loaded
       if (state.decisionMemory?.memories) {
         const data = await window.DecisionArena.services.DecisionMemoryService.list(250);
         state.decisionMemory = { loading: false, error: null, memories: data.memories || [], links: data.links || [] };
         await refreshDecisionMemoryExplorerNav(state);
       }
-      state.toast = 'Mémoire confirmée et persistée.';
+      const mem = confirmRes?.memory && typeof confirmRes.memory === 'object' ? confirmRes.memory : null;
+      const mid = String(mem?.memory_id || '').trim();
+      if (mid) {
+        state.postPersistDecisionMemoryBySession = state.postPersistDecisionMemoryBySession || {};
+        state.postPersistDecisionMemoryBySession[sessionId] = {
+          memory_id: mid,
+          strategic_context_linked: !!confirmRes.strategic_context_linked,
+          context_memory_linked: !!confirmRes.context_memory_linked,
+          agent_memory_sync: confirmRes.agent_memory_sync || null,
+        };
+      }
+      state.agentMemoryPropagationPreview = null;
+      state.toast = window.i18n?.t('decisionMemory.persistSuccessToast') || 'Mémoire confirmée et persistée.';
     } catch (err) {
       state.error = String(err.message || err);
     } finally {
       state.memoryConfirmingSessionId = null;
+      window.DecisionArena.render?.();
+    }
+  });
+
+  registerAction('preview-agent-memory-propagation', async ({ element }) => {
+    const sessionId = String(element?.dataset?.sessionId || '').trim();
+    const memoryId = String(element?.dataset?.memoryId || '').trim();
+    if (!sessionId || !memoryId) return;
+    const state = window.DecisionArena.store.state;
+    state.agentMemoryPropagationBusy = true;
+    state.error = null;
+    window.DecisionArena.render?.();
+    try {
+      const data = await window.DecisionArena.services.DecisionMemoryService.agentMemoryPreview(sessionId, memoryId);
+      state.agentMemoryPropagationPreview = { sessionId, memoryId, data };
+      state.toast = window.i18n?.t('decisionMemory.agentPropagation.previewDone') || 'Aperçu prêt.';
+    } catch (err) {
+      state.error = String(err?.message || err);
+    } finally {
+      state.agentMemoryPropagationBusy = false;
+      window.DecisionArena.render?.();
+    }
+  });
+
+  registerAction('propagate-agent-memory-confirmed', async ({ element }) => {
+    const sessionId = String(element?.dataset?.sessionId || '').trim();
+    const memoryId = String(element?.dataset?.memoryId || '').trim();
+    if (!sessionId || !memoryId) return;
+    const msg = window.i18n?.t('decisionMemory.agentPropagation.confirmPrompt') || 'Confirmer ?';
+    if (!window.confirm(msg)) return;
+    const state = window.DecisionArena.store.state;
+    state.agentMemoryPropagationBusy = true;
+    state.error = null;
+    window.DecisionArena.render?.();
+    try {
+      await window.DecisionArena.services.DecisionMemoryService.propagateToAgentMemories(sessionId, {
+        memory_id: memoryId,
+        agent_ids: [],
+        confirm: true,
+        expert_override: false,
+      });
+      state.toast = window.i18n?.t('decisionMemory.agentPropagation.done') || 'Propagation terminée.';
+      state.agentMemoryPropagationPreview = null;
+    } catch (err) {
+      state.error = String(err?.message || err);
+    } finally {
+      state.agentMemoryPropagationBusy = false;
       window.DecisionArena.render?.();
     }
   });

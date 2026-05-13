@@ -144,7 +144,7 @@ class DecisionRoomRunner {
                     'current_phase' => 'round_started',
                     'current_phase_label' => 'Round ' . $round . ' demarre',
                     'current_step' => 'round_start',
-                    'percent' => $this->estimatePercent($round, $rounds, 0.0),
+                    'percent' => RunnerProgressPercent::roundRunPercent($round, $rounds, 0.0),
                 ],
                 'running'
             );
@@ -180,7 +180,7 @@ class DecisionRoomRunner {
                         'current_phase_label' => $this->phaseHumanLabel($phase),
                         'current_agent_id' => $agentId,
                         'current_step' => 'llm_call',
-                        'percent' => $this->estimatePercent($round, $rounds, 0.2),
+                        'percent' => RunnerProgressPercent::roundRunPercent($round, $rounds, 0.2),
                     ],
                     'running'
                 );
@@ -399,7 +399,7 @@ class DecisionRoomRunner {
                             'current_phase_label' => $this->phaseHumanLabel($phase),
                             'current_agent_id' => $agentId,
                             'current_step' => 'response_received',
-                            'percent' => $this->estimatePercent($round, $rounds, $agentId === 'synthesizer' ? 0.95 : 0.6),
+                            'percent' => RunnerProgressPercent::roundRunPercent($round, $rounds, $agentId === 'synthesizer' ? 0.95 : 0.6),
                         ],
                         'running'
                     );
@@ -497,7 +497,7 @@ class DecisionRoomRunner {
                             'current_phase_label' => $this->phaseHumanLabel($phase),
                             'current_agent_id' => $agentId,
                             'current_step' => 'failed',
-                            'percent' => $this->estimatePercent($round, $rounds, 0.65),
+                            'percent' => RunnerProgressPercent::roundRunPercent($round, $rounds, 0.65),
                         ],
                         'running',
                         (string)$e->getMessage()
@@ -1038,14 +1038,6 @@ class DecisionRoomRunner {
     {
         $step = $started ? 'appel LLM demarre' : 'reponse recue';
         return $this->phaseHumanLabel($phase) . ' · ' . $agentId . ' · ' . $step;
-    }
-
-    private function estimatePercent(int $currentRound, int $totalRounds, float $withinRound): int
-    {
-        $safeTotal = max(1, $totalRounds);
-        $base = max(0.02, (($currentRound - 1) / $safeTotal));
-        $intra = max(0.0, min(1.0, $withinRound)) * (1.0 / $safeTotal);
-        return (int)round(min(0.99, $base + $intra) * 100);
     }
 
     private function uuid(): string {

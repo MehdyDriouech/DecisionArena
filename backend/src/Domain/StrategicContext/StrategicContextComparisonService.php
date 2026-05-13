@@ -8,6 +8,9 @@ use Infrastructure\Persistence\Database;
 use Infrastructure\Persistence\DecisionMemoryRepository;
 use Infrastructure\Persistence\StrategicContextRepository;
 
+// Note historique : une constante `AGENTS_FOR_MEMORY_COMPARE` listait 5 personas fixes ;
+// le diff mémoire agent s’appuie désormais sur `StrategicContextWorkspaceAgentsCatalog::unionAgentIdsForCrossContextMemoryDiff`.
+
 /**
  * Cross-read comparison between two Strategic Contexts.
  *
@@ -16,8 +19,6 @@ use Infrastructure\Persistence\StrategicContextRepository;
  */
 final class StrategicContextComparisonService
 {
-    private const AGENTS_FOR_MEMORY_COMPARE = ['pm', 'architect', 'critic', 'ux-expert', 'po'];
-
     private const MEMORY_FOCUS_SECTIONS = [
         'Current Strategic Direction',
         'Open Questions',
@@ -42,6 +43,7 @@ final class StrategicContextComparisonService
     private DecisionMemoryRepository $decisionRepo;
     private AgentRelationshipRepository $relRepo;
     private AgentContextMemoryService $agentMemSvc;
+    private StrategicContextWorkspaceAgentsCatalog $workspaceAgentsCatalog;
     private BeliefEngineService $beliefSvc;
     private StrategicNarrativeService $narrativeSvc;
     private MemoryCompilerService $memoryCompilerSvc;
@@ -51,6 +53,9 @@ final class StrategicContextComparisonService
     /** @var array<string,mixed> */
     private array $requestCache = [];
 
+    /** @var array<string,mixed> */
+    private array $lastAgentMemoryCompareMeta = [];
+
     public function __construct()
     {
         $this->contextRepo = new StrategicContextRepository();
@@ -58,6 +63,7 @@ final class StrategicContextComparisonService
         $this->decisionRepo = new DecisionMemoryRepository();
         $this->relRepo = new AgentRelationshipRepository();
         $this->agentMemSvc = new AgentContextMemoryService();
+        $this->workspaceAgentsCatalog = new StrategicContextWorkspaceAgentsCatalog();
         $this->beliefSvc = new BeliefEngineService();
         $this->narrativeSvc = new StrategicNarrativeService();
         $this->memoryCompilerSvc = new MemoryCompilerService();
@@ -87,6 +93,8 @@ final class StrategicContextComparisonService
         if ($leftContextId === $rightContextId) {
             return ['ok' => false, 'message' => 'Cannot compare a context with itself', 'code' => 400];
         }
+
+        $this->lastAgentMemoryCompareMeta = [];
 
         $leftRow = $this->contextRepo->find($leftContextId);
         $rightRow = $this->contextRepo->find($rightContextId);
@@ -193,6 +201,9 @@ final class StrategicContextComparisonService
             'cache_entries' => count($this->requestCache),
             'read_only' => true,
         ];
+        if ($includeAgentMemories && $this->lastAgentMemoryCompareMeta !== []) {
+            $diff['runtime_meta']['agent_memory_compare'] = $this->lastAgentMemoryCompareMeta;
+        }
 
         $markdown = $this->buildMarkdown($leftPayload, $rightPayload, $diff);
 
@@ -537,7 +548,22 @@ final class StrategicContextComparisonService
         array &$rightWarn
     ): array {
         $out = [];
-        foreach (self::AGENTS_FOR_MEMORY_COMPARE as $agentId) {
+        $cap = $this->resolveMemoryCompareAgentCap();
+        $union = $this->workspaceAgentsCatalog->unionAgentIdsForCrossContextMemoryDiff($leftId, $rightId, $cap);
+        if ($union['truncated']) {
+            $leftWarn[] = sprintf(
+                'Agent memory compare truncated to first %d agents (cap=%d). Raise STRATEGIC_CONTEXT_MEMORY_COMPARE_MAX_AGENTS if needed.',
+                count($union['agent_ids']),
+                $union['cap']
+            );
+        }
+        $this->lastAgentMemoryCompareMeta = [
+            'source' => 'StrategicContextWorkspaceAgentsCatalog::unionAgentIdsForCrossContextMemoryDiff',
+            'agent_count' => count($union['agent_ids']),
+            'cap' => $union['cap'],
+            'truncated' => $union['truncated'],
+        ];
+        foreach ($union['agent_ids'] as $agentId) {
             $l = $this->agentMemSvc->readIfExistsNoSideEffects($leftId, $agentId);
             $r = $this->agentMemSvc->readIfExistsNoSideEffects($rightId, $agentId);
             if (!$l['exists']) {
@@ -1252,6 +1278,21 @@ final class StrategicContextComparisonService
             }
         }
         return implode("\n", $lines);
+    }
+
+    /** Plafond du nombre d’agents comparés pour le diff mémoire (env `STRATEGIC_CONTEXT_MEMORY_COMPARE_MAX_AGENTS`, défaut 200, max 2000). */
+    private function resolveMemoryCompareAgentCap(): int
+    {
+        $raw = getenv('STRATEGIC_CONTEXT_MEMORY_COMPARE_MAX_AGENTS');
+        if ($raw === false || $raw === '') {
+            return 200;
+        }
+        $n = filter_var($raw, FILTER_VALIDATE_INT);
+        if ($n === false || $n < 1) {
+            return 200;
+        }
+
+        return min(2000, $n);
     }
 
     /** @param mixed $data */
