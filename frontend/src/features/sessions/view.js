@@ -6,7 +6,6 @@
 import { renderEmptyState } from '../../ui/components.js';
 import { getPlaybookIntentGroups } from '../../core/playbooks.js';
 import { renderPlaybookCard } from '../../ui/components.js';
-import { mapAnalysisLifecycle } from '../../core/store.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -16,35 +15,6 @@ function getCtx() {
   const agentIcon = (id) => _ai(state.personas, id);
   const agentName = (id) => _an(state.personas, id);
   return { state, escHtml, formatDate, agentIcon, agentName, t };
-}
-
-function strategicContextBadgeHtml(session, state, escHtml, t) {
-  const scid = session.strategic_context_id;
-  if (!scid) {
-    return `<span class="badge badge-muted" style="font-size:11px;">${escHtml(t('sessions.badgeLegacyNoContext'))}</span>`;
-  }
-  const items = Array.isArray(state.strategicContexts?.items) ? state.strategicContexts.items : [];
-  const ctx = items.find((c) => String(c.context_id) === String(scid));
-  const label = ctx?.title ? String(ctx.title) : `${String(scid).slice(0, 8)}…`;
-  return `<span class="badge badge-info" style="font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(String(scid))}">${escHtml(t('sessions.badgeContext'))}: ${escHtml(label)}</span>`;
-}
-
-/** Aligné sur la vue Contextes stratégiques : cycle de vie ≠ espace workspace. */
-function dashboardContextLifecycleBadgeClass(status) {
-  switch (String(status || 'active')) {
-    case 'active': return 'badge-info';
-    case 'paused': return 'badge-warning';
-    case 'completed': return 'badge-muted';
-    case 'abandoned': return 'badge-danger';
-    default: return 'badge-muted';
-  }
-}
-
-function dashboardContextLifecycleLabel(t, status) {
-  const k = String(status || 'active').trim() || 'active';
-  const key = `contexts.status.${k}`;
-  const lab = t(key);
-  return lab === key ? k : lab;
 }
 
 function extractSessionOutcome(session) {
@@ -80,16 +50,8 @@ function extractSessionOutcome(session) {
   return { decision, confidencePct };
 }
 
-function lifecycleLabel(status, t) {
-  const key = `analysis.lifecycle.${status}`;
-  const translated = t(key);
-  return translated === key ? status : translated;
-}
-
 function renderSessionCard(session, fullActions = false) {
   const { state, escHtml, formatDate, agentIcon, agentName, t } = getCtx();
-  const isExpert = state.uiMode === 'expert';
-  const lifecycle = mapAnalysisLifecycle(session);
   const outcome = extractSessionOutcome(session);
   const decisionBadge = outcome.decision
     ? `<span class="badge badge-info">Décision: ${escHtml(String(outcome.decision).replace(/_/g, ' '))}</span>`
@@ -97,12 +59,11 @@ function renderSessionCard(session, fullActions = false) {
   const confidenceBadge = outcome.confidencePct !== null
     ? `<span class="badge badge-muted">Confiance: ${outcome.confidencePct}%</span>`
     : '';
-  const statusInline = `<span class="badge ${lifecycle.primaryStatus === 'completed' ? 'badge-success' : lifecycle.primaryStatus === 'running' ? 'badge-info' : lifecycle.primaryStatus === 'archived' ? 'badge-muted' : 'badge-default'}">Statut: ${escHtml(lifecycleLabel(lifecycle.primaryStatus, t))}</span>`;
-  const statusOverlayInline = lifecycle.overlays
-    .map((overlay) => `<span class="badge ${overlay === 'blocked' ? 'badge-danger' : overlay === 'fragile' ? 'badge-warning' : 'badge-primary'}">${escHtml(lifecycleLabel(overlay, t))}</span>`)
-    .join('');
+  const statusInline = session.status
+    ? `<span class="badge ${session.status === 'completed' ? 'badge-success' : session.status === 'error' ? 'badge-danger' : 'badge-muted'}">Statut: ${escHtml(session.status)}</span>`
+    : '';
   const insightsRow = (decisionBadge || confidenceBadge || statusInline)
-    ? `<div class="session-card-insights">${decisionBadge}${confidenceBadge}${statusInline}${statusOverlayInline}</div>`
+    ? `<div class="session-card-insights">${decisionBadge}${confidenceBadge}${statusInline}</div>`
     : '';
 
   const modeIcons  = { chat: '💬', 'decision-room': '🏛️', confrontation: '⚔️', 'quick-decision': '⚡', 'stress-test': '🔥' };
@@ -120,16 +81,12 @@ function renderSessionCard(session, fullActions = false) {
                    : 'badge-default';
 
   const statusBadge = (() => {
-    const s = lifecycle.primaryStatus;
-    const cls = s === 'completed' ? 'badge-success' : s === 'running' ? 'badge-info' : s === 'archived' ? 'badge-muted' : 'badge-default';
-    const overlays = lifecycle.overlays
-      .map((ov) => `<span class="badge ${ov === 'blocked' ? 'badge-danger' : ov === 'fragile' ? 'badge-warning' : 'badge-primary'}">${escHtml(lifecycleLabel(ov, t))}</span>`)
-      .join('');
-    return `<span class="badge ${cls}">${escHtml(lifecycleLabel(s, t))}</span>${overlays}`;
+    const s = session.status || 'draft';
+    const cls = s === 'completed' ? 'badge-success' : s === 'error' ? 'badge-danger' : 'badge-muted';
+    return `<span class="badge ${cls}">${escHtml(s)}</span>`;
   })();
 
   const agents = (session.selected_agents || []).slice(0, 5);
-  const canRerunOrFork = lifecycle.primaryStatus === 'completed' || lifecycle.primaryStatus === 'archived';
 
   if (!fullActions) {
     return `
@@ -142,7 +99,6 @@ function renderSessionCard(session, fullActions = false) {
               <div class="session-card-meta">
                 <span>${formatDate(session.created_at)}</span>
                 <span class="badge ${badgeClass}">${label}</span>
-                ${strategicContextBadgeHtml(session, state, escHtml, t)}
                 ${statusBadge}
               </div>
             </div>
@@ -172,7 +128,6 @@ function renderSessionCard(session, fullActions = false) {
           <div class="session-meta" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px;">
             <span>${formatDate(session.created_at)}</span>
             <span class="badge ${badgeClass}">${label}</span>
-            ${strategicContextBadgeHtml(session, state, escHtml, t)}
             <span style="margin-left:4px;">${statusBadge}</span>
             ${session.force_disagreement ? `<span class="badge badge-warning" style="font-size:11px;">${t('newSession.forceDisagreementActive')}</span>` : ''}
           </div>
@@ -189,23 +144,21 @@ function renderSessionCard(session, fullActions = false) {
         <button class="btn btn-primary btn-sm" data-action="open-session" data-session-id="${escHtml(session.id)}" data-mode="${escHtml(session.mode)}">
           ${t('sessions.open')}
         </button>
-        <button class="btn btn-secondary btn-sm" data-action="open-rerun-modal" data-session-id="${escHtml(session.id)}" ${canRerunOrFork ? '' : 'disabled'}>
+        <button class="btn btn-secondary btn-sm" data-action="open-rerun-modal" data-session-id="${escHtml(session.id)}">
           🔁 ${t('sessions.rerun')}
         </button>
-        <button class="btn btn-secondary btn-sm" data-action="fork-session" data-session-id="${escHtml(session.id)}" title="${escHtml(t('hitl.forkVariant'))}" ${canRerunOrFork ? '' : 'disabled'}>
+        <button class="btn btn-secondary btn-sm" data-action="fork-session" data-session-id="${escHtml(session.id)}" title="${escHtml(t('hitl.forkVariant'))}">
           🔀 ${t('hitl.forkVariant')}
         </button>
         <button class="btn btn-secondary btn-sm" data-action="export-session" data-session-id="${escHtml(session.id)}" data-format="markdown">
           ${t('sessions.exportMd')}
         </button>
-        ${isExpert ? `
-          <button class="btn btn-secondary btn-sm" data-ui="expert-only" data-action="export-session" data-session-id="${escHtml(session.id)}" data-format="json">
-            ${t('sessions.exportJson')}
-          </button>
-          <button class="btn btn-danger btn-sm" data-ui="expert-only" data-action="delete-session" data-session-id="${escHtml(session.id)}" data-session-title="${escHtml(session.title)}">
-            ${t('sessions.delete')}
-          </button>
-        ` : ''}
+        <button class="btn btn-secondary btn-sm" data-action="export-session" data-session-id="${escHtml(session.id)}" data-format="json">
+          ${t('sessions.exportJson')}
+        </button>
+        <button class="btn btn-danger btn-sm" data-action="delete-session" data-session-id="${escHtml(session.id)}" data-session-title="${escHtml(session.title)}">
+          ${t('sessions.delete')}
+        </button>
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);cursor:pointer;margin-left:auto;">
           <input type="checkbox" data-action="toggle-compare-session" data-session-id="${escHtml(session.id)}" ${(state.compareSelectedIds || []).includes(session.id) ? 'checked' : ''} style="accent-color:var(--accent);">
           ${t('sessions.selectForCompare')}
@@ -222,11 +175,7 @@ function renderDashboard() {
   const lang = window.i18n?.getLanguage?.() || 'fr';
   const contextsPkg = state.strategicContexts || { items: [] };
   const contexts = Array.isArray(contextsPkg.items) ? contextsPkg.items : [];
-  const activeWorkspaceId = String(state.activeStrategicContextId || state.activeStrategicContext?.context_id || '').trim();
-  const activeWorkspaceContext = contexts.find(
-    (c) => Number(c.is_workspace_active) === 1 || String(c.context_id) === activeWorkspaceId,
-  ) || null;
-  const activeContexts = activeWorkspaceContext ? [activeWorkspaceContext] : [];
+  const activeContexts = contexts.filter((c) => String(c.status || 'active') === 'active').slice(0, isExpert ? 6 : 4);
   const playbookGroups = getPlaybookIntentGroups(lang).map((group) => `
     <section class="playbook-intent-group">
       <div class="playbook-intent-group-head">
@@ -252,7 +201,7 @@ function renderDashboard() {
         <button type="button" class="btn btn-primary btn-lg" data-action="select-playbook" data-playbook-id="founder-sprint">
           ${t('dashboard.simple.primaryCta')}
         </button>
-        <button type="button" class="btn btn-secondary" data-nav="new-session">
+        <button type="button" class="btn btn-secondary" data-action="goto-new-session">
           ${t('dashboard.configureAnalysis')}
         </button>
       </div>
@@ -264,7 +213,7 @@ function renderDashboard() {
       <h1 class="hero-title">${t('dashboard.heroTitle')}</h1>
       <p class="hero-copy">${t('dashboard.heroSubtitle')}</p>
       <div class="intent-grid">
-        <button type="button" class="btn btn-secondary" data-nav="new-session">
+        <button type="button" class="btn btn-secondary" data-action="goto-new-session">
           ${t('dashboard.configureAnalysis')}
         </button>
       </div>
@@ -284,7 +233,7 @@ function renderDashboard() {
       </div>
       ${activeContexts.length === 0 ? `
         <div class="empty-state" style="padding:16px 0;">
-          <div class="empty-state-text">${escHtml(lang === 'en' ? 'No in-progress strategic context yet. Create one to group related decisions.' : 'Aucun contexte stratégique « en cours ». Créez-en un pour regrouper les décisions liées.')}</div>
+          <div class="empty-state-text">${escHtml(lang === 'en' ? 'No active context yet. Create one to group related decisions.' : 'Aucun contexte actif. Créez-en un pour regrouper les décisions liées.')}</div>
           <button class="btn btn-primary btn-sm" data-nav="strategic-contexts">＋ ${escHtml(lang === 'en' ? 'Create context' : 'Créer un contexte')}</button>
         </div>
       ` : `
@@ -292,16 +241,10 @@ function renderDashboard() {
           ${activeContexts.map((c) => {
             const cs = c.current_state || {};
             const risks = Array.isArray(cs.active_risks) ? cs.active_risks : [];
-            const isWorkspace = Number(c.is_workspace_active) === 1 || String(c.context_id) === activeWorkspaceId;
-            const st = String(c.status || 'active');
-            const workspaceBadge = isWorkspace
-              ? `<span class="badge badge-success">${escHtml(t('contexts.workspaceBadge'))}</span>`
-              : '';
-            const lifecycleBadge = `<span class="badge ${dashboardContextLifecycleBadgeClass(st)}">${escHtml(dashboardContextLifecycleLabel(t, st))}</span>`;
             return `
               <div class="card" style="padding:14px 16px;cursor:pointer;" data-action="goto-context" data-context-id="${escHtml(c.context_id)}">
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                  ${workspaceBadge}${lifecycleBadge}
+                  <span class="badge badge-success">active</span>
                   <div style="font-weight:800;">${escHtml(String(c.title || ''))}</div>
                   <span style="margin-left:auto;font-size:11px;color:var(--text-muted);">${escHtml(String(c.updated_at || ''))}</span>
                 </div>
@@ -318,21 +261,19 @@ function renderDashboard() {
       `}
     </div>
 
-    ${!isExpert ? `
-      <div class="section dashboard-playbooks" style="margin-bottom:24px;">
-        <div class="section-header">
-          <span class="section-label">${lang === 'en' ? 'Choose by decision intent' : 'Choisir par intention de décision'}</span>
-        </div>
-        <div class="playbook-intent-groups">
-          ${playbookGroups}
-        </div>
+    <div class="section dashboard-playbooks" style="margin-bottom:24px;">
+      <div class="section-header">
+        <span class="section-label">${lang === 'en' ? 'Choose by decision intent' : 'Choisir par intention de decision'}</span>
       </div>
-    ` : ''}
+      <div class="playbook-intent-groups">
+        ${playbookGroups}
+      </div>
+    </div>
 
     <div class="sessions-list">
       <div class="section-header">
         <span class="section-label">${t('dashboard.recentSessions')}</span>
-        <button class="btn btn-secondary btn-sm" data-nav="analyses">${t('dashboard.viewAll')}</button>
+        <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('dashboard.viewAll')}</button>
       </div>
       ${recent.length === 0 ? `
         <div class="empty-state">
@@ -345,11 +286,8 @@ function renderDashboard() {
     </div>
 
     <div class="dashboard-technical-shortcuts" data-ui="expert-only">
-      <button type="button" class="btn btn-secondary btn-sm" data-nav="new-session">
+      <button type="button" class="btn btn-secondary btn-sm" data-action="goto-new-session">
         ${t('nav.newSession')}
-      </button>
-      <button type="button" class="btn btn-secondary btn-sm" data-nav="analyses">
-        ${t('nav.sessions')}
       </button>
       <button type="button" class="btn btn-secondary btn-sm" data-action="goto-compare-sessions">
         ${t('dashboard.compareSessions')}
@@ -361,4 +299,41 @@ function renderDashboard() {
   `;
 }
 
-export { renderDashboard, renderSessionCard };
+function renderSessions() {
+  const { state, t } = getCtx();
+  const filter   = state.sessionFilter || 'all';
+  const filtered = state.sessions.filter((s) => {
+    if (filter === 'favorites')   return s.is_favorite;
+    if (filter === 'references')  return s.is_reference;
+    return true;
+  });
+
+  return `
+    <div class="page-header" style="flex-direction:row;justify-content:space-between;align-items:flex-start;">
+      <div>
+        <div class="page-title">${t('sessions.title')}</div>
+        <div class="page-subtitle">${t('sessions.subtitle')}</div>
+      </div>
+      ${state.sessions.length > 0 ? `
+        <button class="btn btn-danger btn-sm" data-action="delete-all-sessions" style="flex-shrink:0;margin-top:4px;">
+          🗑️ ${t('sessions.deleteAll')}
+        </button>
+      ` : ''}
+    </div>
+
+    <div class="filter-tabs" style="display:flex;gap:4px;margin-bottom:16px;flex-wrap:wrap;">
+      <button class="btn btn-sm ${filter === 'all'        ? 'btn-primary' : 'btn-secondary'}" data-action="set-session-filter" data-filter="all">${t('sessions.filterAll')}</button>
+      <button class="btn btn-sm ${filter === 'favorites'  ? 'btn-primary' : 'btn-secondary'}" data-action="set-session-filter" data-filter="favorites">⭐ ${t('sessions.filterFavorites')}</button>
+      <button class="btn btn-sm ${filter === 'references' ? 'btn-primary' : 'btn-secondary'}" data-action="set-session-filter" data-filter="references">📌 ${t('sessions.filterReferences')}</button>
+      ${state.compareSelectedIds.length >= 2 ? `
+        <button class="btn btn-primary btn-sm" data-action="goto-compare-sessions">⚖️ ${t('sessions.compareSelected')} (${state.compareSelectedIds.length})</button>
+      ` : `
+        <span style="font-size:12px;color:var(--text-muted);align-self:center;margin-left:8px;">${t('sessions.compareHint')}</span>
+      `}
+    </div>
+
+    ${filtered.length === 0 ? renderEmptyState({ icon: '📁', text: t('sessions.empty') }) : filtered.map((s) => renderSessionCard(s, true)).join('')}
+  `;
+}
+
+export { renderDashboard, renderSessions, renderSessionCard };

@@ -22,12 +22,6 @@ const ProviderService = {
   remove(providerId) {
     return apiFetch(`/api/providers/${providerId}`, { method: 'DELETE' });
   },
-  disable(providerId) {
-    return apiFetch(`/api/providers/${providerId}/disable`, { method: 'POST' });
-  },
-  enable(providerId) {
-    return apiFetch(`/api/providers/${providerId}/enable`, { method: 'POST' });
-  },
   test(payload) {
     return apiFetch('/api/providers/test', {
       method: 'POST',

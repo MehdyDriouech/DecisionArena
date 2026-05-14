@@ -8,7 +8,6 @@ use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\MessageRepository;
 use Infrastructure\Persistence\ContextDocumentRepository;
 use Infrastructure\Persistence\DecisionMemoryRepository;
-use Infrastructure\Persistence\RunStatusRepository;
 use Domain\DecisionMemory\DecisionMemoryContextBuilder;
 use Domain\Orchestration\DecisionRoomRunner;
 use Domain\Orchestration\PromptBuilder;
@@ -19,21 +18,19 @@ class DecisionRoomController {
     private MessageRepository $messageRepo;
     private DecisionRoomRunner $runner;
     private DecisionMemoryRepository $memoryRepo;
-    private RunStatusRepository $runStatusRepo;
 
     public function __construct() {
         $this->sessionRepo = new SessionRepository();
         $this->messageRepo = new MessageRepository();
         $this->runner      = new DecisionRoomRunner();
         $this->memoryRepo  = new DecisionMemoryRepository();
-        $this->runStatusRepo = new RunStatusRepository();
     }
 
     public function run(Request $req): array {
         $data           = $req->body();
         $sessionId      = $data['session_id'] ?? '';
         $objective      = $data['objective'] ?? '';
-        $selectedAgents = $this->normalizeJsonArray($data['selected_agents'] ?? [], []);
+        $selectedAgents    = $data['selected_agents'] ?? [];
         $rounds            = (int)($data['rounds'] ?? 2);
 
         if (!$sessionId || !$objective) {
@@ -50,13 +47,14 @@ class DecisionRoomController {
             : (bool)($session['force_disagreement'] ?? false);
 
         if (empty($selectedAgents)) {
-            $selectedAgents = $this->normalizeJsonArray($session['selected_agents'] ?? [], []);
+            $selectedAgents = json_decode($session['selected_agents'] ?? '[]', true);
         }
 
         $language   = $session['language'] ?? 'en';
 
         // Controlled Decision Memory reuse (manual, compact, auditable; no chat history)
-        $selectedMemoryIds = $this->normalizeJsonArray($session['selected_memory_ids'] ?? [], []);
+        $selectedMemoryIds = json_decode((string)($session['selected_memory_ids'] ?? '[]'), true);
+        $selectedMemoryIds = is_array($selectedMemoryIds) ? $selectedMemoryIds : [];
         $reuse = $this->memoryRepo->compactReusableForIds(array_map('strval', $selectedMemoryIds));
         $injectInfo = null;
         $rawDoc = (new ContextDocumentRepository())->findBySession($sessionId);
@@ -89,56 +87,13 @@ class DecisionRoomController {
             'auto_retry_on_weak_debate' => (bool)($data['auto_retry_on_weak_debate'] ?? $session['auto_retry_on_weak_debate'] ?? false),
             'decision_dynamics_preset'   => $session['decision_dynamics_preset'] ?? 'balanced',
             'session_variant'             => $session['session_variant'] ?? null,
-            'strategic_context_id'        => isset($session['strategic_context_id']) && (string)$session['strategic_context_id'] !== ''
-                ? (string)$session['strategic_context_id'] : null,
         ];
 
-        $this->sessionRepo->update($sessionId, ['status' => 'running']);
-        $this->runStatusRepo->initialize($sessionId, 'decision-room', $rounds);
-        $this->runStatusRepo->appendEvent(
-            $sessionId,
-            [
-                'level' => 'info',
-                'phase' => 'session_started',
-                'round' => 0,
-                'label' => 'Session demarree',
-            ],
-            [
-                'current_round' => 0,
-                'total_rounds' => $rounds,
-                'current_phase' => 'session_started',
-                'current_phase_label' => 'Session demarree',
-                'current_step' => 'startup',
-                'percent' => 1,
-            ],
-            'running'
+        $result = $this->runner->run(
+            $sessionId, $objective, $selectedAgents, $rounds, $language,
+            $forceDisagreement, $contextDoc,
+            $daEnabled, $daThreshold, $agentProviders, $decisionThreshold, $sessionOptions
         );
-        try {
-            $result = $this->runner->run(
-                $sessionId, $objective, $selectedAgents, $rounds, $language,
-                $forceDisagreement, $contextDoc,
-                $daEnabled, $daThreshold, $agentProviders, $decisionThreshold, $sessionOptions
-            );
-        } catch (\Throwable $e) {
-            $this->sessionRepo->update($sessionId, ['status' => 'draft']);
-            $this->runStatusRepo->appendEvent(
-                $sessionId,
-                [
-                    'level' => 'error',
-                    'phase' => 'session_failed',
-                    'round' => null,
-                    'label' => 'Execution echouee',
-                ],
-                [
-                    'current_phase' => 'session_failed',
-                    'current_phase_label' => 'Session en echec',
-                    'current_step' => 'failed',
-                ],
-                'failed',
-                (string)$e->getMessage()
-            );
-            return Response::error('Decision Room run failed: ' . $e->getMessage(), 500);
-        }
 
         // Traceability: record what was injected (manual reuse only)
         $memoryReuse = [
@@ -178,24 +133,6 @@ class DecisionRoomController {
             ),
             'decision_brief' => json_encode($result['decision_brief'] ?? null, JSON_UNESCAPED_UNICODE),
         ]);
-        $this->runStatusRepo->appendEvent(
-            $sessionId,
-            [
-                'level' => 'info',
-                'phase' => 'session_completed',
-                'round' => $rounds,
-                'label' => 'Session terminee',
-            ],
-            [
-                'current_round' => $rounds,
-                'total_rounds' => $rounds,
-                'current_phase' => 'session_completed',
-                'current_phase_label' => 'Session terminee',
-                'current_step' => 'done',
-                'percent' => 100,
-            ],
-            'completed'
-        );
 
         // Decision Memory v1 — persist only if memory-safe (no raw chat stored).
         try { $this->memoryRepo->persistIfSafe($result, $sessionId); } catch (\Throwable $e) {}
@@ -230,29 +167,5 @@ class DecisionRoomController {
             'decision_brief'       => $result['decision_brief'] ?? null,
             'premortem_summary'  => $result['premortem_summary'] ?? null,
         ];
-    }
-
-    /**
-     * @param mixed $value
-     * @param array<int|string,mixed> $default
-     * @return array<int|string,mixed>
-     */
-    private function normalizeJsonArray($value, array $default = []): array
-    {
-        if (is_array($value)) {
-            return $value;
-        }
-        if ($value === null) {
-            return $default;
-        }
-        if (is_string($value)) {
-            $trimmed = trim($value);
-            if ($trimmed === '') {
-                return $default;
-            }
-            $decoded = json_decode($trimmed, true);
-            return is_array($decoded) ? $decoded : $default;
-        }
-        return $default;
     }
 }

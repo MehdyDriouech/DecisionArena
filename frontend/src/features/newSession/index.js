@@ -9,70 +9,6 @@ import {
   renderPlaybookDecisionGuide,
   renderPlaybookOutputContract,
 } from '../../ui/components.js';
-import { providerSupportsModelDiscovery } from './providerModelsCache.js';
-
-function modesUsingStrategicWorkspace(mode) {
-  return ['chat', 'decision-room', 'quick-decision', 'confrontation', 'stress-test', 'jury'].includes(mode);
-}
-
-/** Garde-fou produit : un contexte stratégique « workspace » actif est requis pour lancer ces modes (sauf legacy expert). */
-function renderStrategicWorkspaceGuard(ns, state, escHtml, t) {
-  if (!modesUsingStrategicWorkspace(ns.mode)) return '';
-  const id = String(state.activeStrategicContextId || state.activeStrategicContext?.context_id || '').trim();
-  const active = state.activeStrategicContext;
-  const title = String(active?.title || '').trim();
-  const allContexts = Array.isArray(state.strategicContexts?.items) ? state.strategicContexts.items : [];
-  const switchableContexts = allContexts.filter((ctx) => {
-    const status = String(ctx?.status || 'active');
-    return status === 'active' || status === 'paused';
-  });
-  const selectedContextId = String(ns.pendingStrategicContextId || id || '').trim();
-  const switcherHtml = switchableContexts.length > 0
-    ? `
-      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:end;">
-        <div class="form-group" style="margin:0;min-width:260px;flex:1;">
-          <label for="ns-workspace-context-select" style="font-size:12px;color:var(--text-secondary);">${escHtml('Contexte actif')}</label>
-          <select id="ns-workspace-context-select" class="input" data-field="pendingStrategicContextId">
-            ${switchableContexts.map((ctx) => {
-              const cid = String(ctx?.context_id || '').trim();
-              const ctitle = String(ctx?.title || cid || 'Contexte').trim();
-              const status = String(ctx?.status || 'active').trim();
-              const statusLabel = status === 'paused' ? ' — en pause' : '';
-              return `<option value="${escHtml(cid)}" ${cid === selectedContextId ? 'selected' : ''}>${escHtml(ctitle + statusLabel)}</option>`;
-            }).join('')}
-          </select>
-        </div>
-        <button type="button" class="btn btn-secondary btn-sm" data-action="activate-new-session-strategic-context">
-          ${escHtml('Définir actif')}
-        </button>
-      </div>
-    `
-    : `
-      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
-        <button type="button" class="btn btn-secondary btn-sm" data-nav="strategic-contexts">${escHtml(t('newSession.strategicContext.gotoContexts'))}</button>
-      </div>
-    `;
-  if (id) {
-    return `
-    <div class="card" style="margin-bottom:14px;padding:12px 14px;background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.22);">
-      <div style="font-weight:700;font-size:13px;">${escHtml(t('newSession.strategicContext.activeTitle'))}</div>
-      ${title ? `<div style="margin-top:6px;font-size:13px;color:var(--text-secondary);">${escHtml(title)}</div>` : `<div style="margin-top:6px;font-size:12px;color:var(--text-muted);"><code>${escHtml(id)}</code></div>`}
-      ${switcherHtml}
-    </div>`;
-  }
-  return `
-    <div class="card" style="margin-bottom:14px;padding:12px 14px;border-color:rgba(234,179,8,0.45);background:rgba(234,179,8,0.08);">
-      <div style="font-weight:700;">${escHtml(t('newSession.strategicContext.missingTitle'))}</div>
-      <div style="margin-top:6px;font-size:12px;line-height:1.45;color:var(--text-secondary);">${escHtml(t('newSession.strategicContext.missingBody'))}</div>
-      ${switcherHtml}
-      <div data-ui="expert-only" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
-        <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:12px;color:var(--text-secondary);">
-          <input type="checkbox" ${ns.confirmLegacyNoActiveStrategicContext ? 'checked' : ''} data-field="confirmLegacyNoActiveStrategicContext" style="margin-top:2px;accent-color:var(--accent);width:16px;height:16px;">
-          <span>${escHtml(t('newSession.strategicContext.legacyCheckbox'))}</span>
-        </label>
-      </div>
-    </div>`;
-}
 
 function renderFastDecisionBadge() {
   const t = (key) => window.i18n?.t(key) ?? key;
@@ -249,8 +185,6 @@ function renderStarterCard(card, ns, { escHtml, t, agentIcon, isSimple }) {
 }
 
 function renderPlaybookSelectionSection(ns, { escHtml }) {
-  const isExpertUi = window.DecisionArena?.store?.state?.uiMode === 'expert';
-  if (isExpertUi) return '';
   const lang = window.i18n?.getLanguage?.() || ns.language || 'fr';
   const current = resolvePlaybookForNewSession(ns, lang);
   const groups = getPlaybookIntentGroups(lang).map((group) => `
@@ -463,72 +397,12 @@ function renderContextDocumentSection() {
 }
 
 function renderDecisionMemoryReuseSection(ns, { state, escHtml, t }) {
-  const mp = ns.memoryPicker || { loading: false, error: null, filters: {}, memories: null, compactPreview: null, query: '', scope: 'current', previewMemoryId: '' };
+  const mp = ns.memoryPicker || { open: false, loading: false, error: null, filters: {}, memories: null, compactPreview: null };
   const selected = Array.isArray(ns.selectedMemoryIds) ? ns.selectedMemoryIds : [];
   const preview = mp.compactPreview || null;
   const allowed = Array.isArray(preview?.allowed) ? preview.allowed : [];
   const blocked = Array.isArray(preview?.blocked) ? preview.blocked : [];
   const isExpert = state.uiMode === 'expert';
-  const activeContextId = String(state.activeStrategicContextId || state.activeStrategicContext?.context_id || '').trim();
-  const activeContextTitle = String(state.activeStrategicContext?.title || '').trim();
-  const contexts = Array.isArray(state.strategicContexts?.items) ? state.strategicContexts.items : [];
-  const sessions = Array.isArray(state.sessions) ? state.sessions : [];
-  const sessionsById = new Map(sessions.map((s) => [String(s?.id || ''), String(s?.title || '')]));
-
-  const contextByMemoryId = (() => {
-    const out = new Map();
-    contexts.forEach((ctx) => {
-      const ctxId = String(ctx?.context_id || '').trim();
-      if (!ctxId) return;
-      const ids = Array.isArray(ctx?.linked_memory_ids) ? ctx.linked_memory_ids : [];
-      ids.forEach((id) => {
-        const key = String(id || '').trim();
-        if (!key) return;
-        if (!out.has(key)) out.set(key, []);
-        out.get(key).push(ctx);
-      });
-    });
-    return out;
-  })();
-
-  const relDate = (iso) => {
-    const dt = new Date(String(iso || ''));
-    if (Number.isNaN(dt.getTime())) return '—';
-    const diffMs = Date.now() - dt.getTime();
-    const day = 24 * 60 * 60 * 1000;
-    const days = Math.floor(diffMs / day);
-    if (days < 1) return t('memoryReuse.date.today');
-    if (days < 30) return t('memoryReuse.date.days').replace('{n}', String(days));
-    const months = Math.floor(days / 30);
-    if (months < 12) return t('memoryReuse.date.months').replace('{n}', String(months));
-    const years = Math.floor(months / 12);
-    return t('memoryReuse.date.years').replace('{n}', String(years));
-  };
-
-  const playbookLabel = (id) => {
-    const pb = getPlaybookById(String(id || ''), window.i18n?.getLanguage?.() || 'fr');
-    return pb?.name ? pb.name : String(id || '—');
-  };
-
-  const statusLabel = (raw) => {
-    const map = {
-      proceed: t('decisionMemory.status.proceed'),
-      proceed_with_constraints: t('decisionMemory.status.proceedWithConstraints'),
-      validate_first: t('decisionMemory.status.validateFirst'),
-      pivot: t('decisionMemory.status.pivot'),
-      kill: t('decisionMemory.status.kill'),
-    };
-    const key = String(raw || '').trim();
-    return map[key] || key || '—';
-  };
-
-  const confidenceLabel = (raw) => {
-    const key = String(raw || '').trim().toLowerCase();
-    if (key === 'strong') return t('decisionMemory.confidence.strong');
-    if (key === 'moderate') return t('decisionMemory.confidence.moderate');
-    if (key === 'weak') return t('decisionMemory.confidence.weak');
-    return key || '—';
-  };
 
   const blockedById = (() => {
     const m = new Map();
@@ -537,23 +411,6 @@ function renderDecisionMemoryReuseSection(ns, { state, escHtml, t }) {
     });
     return m;
   })();
-
-  const renderScopeBadge = (memory) => {
-    const memoryId = String(memory?.memory_id || '');
-    const linked = contextByMemoryId.get(memoryId) || [];
-    const linkedIds = linked.map((ctx) => String(ctx?.context_id || '').trim());
-    const hasActive = activeContextId && linkedIds.includes(activeContextId);
-    if (hasActive) {
-      return `<span class="badge badge-success">${escHtml(t('memoryReuse.badge.sameContext'))}</span>`;
-    }
-    if (linked.length > 0) {
-      return `<span class="badge badge-warning">${escHtml(t('memoryReuse.badge.otherContext'))}</span>`;
-    }
-    if (mp.scope === 'current' && activeContextId) {
-      return `<span class="badge badge-success">${escHtml(t('memoryReuse.badge.sameContext'))}</span>`;
-    }
-    return `<span class="badge badge-muted">${escHtml(t('memoryReuse.badge.unknownContext'))}</span>`;
-  };
 
   const warning = (() => {
     const weak = allowed.some((m) => String(m.confidence || '') === 'weak');
@@ -578,463 +435,114 @@ function renderDecisionMemoryReuseSection(ns, { state, escHtml, t }) {
     `;
   })();
 
-  const scopeWarning = mp.scope === 'all'
-    ? `<div class="alert alert-warning" style="margin:10px 0 0;">
-        ${escHtml(t('memoryReuse.scopeAllWarning'))}
-      </div>`
-    : '';
+  const expertOverrideToggle = isExpert ? `
+    <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <label style="display:flex;gap:8px;align-items:center;cursor:pointer;font-size:12px;color:var(--text-secondary);">
+        <input type="checkbox" ${mp.expertOverride ? 'checked' : ''} data-action="toggle-expert-memory-override" style="accent-color:var(--accent);">
+        ${escHtml(t('memoryReuse.expertOverride'))}
+      </label>
+    </div>
+  ` : '';
 
-  const list = Array.isArray(mp.memories) ? mp.memories : [];
-  const listHtml = list.length === 0
-    ? (mp.searched ? `<div style="font-size:12px;color:var(--text-muted);">${escHtml(t('memoryReuse.emptySearch'))}</div>` : '')
-    : list.slice(0, 80).map((m) => {
-      const id = String(m.memory_id || '');
-      const selectedNow = selected.includes(id);
-      const blockedInfo = blockedById.get(id);
-      const linked = contextByMemoryId.get(id) || [];
-      const ctxTitle = linked.length > 0
-        ? String(linked[0]?.title || linked[0]?.context_id || t('memoryReuse.context.unknown'))
-        : (activeContextTitle || t('memoryReuse.context.unknown'));
-      const sessionTitle = sessionsById.get(String(m.session_id || '')) || t('memoryReuse.analysisFallback');
-      const unresolved = Array.isArray(m.unresolved_risks) ? m.unresolved_risks : [];
-      const nextSteps = Array.isArray(m.recommended_next_steps) ? m.recommended_next_steps : [];
-      const assumptions = Array.isArray(m.failed_assumptions) ? m.failed_assumptions : [];
-      const decisionSummary = String(m.decision_summary || '').trim() || '—';
-      const tags = [
-        String(m.playbook_id || ''),
-        String(m.decision_status || ''),
-        String(m.confidence || ''),
-      ].filter(Boolean).slice(0, 3);
-      const showPreview = String(mp.previewMemoryId || '') === id;
-      const stale = String(m?.decay?.staleness_level || '');
-      const lifeState = String(m?.decay?.memory_state || m.memory_state || 'active');
-      const superseded = lifeState === 'superseded';
-      const disableReuse = !isExpert && blockedInfo && ['invalidated', 'archived'].includes(String(blockedInfo.reason || ''));
-
-      return `
-        <article class="card" style="padding:14px 16px;margin-bottom:10px;">
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-            <span class="badge badge-info">${escHtml(playbookLabel(m.playbook_id))}</span>
-            ${renderScopeBadge(m)}
-            ${stale ? `<span class="badge ${stale === 'stale' ? 'badge-danger' : 'badge-warning'}">${escHtml(stale)}</span>` : ''}
-            ${lifeState ? `<span class="badge ${lifeState === 'invalidated' ? 'badge-danger' : lifeState === 'archived' ? 'badge-muted' : lifeState === 'superseded' ? 'badge-warning' : 'badge-success'}">${escHtml(lifeState)}</span>` : ''}
-            <span style="margin-left:auto;font-size:11px;color:var(--text-muted);">${escHtml(relDate(m.created_at))}</span>
-          </div>
-          <div style="margin-top:8px;font-weight:700;font-size:15px;color:var(--text-primary);">${escHtml(sessionTitle)}</div>
-          <div style="margin-top:4px;font-size:13px;color:var(--text-secondary);">${escHtml(statusLabel(m.decision_status))} · ${escHtml(t('memoryReuse.confidenceLabel'))}: ${escHtml(confidenceLabel(m.confidence))}</div>
-          <div style="margin-top:2px;font-size:12px;color:var(--text-muted);">${escHtml(t('memoryReuse.contextLabel'))}: ${escHtml(ctxTitle)}</div>
-          <div style="margin-top:10px;font-size:13px;line-height:1.5;color:var(--text-secondary);">
-            <strong>${escHtml(t('memoryReuse.decisionLabel'))}</strong><br>${escHtml(decisionSummary)}
-          </div>
-          <div style="margin-top:10px;font-size:12px;color:var(--text-secondary);">
-            <strong>${escHtml(t('memoryReuse.risksLabel'))}</strong>
-            ${unresolved.length
-              ? `<ul style="margin:6px 0 0 18px;padding:0;">${unresolved.slice(0, 2).map((x) => `<li>${escHtml(String(x))}</li>`).join('')}</ul>`
-              : `<div style="margin-top:6px;color:var(--text-muted);">—</div>`
-            }
-          </div>
-          ${tags.length ? `<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">${tags.map((tag) => `<span class="badge badge-muted">#${escHtml(tag)}</span>`).join('')}</div>` : ''}
-          ${superseded ? `<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">⚠ ${escHtml(t('memoryReuse.supersededHint'))}</div>` : ''}
-          ${blockedInfo ? `<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">⚠ ${escHtml(t('memoryReuse.blocked'))}: <code>${escHtml(String(blockedInfo.reason || ''))}</code></div>` : ''}
-          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn btn-secondary btn-sm" type="button" data-action="preview-memory-for-new-session" data-memory-id="${escHtml(id)}">
-              ${escHtml(t('memoryReuse.previewButton'))}
-            </button>
-            <button class="btn ${selectedNow ? 'btn-secondary' : 'btn-primary'} btn-sm" type="button" ${disableReuse ? 'disabled' : ''} data-action="toggle-select-memory-for-new-session" data-memory-id="${escHtml(id)}">
-              ${selectedNow ? escHtml(t('memoryReuse.removeReuseButton')) : escHtml(t('memoryReuse.reuseButton'))}
-            </button>
-          </div>
-          ${showPreview ? `
-            <div style="margin-top:12px;padding:12px;border:1px dashed var(--border);border-radius:8px;background:var(--bg-secondary);">
-              <div style="font-weight:700;font-size:12px;color:var(--text-primary);margin-bottom:8px;">${escHtml(t('memoryReuse.previewTitle'))}</div>
-              <div style="font-size:12px;color:var(--text-secondary);line-height:1.5;">
-                <div><strong>${escHtml(t('memoryReuse.injectedLabel'))}</strong></div>
-                <ul style="margin:6px 0 10px 18px;padding:0;">
-                  <li>${escHtml(t('memoryReuse.injected.decision'))}</li>
-                  <li>${escHtml(t('memoryReuse.injected.risks'))}</li>
-                  <li>${escHtml(t('memoryReuse.injected.objections'))}</li>
-                  <li>${escHtml(t('memoryReuse.injected.nextSteps'))}</li>
-                </ul>
-                <div><strong>${escHtml(t('memoryReuse.notInjectedLabel'))}</strong></div>
-                <ul style="margin:6px 0 0 18px;padding:0;">
-                  <li>${escHtml(t('memoryReuse.notInjected.history'))}</li>
-                  <li>${escHtml(t('memoryReuse.notInjected.runtime'))}</li>
-                  <li>${escHtml(t('memoryReuse.notInjected.debates'))}</li>
-                  <li>${escHtml(t('memoryReuse.notInjected.reasoning'))}</li>
-                </ul>
-                ${assumptions.length ? `<div style="margin-top:8px;"><strong>${escHtml(t('memoryReuse.objectionsDetected'))}</strong>: ${escHtml(assumptions.slice(0, 2).join(' | '))}</div>` : ''}
-                ${nextSteps.length ? `<div style="margin-top:6px;"><strong>${escHtml(t('memoryReuse.nextStepsDetected'))}</strong>: ${escHtml(nextSteps.slice(0, 2).join(' | '))}</div>` : ''}
-              </div>
-            </div>
-          ` : ''}
-        </article>
-      `;
-    }).join('');
-
-  const expertFilters = mp.filters || {};
+  const filters = mp.filters || {};
   const filterRow = (key, label, placeholder = '') => `
     <div class="form-group" style="margin:0;">
       <label style="font-size:12px;">${escHtml(label)}</label>
-      <input class="input" type="text" value="${escHtml(expertFilters[key] || '')}" placeholder="${escHtml(placeholder)}"
+      <input class="input" type="text" value="${escHtml(filters[key] || '')}" placeholder="${escHtml(placeholder)}"
         data-action="set-memory-filter" data-filter-key="${escHtml(key)}" style="padding:6px 8px;font-size:12px;">
     </div>`;
+
+  const list = Array.isArray(mp.memories) ? mp.memories : [];
+  const listHtml = list.length === 0
+    ? `<div style="font-size:12px;color:var(--text-muted);">${escHtml(t('memoryReuse.emptySearch'))}</div>`
+    : list.slice(0, 80).map((m) => {
+      const id = String(m.memory_id || '');
+      const checked = selected.includes(id) ? 'checked' : '';
+      const confirmed = m.user_confirmed === 1 || m.user_confirmed === true;
+      const canReuse = confirmed && String(m.contract_version || '') === 'decision_outcome.v1' && String(m.taxonomy_version || '') === 'taxonomy.v1';
+      const badge = canReuse ? `<span class="badge badge-success">${escHtml(t('memoryReuse.reusable'))}</span>` : `<span class="badge badge-warning">${escHtml(t('memoryReuse.notReusable'))}</span>`;
+      const decay = m.decay && typeof m.decay === 'object' ? m.decay : null;
+      const staleness = decay ? String(decay.staleness_level || '') : '';
+      const stateBadge = decay ? String(decay.memory_state || '') : String(m.memory_state || 'active');
+      const staleBadge = staleness ? `<span class="badge ${staleness === 'stale' ? 'badge-danger' : staleness === 'aging' ? 'badge-warning' : 'badge-muted'}">${escHtml(staleness)}</span>` : '';
+      const lifecycleBadge = stateBadge ? `<span class="badge ${stateBadge === 'invalidated' ? 'badge-danger' : stateBadge === 'archived' ? 'badge-muted' : stateBadge === 'superseded' ? 'badge-warning' : 'badge-success'}">${escHtml(stateBadge)}</span>` : '';
+      const blockedInfo = blockedById.get(id);
+      const disablePick = !isExpert && blockedInfo && ['invalidated', 'archived'].includes(String(blockedInfo.reason || ''));
+      return `
+        <label style="display:flex;gap:10px;align-items:flex-start;padding:10px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;cursor:pointer;background:var(--bg-secondary);">
+          <input type="checkbox" ${checked} ${disablePick ? 'disabled' : ''} data-action="toggle-select-memory-for-new-session" data-memory-id="${escHtml(id)}" style="margin-top:3px;accent-color:var(--accent);">
+          <div style="flex:1;min-width:0;">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <span class="badge badge-muted">#${escHtml(id.slice(0, 8))}</span>
+              <span class="badge badge-info">${escHtml(String(m.playbook_id || ''))}</span>
+              <span class="badge badge-muted">${escHtml(String(m.decision_status || ''))}</span>
+              <span class="badge badge-muted">${escHtml(String(m.confidence || ''))}</span>
+              ${lifecycleBadge}
+              ${staleBadge}
+              ${badge}
+            </div>
+            <div style="margin-top:6px;font-size:12px;color:var(--text-secondary);line-height:1.45;">
+              ${escHtml(String(m.decision_summary || ''))}
+            </div>
+            ${blockedInfo ? `<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">⚠ ${escHtml(t('memoryReuse.blocked'))}: <code>${escHtml(String(blockedInfo.reason || ''))}</code></div>` : ''}
+          </div>
+        </label>
+      `;
+    }).join('');
 
   const previewJson = preview ? escHtml(JSON.stringify({ allowed, blocked }, null, 2)) : '';
 
   return `
-    <details class="ns-collapsible" style="max-width:1100px;width:100%;margin-top:14px;margin-bottom:14px;">
+    <details class="ns-collapsible" style="max-width:1100px;width:100%;margin-top:14px;">
       <summary class="ns-collapsible-summary">
-        <span>${escHtml(t('memoryReuse.titleHuman'))}</span>
-        <span class="ns-collapsible-hint">${escHtml(t('memoryReuse.subtitleHuman'))}</span>
+        <span>＋ ${escHtml(t('memoryReuse.title'))}</span>
+        <span class="ns-collapsible-hint">${escHtml(t('memoryReuse.subtitle'))}</span>
       </summary>
       <div class="ns-collapsible-body">
         <div class="card" style="max-width:1100px;width:100%;">
-          <div style="font-weight:700;font-size:16px;color:var(--text-primary);">${escHtml(t('memoryReuse.titleHuman'))}</div>
-          <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">${escHtml(t('memoryReuse.subtitleHuman'))}</div>
-          <div class="form-group" style="margin-top:12px;">
-            <input class="input" type="text" value="${escHtml(String(mp.query || ''))}" placeholder="${escHtml(t('memoryReuse.queryPlaceholder'))}" data-action="set-memory-query">
-          </div>
-          <div style="font-size:12px;color:var(--text-muted);line-height:1.5;margin-top:2px;">
-            ${escHtml(t('memoryReuse.examplesLabel'))}: ${escHtml(t('memoryReuse.examples'))}
-          </div>
-          <div style="margin-top:12px;">
-            <div style="font-size:12px;font-weight:700;color:var(--text-secondary);margin-bottom:6px;">${escHtml(t('memoryReuse.scopeLabel'))}</div>
-            <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--text-secondary);margin-bottom:6px;">
-              <input type="radio" name="memory-scope" value="current" ${mp.scope === 'current' ? 'checked' : ''} data-action="set-memory-scope" style="margin-top:2px;accent-color:var(--accent);">
-              <span>${escHtml(t('memoryReuse.scope.current'))}${activeContextTitle ? ` — ${escHtml(activeContextTitle)}` : ''}</span>
-            </label>
-            <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--text-secondary);margin-bottom:6px;">
-              <input type="radio" name="memory-scope" value="all" ${mp.scope === 'all' ? 'checked' : ''} data-action="set-memory-scope" style="margin-top:2px;accent-color:var(--accent);">
-              <span>${escHtml(t('memoryReuse.scope.all'))}</span>
-            </label>
-            <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--text-secondary);">
-              <input type="radio" name="memory-scope" value="all_with_archives" ${mp.scope === 'all_with_archives' ? 'checked' : ''} data-action="set-memory-scope" style="margin-top:2px;accent-color:var(--accent);">
-              <span>${escHtml(t('memoryReuse.scope.archives'))}</span>
-            </label>
-            ${scopeWarning}
-          </div>
-          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-            <button class="btn btn-secondary btn-sm" type="button" data-action="search-memory-picker" ${mp.loading ? 'disabled' : ''}>
-              ${mp.loading ? '<span class="spinner"></span>' : '↺'} ${escHtml(t('memoryReuse.searchButton'))}
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+            <div style="font-weight:600;font-size:14px;color:var(--text-primary);">🗂️ ${escHtml(t('memoryReuse.title'))}</div>
+            <button class="btn btn-secondary btn-sm" type="button" data-action="toggle-memory-picker">
+              ${mp.open ? escHtml(t('memoryReuse.hide')) : escHtml(t('memoryReuse.browse'))}
             </button>
-            ${mp.error ? `<span style="font-size:12px;color:var(--danger);">⚠️ ${escHtml(mp.error)}</span>` : ''}
-            ${selected.length ? `<span class="badge badge-info">${escHtml(t('memoryReuse.selected'))}: ${selected.length}/5</span>` : ''}
-            ${selected.length ? `<button class="btn btn-secondary btn-sm" type="button" data-action="clear-selected-memories-new-session">${escHtml(t('memoryReuse.clear'))}</button>` : ''}
           </div>
+          ${selected.length ? `
+            <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <span class="badge badge-info">${escHtml(t('memoryReuse.selected'))}: ${selected.length}/5</span>
+              <button class="btn btn-secondary btn-sm" type="button" data-action="clear-selected-memories-new-session">${escHtml(t('memoryReuse.clear'))}</button>
+            </div>
+          ` : ''}
           ${warning}
           ${staleConfirmCta}
-          <div style="margin-top:14px;">
-            ${listHtml}
-          </div>
-
-          ${isExpert ? `
-            <details data-ui="expert-only" class="ns-collapsible" style="margin-top:14px;">
-              <summary class="ns-collapsible-summary">
-                <span>${escHtml(t('memoryReuse.expertPanelTitle'))}</span>
-                <span class="ns-collapsible-hint">${escHtml(t('memoryReuse.expertPanelSubtitle'))}</span>
-              </summary>
-              <div class="ns-collapsible-body">
-                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
-                  <label style="display:flex;gap:8px;align-items:center;cursor:pointer;font-size:12px;color:var(--text-secondary);">
-                    <input type="checkbox" ${mp.expertOverride ? 'checked' : ''} data-action="toggle-expert-memory-override" style="accent-color:var(--accent);">
-                    ${escHtml(t('memoryReuse.expertOverride'))}
-                  </label>
-                </div>
-                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:10px;">
-                  ${filterRow('playbook_id', t('memoryReuse.filter.playbook'), 'founder-sprint')}
-                  ${filterRow('decision_status', t('memoryReuse.filter.status'), 'proceed')}
-                  ${filterRow('confidence', t('memoryReuse.filter.confidence'), 'moderate')}
-                  ${filterRow('from', t('memoryReuse.filter.from'), '2026-01-01')}
-                  ${filterRow('to', t('memoryReuse.filter.to'), '2026-12-31')}
-                  ${filterRow('link_type', t('memoryReuse.filter.linkType'), 'pivot')}
-                  ${filterRow('q', t('memoryReuse.filter.search'), t('memoryReuse.filter.searchHint'))}
-                </div>
-                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
-                  <button class="btn btn-secondary btn-sm" type="button" data-action="load-memory-picker" ${mp.loading ? 'disabled' : ''}>
-                    ${mp.loading ? '<span class="spinner"></span>' : '↺'} ${escHtml(t('memoryReuse.search'))}
-                  </button>
-                </div>
-                <details style="margin-top:12px;">
-                  <summary style="cursor:pointer;color:var(--text-muted);">${escHtml(t('memoryReuse.previewInjected'))}</summary>
-                  <pre style="margin:10px 0 0;white-space:pre-wrap;font-size:11px;color:var(--text-secondary);">${previewJson}</pre>
-                </details>
+          ${expertOverrideToggle}
+          ${mp.open ? `
+            <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
+              <div data-ui="expert-only" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:10px;">
+                ${filterRow('playbook_id', t('memoryReuse.filter.playbook'), 'founder-sprint')}
+                ${filterRow('decision_status', t('memoryReuse.filter.status'), 'proceed')}
+                ${filterRow('confidence', t('memoryReuse.filter.confidence'), 'moderate')}
+                ${filterRow('from', t('memoryReuse.filter.from'), '2026-01-01')}
+                ${filterRow('to', t('memoryReuse.filter.to'), '2026-12-31')}
+                ${filterRow('link_type', t('memoryReuse.filter.linkType'), 'pivot')}
+                ${filterRow('q', t('memoryReuse.filter.search'), t('memoryReuse.filter.searchHint'))}
               </div>
-            </details>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+                <button class="btn btn-secondary btn-sm" type="button" data-action="load-memory-picker" ${mp.loading ? 'disabled' : ''}>
+                  ${mp.loading ? '<span class="spinner"></span>' : '↺'} ${escHtml(t('memoryReuse.search'))}
+                </button>
+                ${mp.error ? `<span style="font-size:12px;color:var(--danger);">⚠️ ${escHtml(mp.error)}</span>` : ''}
+              </div>
+              ${listHtml}
+              <details data-ui="expert-only" style="margin-top:12px;">
+                <summary style="cursor:pointer;color:var(--text-muted);">${escHtml(t('memoryReuse.previewInjected'))}</summary>
+                <pre style="margin:10px 0 0;white-space:pre-wrap;font-size:11px;color:var(--text-secondary);">${previewJson}</pre>
+              </details>
+            </div>
           ` : ''}
         </div>
       </div>
     </details>
   `;
-}
-
-function personaDisplayNameForLlm(personas, agId) {
-  const p = (personas || []).find((x) => String(x.id) === String(agId));
-  return p?.name || agId;
-}
-
-/**
- * Modèle : liste déroulante issue de /api/providers/models quand disponible, sinon saisie libre.
- */
-function renderNsModelControl(ns, state, escHtml, t, opts) {
-  const { variant, agentId, team, selectedProviderId, currentModel } = opts;
-  const pid = String(selectedProviderId || '').trim();
-  const cur = String(currentModel || '').trim();
-  const open = ns.llmModelManualOpen || { agents: {}, teams: {} };
-
-  if (!pid) {
-    return `<input class="input" disabled style="width:160px;font-size:12px;padding:4px 6px;" placeholder="${escHtml(t('newSession.llmRouting.modelNeedProvider'))}" title="${escHtml(t('newSession.llmRouting.modelNeedProvider'))}">`;
-  }
-
-  const providers = state.providers || [];
-  const prow = providers.find((p) => String(p.id) === pid);
-  const cache = (state.providerModelsCache || {})[pid] || { status: 'idle', models: [], error: '' };
-  const manualOpen = variant === 'agent' ? !!open.agents?.[agentId] : !!open.teams?.[team];
-  const loadingish = cache.status === 'loading'
-    || (cache.status === 'idle' && providerSupportsModelDiscovery(prow));
-
-  const modelRows = (cache.models || []).map((m) => {
-    const id = String(m.id || m.name || '').trim();
-    if (!id) return null;
-    const label = String(m.name || m.id || '').trim();
-    const det = String(m.details || '').trim();
-    const text = det ? `${label} (${det})` : label;
-    return { id, text };
-  }).filter(Boolean);
-  const modelIds = new Set(modelRows.map((r) => r.id));
-  const inList = !cur || modelIds.has(cur);
-
-  const selAttrs = variant === 'agent'
-    ? `data-action="set-agent-model-from-list" data-agent-id="${escHtml(agentId)}"`
-    : `data-action="set-team-model-from-list" data-team="${escHtml(team)}"`;
-  const inpAttrs = variant === 'agent'
-    ? `data-action="set-agent-model" data-agent-id="${escHtml(agentId)}"`
-    : `data-action="set-team-model" data-team="${escHtml(team)}"`;
-  const manualOffAttrs = variant === 'agent'
-    ? `data-action="set-agent-model-manual-off" data-agent-id="${escHtml(agentId)}"`
-    : `data-action="set-team-model-manual-off" data-team="${escHtml(team)}"`;
-  const refreshBtn = `<button type="button" class="btn btn-secondary btn-sm" style="font-size:10px;padding:2px 6px;align-self:flex-start;" data-action="refresh-ns-provider-models" data-provider-id="${escHtml(pid)}">${escHtml(t('newSession.llmRouting.refreshModels'))}</button>`;
-
-  if (loadingish) {
-    return `
-      <div style="display:flex;flex-direction:column;gap:4px;min-width:168px;align-items:flex-start;">
-        <select class="input" disabled style="min-width:168px;padding:4px 6px;font-size:12px;">
-          <option>${escHtml(t('newSession.llmRouting.modelsLoading'))}</option>
-        </select>
-        ${refreshBtn}
-      </div>`;
-  }
-
-  const listReady = cache.status === 'ok' && modelRows.length > 0;
-  const useManual = manualOpen || (listReady && cur && !inList) || cache.status === 'error' || (cache.status === 'unsupported' && modelRows.length === 0);
-
-  if (listReady && !useManual) {
-    const optsHtml = [
-      `<option value="">${escHtml(t('newSession.llmRouting.modelProviderDefault'))}</option>`,
-      ...modelRows.map((r) => `<option value="${escHtml(r.id)}" ${cur === r.id ? 'selected' : ''}>${escHtml(r.text)}</option>`),
-      `<option value="__manual__">${escHtml(t('newSession.llmRouting.modelManualOption'))}</option>`,
-    ].join('');
-    return `
-      <div style="display:flex;flex-direction:column;gap:4px;min-width:168px;align-items:flex-start;">
-        <select class="input" style="min-width:168px;padding:4px 6px;font-size:12px;" ${selAttrs}>
-          ${optsHtml}
-        </select>
-        ${refreshBtn}
-      </div>`;
-  }
-
-  const errHint = cache.status === 'error' ? String(cache.error || '') : '';
-  const hintParts = [];
-  if (cache.status === 'unsupported') hintParts.push(t('newSession.llmRouting.modelsUnsupported'));
-  if (errHint) hintParts.push(errHint);
-  const hint = hintParts.length ? `<span style="font-size:10px;color:var(--text-muted);">${escHtml(hintParts.join(' — '))}</span>` : '';
-
-  const backBtn = listReady
-    ? `<button type="button" class="btn btn-secondary btn-sm" style="font-size:10px;padding:2px 6px;align-self:flex-start;" ${manualOffAttrs}>${escHtml(t('newSession.llmRouting.pickFromList'))}</button>`
-    : '';
-
-  return `
-    <div style="display:flex;flex-direction:column;gap:4px;min-width:168px;align-items:flex-start;">
-      <input class="input" type="text" style="width:100%;min-width:140px;padding:4px 6px;font-size:12px;" placeholder="${escHtml(t('newSession.llmAssignment.model'))}" value="${escHtml(cur)}" ${inpAttrs}>
-      ${hint}
-      <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
-        ${backBtn}
-        ${providerSupportsModelDiscovery(prow) ? refreshBtn : ''}
-      </div>
-    </div>`;
-}
-
-function providerRowNormalized(row) {
-  const pid = String(row?.provider_id || '').trim();
-  const model = String(row?.model || '').trim();
-  return pid ? { provider_id: pid, model } : null;
-}
-
-function providerRowsEquivalent(a, b) {
-  const na = providerRowNormalized(a);
-  const nb = providerRowNormalized(b);
-  if (!na && !nb) return true;
-  if (!na || !nb) return false;
-  return na.provider_id === nb.provider_id && na.model === nb.model;
-}
-
-/** Predicted routing source for UI badges (matches runtime priority at session creation). */
-function predictedLlmSourceKey(ns, personas, agId) {
-  const applied = providerRowNormalized((ns.agentProviders || {})[agId]);
-  const draft = providerRowNormalized((ns.agentProviderDrafts || {})[agId]);
-  if (applied && !providerRowsEquivalent(applied, draft)) return 'override_pending';
-  if (!applied && draft) return 'override_pending';
-  if (applied) return 'override_analysis';
-  if (ns.mode === 'confrontation') {
-    const tpa = ns.teamProviderAssignments || {};
-    const inBlue = (ns.blueTeam || []).includes(agId);
-    const inRed = (ns.redTeam || []).includes(agId);
-    if (inBlue && String(tpa.blue?.provider_id || '').trim()) return 'override_team';
-    if (inRed && String(tpa.red?.provider_id || '').trim()) return 'override_team';
-  }
-  const p = (personas || []).find((x) => String(x.id) === String(agId));
-  if (p && (String(p.default_provider || '').trim() || String(p.default_model || '').trim())) return 'persona_default';
-  return 'global_routing';
-}
-
-/** Classe du badge « source » (override actif ≠ grisé comme un bouton disabled). */
-function llmRoutingSourceBadgeClass(sk) {
-  switch (sk) {
-    case 'override_analysis':
-      return 'badge badge-info';
-    case 'override_pending':
-      return 'badge badge-warning';
-    case 'override_team':
-      return 'badge badge-warning';
-    case 'persona_default':
-      return 'badge badge-default';
-    default:
-      return 'badge badge-muted';
-  }
-}
-
-/**
- * Expert-only: analysis/session LLM routing (per-agent for most modes; per-team for confrontation).
- * Team assignment is expanded to session_agent_providers per agent at session creation (backend).
- */
-function renderAnalysisLlmRoutingPanel(ns, state, escHtml, t) {
-  if (state.uiMode !== 'expert') return '';
-  const modes = ['chat', 'decision-room', 'confrontation', 'quick-decision', 'stress-test', 'jury'];
-  if (!modes.includes(ns.mode)) return '';
-
-  const providers = state.providers || [];
-  const activeProviders = providers.filter((p) => p.enabled == 1 || p.enabled === true);
-  const providersById = new Map(providers.map((p) => [String(p.id), p]));
-  if (activeProviders.length < 1) return '';
-
-  const allPersonas = state.personas || [];
-
-  const providerOpts = (selectedId) => [
-    `<option value="">${escHtml(t('newSession.llmRouting.selectProvider'))}</option>`,
-    ...(
-      selectedId
-      && providersById.has(String(selectedId))
-      && !(providersById.get(String(selectedId)).enabled == 1 || providersById.get(String(selectedId)).enabled === true)
-        ? [`<option value="${escHtml(String(selectedId))}" selected>${escHtml((providersById.get(String(selectedId)).name || selectedId) + ' — ' + t('providers.statusDisabled'))}</option>`]
-        : []
-    ),
-    ...activeProviders.map((p) => `<option value="${escHtml(p.id)}" ${selectedId === p.id ? 'selected' : ''}>${escHtml(p.name || p.id)}</option>`),
-  ].join('');
-
-  if (ns.mode === 'confrontation') {
-    const teamAssign = ns.teamProviderAssignments || { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } };
-    const teamDrafts = ns.teamProviderDrafts || teamAssign;
-    const blueAgents = ns.blueTeam || [];
-    const redAgents = ns.redTeam || [];
-    const expansionRows = [
-      ...blueAgents.map((id) => ({ id, team: 'blue' })),
-      ...redAgents.map((id) => ({ id, team: 'red' })),
-    ]
-      .map(({ id, team }) => {
-        const sk = predictedLlmSourceKey(ns, allPersonas, id);
-        const ov = (ns.agentProviders || {})[id] || {};
-        const tpa = teamAssign[team] || {};
-        const effectivePid = String(ov.provider_id || '').trim() || String(tpa.provider_id || '').trim() || '—';
-        const effectiveModel = String(ov.model || '').trim() || String(tpa.model || '').trim() || '—';
-        const teamLabel = team === 'blue' ? t('newSession.llmAssignment.blueTeam') : t('newSession.llmAssignment.redTeam');
-        return `<tr><td style="padding:4px 8px;font-size:11px;">${escHtml(personaDisplayNameForLlm(allPersonas, id))}</td><td style="padding:4px 8px;font-size:11px;">${escHtml(teamLabel)}</td><td style="padding:4px 8px;font-size:11px;">${escHtml(effectivePid)}</td><td style="padding:4px 8px;font-size:11px;">${escHtml(effectiveModel)}</td><td style="padding:4px 8px;font-size:11px;"><span class="${llmRoutingSourceBadgeClass(sk)}">${escHtml(t(`newSession.llmSource.${sk}`))}</span></td></tr>`;
-      })
-      .join('');
-
-    return `
-      <div class="llm-assignment-panel" data-ui="expert-only" style="margin-top:16px;padding:16px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border);">
-        <div style="font-weight:600;font-size:13px;color:var(--text-secondary);margin-bottom:6px;">${escHtml(t('newSession.llmTeamRouting.title'))}</div>
-        <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;line-height:1.45;">${escHtml(t('newSession.llmTeamRouting.blueHelp'))}</div>
-        <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;line-height:1.45;">${escHtml(t('newSession.llmTeamRouting.redHelp'))}</div>
-        <div class="llm-assignment-grid" style="margin-top:6px;">
-          <div class="llm-agent-row" style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
-            <span style="font-size:12px;font-weight:600;min-width:90px;color:#3b82f6;">🔵 ${t('newSession.llmAssignment.blueTeam')}</span>
-            <select class="input" style="flex:1;min-width:120px;padding:4px 6px;font-size:12px;" data-action="set-team-provider" data-team="blue">
-              ${providerOpts(teamDrafts.blue?.provider_id || teamAssign.blue?.provider_id || '')}
-            </select>
-            ${renderNsModelControl(ns, state, escHtml, t, { variant: 'team', team: 'blue', agentId: '', selectedProviderId: teamDrafts.blue?.provider_id || teamAssign.blue?.provider_id || '', currentModel: teamDrafts.blue?.model || teamAssign.blue?.model || '' })}
-            <button type="button" class="btn btn-primary btn-sm" data-action="apply-team-llm-override" data-team="blue">${escHtml(t('newSession.llmTeamRouting.applyBlue'))}</button>
-            <button type="button" class="btn btn-secondary btn-sm" data-action="reset-team-llm-override" data-team="blue">${escHtml(t('newSession.llmTeamRouting.resetBlue'))}</button>
-          </div>
-          <div class="llm-agent-row" style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
-            <span style="font-size:12px;font-weight:600;min-width:90px;color:#ef4444;">🔴 ${t('newSession.llmAssignment.redTeam')}</span>
-            <select class="input" style="flex:1;min-width:120px;padding:4px 6px;font-size:12px;" data-action="set-team-provider" data-team="red">
-              ${providerOpts(teamDrafts.red?.provider_id || teamAssign.red?.provider_id || '')}
-            </select>
-            ${renderNsModelControl(ns, state, escHtml, t, { variant: 'team', team: 'red', agentId: '', selectedProviderId: teamDrafts.red?.provider_id || teamAssign.red?.provider_id || '', currentModel: teamDrafts.red?.model || teamAssign.red?.model || '' })}
-            <button type="button" class="btn btn-primary btn-sm" data-action="apply-team-llm-override" data-team="red">${escHtml(t('newSession.llmTeamRouting.applyRed'))}</button>
-            <button type="button" class="btn btn-secondary btn-sm" data-action="reset-team-llm-override" data-team="red">${escHtml(t('newSession.llmTeamRouting.resetRed'))}</button>
-          </div>
-        </div>
-        <div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
-          <button type="button" class="btn btn-primary btn-sm" data-action="force-team-llm-to-agents">${escHtml(t('newSession.llmTeamRouting.forceApply'))}</button>
-          <span style="font-size:11px;color:var(--text-muted);max-width:520px;line-height:1.45;">${escHtml(t('newSession.llmTeamRouting.forceHelp'))}</span>
-        </div>
-        <details style="margin-top:12px;font-size:12px;">
-          <summary style="cursor:pointer;color:var(--text-muted);">${escHtml(t('newSession.llmTeamRouting.expansionSummary'))}</summary>
-          <div style="font-size:10px;color:var(--text-muted);margin:6px 0;">${escHtml(t('newSession.llmTeamRouting.teamExpandHint'))}</div>
-          <table style="width:100%;border-collapse:collapse;margin-top:4px;border:1px solid var(--border);">
-            <thead><tr style="background:var(--bg-tertiary);font-size:11px;text-align:left;"><th style="padding:4px 8px;">${escHtml(t('newSession.llmRouting.colAgent'))}</th><th style="padding:4px 8px;">${escHtml(t('newSession.llmRouting.colTeam'))}</th><th style="padding:4px 8px;">${escHtml(t('newSession.llmRouting.colProvider'))}</th><th style="padding:4px 8px;">${escHtml(t('newSession.llmRouting.colModel'))}</th><th style="padding:4px 8px;">${escHtml(t('newSession.llmRouting.colSource'))}</th></tr></thead>
-            <tbody>${expansionRows || `<tr><td colspan="5" style="padding:8px;font-size:11px;color:var(--text-muted);">${escHtml(t('newSession.llmAssignment.selectAgentsFirst'))}</td></tr>`}</tbody>
-          </table>
-        </details>
-      </div>`;
-  }
-
-  const agents = ns.selectedAgents || [];
-  if (agents.length === 0) {
-    return `<div class="llm-assignment-panel" data-ui="expert-only" style="margin-top:12px;padding:12px;background:var(--bg-secondary);border-radius:8px;font-size:12px;color:var(--text-muted);">${escHtml(t('newSession.llmAssignment.selectAgentsFirst'))}</div>`;
-  }
-
-  const rows = agents.map((agId) => {
-    const applied = (ns.agentProviders || {})[agId] || {};
-    const draft = (ns.agentProviderDrafts || {})[agId] || applied;
-    const sk = predictedLlmSourceKey(ns, allPersonas, agId);
-    const pMeta = allPersonas.find((x) => String(x.id) === String(agId));
-    const personaDefaults = pMeta && (String(pMeta.default_provider || '').trim() || String(pMeta.default_model || '').trim())
-      ? `${String(pMeta.default_provider || '').trim() || '—'} / ${String(pMeta.default_model || '').trim() || '—'}`
-      : t('newSession.llmRouting.noPersonaDefault');
-    return `
-      <div class="llm-agent-row" style="display:flex;align-items:flex-start;gap:8px;margin-bottom:10px;flex-wrap:wrap;padding-bottom:10px;border-bottom:1px dashed var(--border);">
-        <div style="min-width:120px;flex:1;">
-          <div style="font-size:13px;font-weight:600;color:var(--text-primary);">${escHtml(personaDisplayNameForLlm(allPersonas, agId))}</div>
-          <div style="font-size:10px;color:var(--text-muted);margin-top:2px;">${escHtml(t('newSession.llmRouting.personaDefaultsLabel'))}: ${escHtml(personaDefaults)}</div>
-        </div>
-        <select class="input" style="flex:1;min-width:140px;padding:4px 6px;font-size:12px;" data-action="set-agent-provider" data-agent-id="${escHtml(agId)}">
-          ${providerOpts(draft.provider_id || '')}
-        </select>
-        ${renderNsModelControl(ns, state, escHtml, t, { variant: 'agent', agentId: agId, team: '', selectedProviderId: draft.provider_id || '', currentModel: draft.model || '' })}
-        <span class="${llmRoutingSourceBadgeClass(sk)}" style="align-self:center;font-size:10px;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;" title="${escHtml(t(`newSession.llmSource.${sk}`))}">${escHtml(t(`newSession.llmSource.${sk}`))}</span>
-        <button type="button" class="btn btn-primary btn-sm" style="font-size:11px;padding:4px 8px;align-self:center;" data-action="apply-agent-llm-override" data-agent-id="${escHtml(agId)}">${escHtml(t('newSession.llmRouting.applyOverride'))}</button>
-        <button type="button" class="btn btn-secondary btn-sm" style="font-size:11px;padding:4px 8px;align-self:center;" data-action="reset-agent-llm-override" data-agent-id="${escHtml(agId)}">${escHtml(t('newSession.llmRouting.reset'))}</button>
-      </div>`;
-  }).join('');
-
-  return `
-    <div class="llm-assignment-panel" data-ui="expert-only" style="margin-top:16px;padding:16px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border);">
-      <div style="font-weight:600;font-size:13px;color:var(--text-secondary);margin-bottom:6px;">${escHtml(t('newSession.llmAnalysisRouting.title'))}</div>
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;line-height:1.45;">${escHtml(t('newSession.llmAnalysisRouting.help'))}</div>
-      ${rows}
-    </div>`;
 }
 
 function renderNewSession() {
@@ -1174,8 +682,6 @@ function renderNewSession() {
               </div>
             </div>
 
-            ${renderStrategicWorkspaceGuard(ns, state, escHtml, t)}
-
             <div class="simple-submit-row">
               <button class="btn btn-primary btn-lg" data-action="launch-session" ${state.isLoading ? 'disabled' : ''}>
                 ${state.isLoading ? '<span class="spinner"></span>' : ''}
@@ -1252,8 +758,6 @@ function renderNewSession() {
       <div ${isFastDecision ? 'style="display:none"' : ''}>
       ${agentSectionHtml}
 
-      ${renderAnalysisLlmRoutingPanel(ns, state, escHtml, t)}
-
       ${['chat', 'decision-room', 'quick-decision', 'stress-test', 'jury'].includes(ns.mode) ? `
         <div class="form-group" id="rounds-field">
           <label for="ns-rounds">${ns.mode === 'jury' ? t('jury.rounds') : t('newSession.rounds')} (${ns.rounds}) ${tip(t('tooltip.rounds'))}</label>
@@ -1295,10 +799,79 @@ function renderNewSession() {
         </div>
         </div>
 
+        ${(() => {
+          // LLM Assignment block — only if 2+ providers configured
+          const providers = state.providers || [];
+          const activeProviders = providers.filter((p) => p.enabled == 1 || p.enabled === true);
+          if (activeProviders.length < 2) return '';
+
+          const assignMode = ns.llmAssignmentMode || 'global';
+          const teamAssign = ns.teamProviderAssignments || { blue: {provider_id:'',model:''}, red: {provider_id:'',model:''} };
+          const agentsForLLM = ns.mode === 'confrontation'
+            ? [...new Set([...(ns.blueTeam||[]), ...(ns.redTeam||[])])]
+            : (ns.selectedAgents || []);
+
+          const providerOpts = (selectedId) => [
+            `<option value="">${t('newSession.llmAssignment.provider')} (${t('newSession.llmAssignment.global')})</option>`,
+            ...activeProviders.map((p) => `<option value="${escHtml(p.id)}" ${selectedId === p.id ? 'selected' : ''}>${escHtml(p.name || p.id)}</option>`)
+          ].join('');
+
+          const modeTabStyle = (m) => assignMode === m
+            ? 'padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;background:var(--accent);color:#fff;border:none;cursor:pointer;'
+            : 'padding:6px 14px;font-size:12px;border-radius:6px;background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border);cursor:pointer;';
+
+          const teamRows = ns.mode === 'confrontation' ? `
+            <div class="llm-assignment-grid" style="margin-top:10px;">
+              <div class="llm-agent-row" style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+                <span style="font-size:12px;font-weight:600;min-width:90px;color:#3b82f6;">🔵 ${t('newSession.llmAssignment.blueTeam')}</span>
+                <select class="input" style="flex:1;min-width:120px;padding:4px 6px;font-size:12px;" data-action="set-team-provider" data-team="blue">
+                  ${providerOpts(teamAssign.blue?.provider_id || '')}
+                </select>
+                <input class="input" type="text" placeholder="${t('newSession.llmAssignment.model')}" style="width:130px;padding:4px 6px;font-size:12px;" value="${escHtml(teamAssign.blue?.model || '')}" data-action="set-team-model" data-team="blue">
+              </div>
+              <div class="llm-agent-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <span style="font-size:12px;font-weight:600;min-width:90px;color:#ef4444;">🔴 ${t('newSession.llmAssignment.redTeam')}</span>
+                <select class="input" style="flex:1;min-width:120px;padding:4px 6px;font-size:12px;" data-action="set-team-provider" data-team="red">
+                  ${providerOpts(teamAssign.red?.provider_id || '')}
+                </select>
+                <input class="input" type="text" placeholder="${t('newSession.llmAssignment.model')}" style="width:130px;padding:4px 6px;font-size:12px;" value="${escHtml(teamAssign.red?.model || '')}" data-action="set-team-model" data-team="red">
+              </div>
+            </div>
+          ` : `<div style="font-size:12px;color:var(--text-muted);margin-top:8px;">${t('newSession.llmAssignment.teamNotAvailable')}</div>`;
+
+          const agentRows = agentsForLLM.length === 0
+            ? `<div style="font-size:12px;color:var(--text-muted);margin-top:8px;">${t('newSession.llmAssignment.selectAgentsFirst')}</div>`
+            : agentsForLLM.map((agId) => {
+                const override = (ns.agentProviders || {})[agId] || {};
+                return `
+                  <div class="llm-agent-row" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+                    <span style="font-size:12px;min-width:90px;color:var(--text-secondary);">${escHtml(agId)}</span>
+                    <select class="input" style="flex:1;min-width:120px;padding:4px 6px;font-size:12px;" data-action="set-agent-provider" data-agent-id="${escHtml(agId)}">
+                      ${providerOpts(override.provider_id || '')}
+                    </select>
+                    <input class="input" type="text" placeholder="${t('newSession.llmAssignment.model')}" style="width:130px;padding:4px 6px;font-size:12px;" value="${escHtml(override.model || '')}" data-action="set-agent-model" data-agent-id="${escHtml(agId)}">
+                  </div>`;
+              }).join('');
+
+          return `
+            <div class="llm-assignment-panel" style="margin-top:16px;padding:16px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border);">
+              <div style="font-weight:600;font-size:13px;color:var(--text-secondary);margin-bottom:10px;letter-spacing:.03em;">
+                🤖 ${t('newSession.llmAssignment.title')}
+              </div>
+              <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">${t('newSession.llmAssignment.desc')}</div>
+              <div class="llm-assignment-mode" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;">
+                <button type="button" style="${modeTabStyle('global')}" data-action="set-llm-assignment-mode" data-mode="global">${t('newSession.llmAssignment.global')}</button>
+                <button type="button" style="${modeTabStyle('team')}"   data-action="set-llm-assignment-mode" data-mode="team">${t('newSession.llmAssignment.team')}</button>
+                <button type="button" style="${modeTabStyle('agent')}"  data-action="set-llm-assignment-mode" data-mode="agent">${t('newSession.llmAssignment.agent')}</button>
+              </div>
+              ${assignMode === 'global' ? `<div style="font-size:12px;color:var(--text-muted);">${t('newSession.llmAssignment.globalDesc')}</div>` : ''}
+              ${assignMode === 'team'  ? teamRows : ''}
+              ${assignMode === 'agent' ? `<div class="llm-assignment-grid" style="margin-top:10px;">${agentRows}</div>` : ''}
+            </div>`;
+        })()}
       ` : ''}
 
       </div>
-      ${renderStrategicWorkspaceGuard(ns, state, escHtml, t)}
       <button class="btn btn-primary" data-action="launch-session" ${state.isLoading ? 'disabled' : ''}>
         ${state.isLoading ? '<span class="spinner"></span>' : ''}
         ${continueLabel}

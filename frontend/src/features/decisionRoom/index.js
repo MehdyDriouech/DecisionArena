@@ -12,8 +12,6 @@ import { renderArgumentHeatmapPanel } from '../argumentHeatmap/index.js';
 import { renderDebateReplayPanel } from '../debateReplay/index.js';
 import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
 import { isSixThinkingHatsSession, renderSixThinkingHatsGroupedDebate, renderSixThinkingMethodBanner } from '../../utils/sixThinkingHats.js';
-import { renderLlmRoutingCompact } from '../../utils/llmRoutingUi.js';
-import { renderRunProgressPanel } from '../../ui/runProgressPanel.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -39,7 +37,6 @@ function renderDRAgentCard(msg, isFinal, messageKey = '') {
   const contentHtml = isLong && collapsed
     ? `<div class="agent-content md-content"><p>${preview}…</p></div>`
     : `<div class="agent-content md-content">${renderMarkdown(msg.content)}</div>`;
-  const llmMeta = renderLlmRoutingCompact(msg, { escHtml, t, expert: state.uiMode === 'expert' });
 
   if (isFinal) {
     const chBtn = window.DecisionArena?.utils?.canChallengeMessage?.(msg)
@@ -58,7 +55,7 @@ function renderDRAgentCard(msg, isFinal, messageKey = '') {
         <div style="padding:18px;">${window.DecisionArena?.utils?.formatHitlMessageBadges?.(msg, t, escHtml) || ''}${contentHtml}</div>
         ${isLong ? `<div style="padding:0 18px 14px;"><button class="btn btn-secondary btn-sm" data-action="toggle-agent-message" data-message-id="${escHtml(messageId)}">${collapsed ? 'Voir' : 'Masquer'}</button></div>` : ''}
         ${chBtn}
-        ${llmMeta ? `<div class="agent-card-footer">${llmMeta}</div>` : ''}
+        ${msg.model ? `<div class="agent-card-footer">${msg.provider_id ? `<span>${escHtml(msg.provider_id)}</span>` : ''}<span>${escHtml(msg.model)}</span></div>` : ''}
       </div>
     `;
   }
@@ -78,7 +75,7 @@ function renderDRAgentCard(msg, isFinal, messageKey = '') {
       ${window.DecisionArena?.utils?.canChallengeMessage?.(msg)
     ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;font-size:11px;" data-action="challenge-claim" data-message-id="${escHtml(String(msg.id))}">${escHtml(t('hitl.challenge'))}</button>`
     : ''}
-      ${llmMeta ? `<div class="agent-card-footer">${llmMeta}</div>` : ''}
+      ${msg.model ? `<div class="agent-card-footer">${msg.provider_id ? `<span>${escHtml(msg.provider_id)}</span>` : ''}<span>${escHtml(msg.model)}</span></div>` : ''}
     </div>
   `;
 }
@@ -157,8 +154,6 @@ function renderDecisionRoom() {
   const pmHeaderBadge = session.session_variant === 'premortem'
     ? ` <span class="badge badge-info" style="font-size:11px;vertical-align:middle;">${escHtml(t('premortem.badge'))}</span>`
     : '';
-  const runProgressEntry = session?.id ? state.runProgressBySessionId?.[session.id] : null;
-  const liveRunProgress = runProgressEntry?.data || state.runProgress;
 
   return `
     <div class="full-height-view">
@@ -176,20 +171,13 @@ function renderDecisionRoom() {
             ${!state.drRunning ? `<button class="btn btn-primary" data-action="run-decision-room">${t('dr.run')}</button>` : ''}
             <div class="export-actions">${renderExportButtons(session.id)}</div>
             <button class="btn btn-secondary btn-sm" data-action="goto-chat" data-session-id="${escHtml(session.id)}">${t('dr.chat')}</button>
-            <button class="btn btn-secondary btn-sm" data-nav="analyses">${t('nav.back')}</button>
+            <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
           </div>
         </div>
       </div>
       ${renderContextDocPanel()}
 
       <div class="dr-content">
-        ${state.drRunning ? renderRunProgressPanel(liveRunProgress, {
-    t,
-    escHtml,
-    uiMode: state.uiMode,
-    mode: 'decision-room',
-    polling: state.runProgressPolling || null,
-  }) : ''}
         ${state.drRunning ? `<div class="loading-state"><span class="spinner spinner-lg"></span> ${t('dr.running')}</div>` : ''}
         ${state.drAutoRetryBanner === 'running' ? `<div class="alert alert-warning" style="margin:8px 0;padding:10px 14px;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.4);border-radius:6px;font-size:13px;">⚡ ${t('autoretry.banner.running')}</div>` : ''}
         ${state.drAutoRetryBanner === 'complete' ? `<div class="alert alert-info" style="margin:8px 0;padding:10px 14px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.3);border-radius:6px;font-size:13px;">✅ ${t('autoretry.banner.complete')}</div>` : ''}

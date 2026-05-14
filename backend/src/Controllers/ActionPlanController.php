@@ -3,7 +3,6 @@ namespace Controllers;
 
 use Http\Request;
 use Http\Response;
-use Infrastructure\Logging\Logger;
 use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\MessageRepository;
 use Infrastructure\Persistence\VerdictRepository;
@@ -19,7 +18,6 @@ class ActionPlanController {
     private ActionPlanRepository $planRepo;
     private ProviderRepository   $providerRepo;
     private PromptBuilder        $promptBuilder;
-    private Logger               $logger;
 
     public function __construct() {
         $this->sessionRepo   = new SessionRepository();
@@ -28,7 +26,6 @@ class ActionPlanController {
         $this->planRepo      = new ActionPlanRepository();
         $this->providerRepo  = new ProviderRepository();
         $this->promptBuilder = new PromptBuilder();
-        $this->logger        = new Logger();
     }
 
     public function show(Request $req): array {
@@ -62,15 +59,6 @@ class ActionPlanController {
                 $model    = $data['model'] ?? $providerData['default_model'];
                 $provider = ProviderFactory::create($providerData);
                 $msgs     = $this->promptBuilder->buildActionPlanMessages($sessionContent, $language);
-                $this->logger->logPromptBuild('prompt_built_action_plan', [
-                    'metadata' => [
-                        'mode' => 'action-plan',
-                        'message_count' => count($msgs),
-                        'character_count' => $this->countMessageChars($msgs),
-                        'language' => $language,
-                        'session_id' => $id,
-                    ],
-                ]);
                 $raw      = $provider->chat($msgs, $model);
 
                 // Strip markdown code fences if present
@@ -254,14 +242,5 @@ class ActionPlanController {
             mt_rand(0, 0x3fff) | 0x8000,
             mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
         );
-    }
-
-    private function countMessageChars(array $messages): int
-    {
-        $chars = 0;
-        foreach ($messages as $message) {
-            $chars += mb_strlen((string)($message['content'] ?? ''), 'UTF-8');
-        }
-        return $chars;
     }
 }

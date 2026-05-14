@@ -3,58 +3,24 @@ namespace Domain\Orchestration;
 
 use Domain\Agents\AgentAssembler;
 use Domain\Providers\ProviderRouter;
-use Infrastructure\Logging\Logger;
 use Infrastructure\Persistence\MessageRepository;
-use Infrastructure\Persistence\SessionAgentProvidersRepository;
-use Infrastructure\Persistence\SessionRepository;
 
 class ChatRunner {
     private AgentAssembler $assembler;
     private PromptBuilder $promptBuilder;
     private MentionDetector $mentionDetector;
     private ProviderRouter $providerRouter;
-    private Logger $logger;
     private MessageRepository $messageRepo;
-    private SessionRepository $sessionRepo;
-    private SessionAgentProvidersRepository $agentProvidersRepo;
 
     public function __construct() {
         $this->assembler       = new AgentAssembler();
         $this->promptBuilder   = new PromptBuilder();
         $this->mentionDetector = new MentionDetector();
         $this->providerRouter  = new ProviderRouter();
-        $this->logger          = new Logger();
         $this->messageRepo     = new MessageRepository();
-        $this->sessionRepo     = new SessionRepository();
-        $this->agentProvidersRepo = new SessionAgentProvidersRepository();
     }
 
     public function run(
-        string $sessionId,
-        string $userMessage,
-        array $selectedAgents,
-        string $sessionContext = '',
-        string $language = 'en',
-        ?array $contextDoc = null,
-        ?string $decisionDynamicsPreset = null
-    ): array {
-        $result = $this->runWithRuntime(
-            $sessionId,
-            $userMessage,
-            $selectedAgents,
-            $sessionContext,
-            $language,
-            $contextDoc,
-            $decisionDynamicsPreset
-        );
-
-        return $result['messages'];
-    }
-
-    /**
-     * @return array<string,mixed>
-     */
-    public function runWithRuntime(
         string $sessionId,
         string $userMessage,
         array $selectedAgents,
@@ -68,17 +34,7 @@ class ChatRunner {
 
         $history     = $this->messageRepo->findBySession($sessionId);
         $newMessages = [];
-        $runtimeTraces = [];
-        $agentOverrides = $this->agentProvidersRepo->findBySession($sessionId);
         $dynamicsPreset = \Domain\Agents\DecisionDynamicsPreset::normalizeId($decisionDynamicsPreset);
-        $strategicCtx = null;
-        try {
-            $sessRow = $this->sessionRepo->findById($sessionId);
-            if ($sessRow && !empty($sessRow['strategic_context_id'])) {
-                $strategicCtx = (string)$sessRow['strategic_context_id'];
-            }
-        } catch (\Throwable) {
-        }
 
         foreach ($respondingAgents as $agentId) {
             $agent = $this->assembler->assemble($agentId, null, null, $dynamicsPreset);
@@ -92,45 +48,10 @@ class ChatRunner {
                     $userMessage,
                     $language,
                     $contextDoc,
-                    $sessionId,
-                    $strategicCtx
+                    $sessionId
                 );
-                $governed = CognitiveRuntimeGovernance::tracePromptPayload(
-                    $messages,
-                    [
-                        'session_id' => $sessionId,
-                        'strategic_context_id' => $strategicCtx,
-                        'round' => null,
-                        'agent_id' => $agentId,
-                        'mode' => 'chat',
-                    ],
-                    'chat_user_payload',
-                    'orchestration',
-                    'chat_runtime_user_payload'
-                );
-                $messages = $governed['messages'];
-                $promptMetaJson = $governed['meta_json'];
-                if (is_array($governed['trace'] ?? null)) {
-                    $runtimeTraces[] = $governed['trace'];
-                }
-                $this->logger->logPromptBuild('prompt_built_chat', [
-                    'agent_id' => $agent->id,
-                    'metadata' => [
-                        'mode' => 'chat',
-                        'message_count' => count($messages),
-                        'character_count' => $this->countMessageChars($messages),
-                        'context_doc_injected' => !empty($contextDoc['content']),
-                        'session_id' => $sessionId,
-                    ],
-                ]);
 
-                $routed  = $this->providerRouter->chat(
-                    $messages,
-                    $agent,
-                    null,
-                    null,
-                    $this->resolveAgentOverride($agentOverrides, (string)$agentId)
-                );
+                $routed  = $this->providerRouter->chat($messages, $agent);
                 $content = $routed['content'];
 
                 $msg = $this->messageRepo->create([
@@ -145,16 +66,7 @@ class ChatRunner {
                     'requested_model'          => $routed['requested_model'] ?? null,
                     'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
                     'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
-                    'routing_source'           => $routed['routing_source'] ?? null,
-                    'resolved_provider_id'     => $routed['resolved_provider_id'] ?? null,
-                    'resolved_provider_label'  => $routed['resolved_provider_label'] ?? null,
-                    'resolved_model'           => $routed['resolved_model'] ?? null,
-                    'session_override_present' => $routed['session_override_present'] ?? null,
-                    'persona_default_provider_ignored' => $routed['persona_default_provider_ignored'] ?? null,
-                    'fallback_from_provider_id' => $routed['fallback_from_provider_id'] ?? null,
-                    'fallback_from_model'      => $routed['fallback_from_model'] ?? null,
                     'round'                    => null,
-                    'meta_json'                => $promptMetaJson,
                     'content'                  => $content,
                     'created_at'               => date('c'),
                 ]);
@@ -181,9 +93,7 @@ class ChatRunner {
             }
         }
 
-        return array_merge([
-            'messages' => $newMessages,
-        ], CognitiveRuntimeGovernance::summarizeTraces($runtimeTraces, 'chat'));
+        return $newMessages;
     }
 
     private function uuid(): string {
@@ -195,36 +105,5 @@ class ChatRunner {
             mt_rand(0, 0x3fff) | 0x8000,
             mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
         );
-    }
-
-    private function countMessageChars(array $messages): int
-    {
-        $chars = 0;
-        foreach ($messages as $message) {
-            $chars += mb_strlen((string)($message['content'] ?? ''), 'UTF-8');
-        }
-        return $chars;
-    }
-
-    /**
-     * @param array<string, array{provider_id?: string, model?: string|null}> $agentOverrides
-     * @return array{provider_id?: string, model?: string|null}|null
-     */
-    private function resolveAgentOverride(array $agentOverrides, string $agentId): ?array
-    {
-        $exact = trim($agentId);
-        if ($exact !== '' && isset($agentOverrides[$exact]) && is_array($agentOverrides[$exact])) {
-            return $agentOverrides[$exact];
-        }
-        $lower = strtolower($exact);
-        if ($lower === '') {
-            return null;
-        }
-        foreach ($agentOverrides as $key => $row) {
-            if (strtolower(trim((string)$key)) === $lower && is_array($row)) {
-                return $row;
-            }
-        }
-        return null;
     }
 }

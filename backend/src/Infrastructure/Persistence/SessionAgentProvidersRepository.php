@@ -20,11 +20,7 @@ class SessionAgentProvidersRepository {
 
         $result = [];
         foreach ($rows as $row) {
-            $normalizedAgentId = strtolower(trim((string)$row['agent_id']));
-            if ($normalizedAgentId === '') {
-                continue;
-            }
-            $result[$normalizedAgentId] = [
+            $result[(string)$row['agent_id']] = [
                 'provider_id' => $row['provider_id'],
                 'model'       => $row['model'],
             ];
@@ -48,14 +44,10 @@ class SessionAgentProvidersRepository {
         );
 
         foreach ($agentProviders as $agentId => $overrides) {
-            $normalizedAgentId = strtolower(trim((string)$agentId));
-            if ($normalizedAgentId === '') {
-                continue;
-            }
             $insertStmt->execute([
                 ':id'          => $this->uuid(),
                 ':session_id'  => $sessionId,
-                ':agent_id'    => $normalizedAgentId,
+                ':agent_id'    => (string)$agentId,
                 ':provider_id' => $overrides['provider_id'] ?? null,
                 ':model'       => $overrides['model'] ?? null,
             ]);

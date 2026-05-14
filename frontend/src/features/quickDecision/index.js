@@ -11,7 +11,6 @@ import { renderGraphViewPanel } from '../graphView/index.js';
 import { renderArgumentHeatmapPanel } from '../argumentHeatmap/index.js';
 import { renderDebateReplayPanel } from '../debateReplay/index.js';
 import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
-import { renderRunProgressPanel } from '../../ui/runProgressPanel.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -27,8 +26,6 @@ function renderQuickDecision() {
   const session = state.currentSession;
   if (!session) return `<div class="view-container"><p>${t('chat.noSession')}</p></div>`;
   const results = state.qdResults;
-  const runProgressEntry = session?.id ? state.runProgressBySessionId?.[session.id] : null;
-  const liveRunProgress = runProgressEntry?.data || state.runProgress;
 
   return `
     <div class="full-height-view">
@@ -45,20 +42,13 @@ function renderQuickDecision() {
           <div class="session-result-actions">
             ${!state.qdRunning ? `<button class="btn btn-primary" data-action="run-quick-decision">${t('qd.run')}</button>` : ''}
             <div class="export-actions">${renderExportButtons(session.id)}</div>
-            <button class="btn btn-secondary btn-sm" data-nav="analyses">${t('nav.back')}</button>
+            <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
           </div>
         </div>
       </div>
       ${renderContextDocPanel()}
 
       <div class="dr-content">
-        ${state.qdRunning ? renderRunProgressPanel(liveRunProgress, {
-    t,
-    escHtml,
-    uiMode: state.uiMode,
-    mode: 'quick-decision',
-    polling: state.runProgressPolling || null,
-  }) : ''}
         ${state.qdRunning ? `<div class="loading-state"><span class="spinner spinner-lg"></span> ${t('qd.running')}</div>` : ''}
 
         ${!results && !state.qdRunning ? `

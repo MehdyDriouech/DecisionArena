@@ -15,21 +15,9 @@ class SocialPromptContextBuilder {
      *
      * @param array{GO:int,NO-GO:int,ITERATE:int} $majority
      */
-    public function buildUserBlock(
-        string $sessionId,
-        string $agentId,
-        array $majority,
-        ?string $sessionStrategicContextId = null,
-        bool $includeLegacyNullRows = false
-    ): string {
-        $summary = $this->repo->summarizeForPrompt(
-            $sessionId,
-            $agentId,
-            $sessionStrategicContextId,
-            $includeLegacyNullRows
-        );
+    public function buildUserBlock(string $sessionId, string $agentId, array $majority): string {
+        $summary = $this->repo->summarizeForPrompt($sessionId, $agentId);
         $lines = $summary['text_lines'] ?? [];
-        $meta = is_array($summary['meta'] ?? null) ? $summary['meta'] : [];
 
         $out = "## Social Dynamics Context\n\n";
         $out .= "Your current relationships in this session:\n";
@@ -39,11 +27,6 @@ class SocialPromptContextBuilder {
             foreach ($lines as $line) {
                 $out .= '- ' . $line . "\n";
             }
-        }
-        if (($meta['legacy_unscoped_session'] ?? false) === true) {
-            $out .= "- ⚠ Legacy social data (non-contextualized): no strategic context linked to this session.\n";
-        } elseif (($meta['include_legacy'] ?? false) === true && ($meta['strict_context'] ?? false) === false) {
-            $out .= "- ⚠ Legacy social rows included by explicit expert opt-in.\n";
         }
 
         $out .= "\nCurrent majority position:\n";

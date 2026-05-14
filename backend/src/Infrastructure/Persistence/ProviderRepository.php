@@ -107,16 +107,6 @@ class ProviderRepository {
         $stmt->execute([$id]);
     }
 
-    public function setEnabled(string $id, bool $enabled): ?array {
-        $stmt = $this->pdo->prepare('UPDATE providers SET enabled = :enabled, updated_at = :updated_at WHERE id = :id');
-        $stmt->execute([
-            ':id' => $id,
-            ':enabled' => $enabled ? 1 : 0,
-            ':updated_at' => date('c'),
-        ]);
-        return $this->findById($id);
-    }
-
     private function assertNoDuplicateLocalBaseUrl(array $data): void {
         $type = strtolower((string)($data['type'] ?? ''));
         if (!in_array($type, ['ollama', 'lmstudio'], true)) {

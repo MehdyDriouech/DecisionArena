@@ -119,10 +119,9 @@ function applyAnalysisFamily(familyId) {
     facilitationFramework: null,
     presetRationale: null,
     productPreset: null,
+    llmAssignmentMode: 'global',
     agentProviders: {},
-    agentProviderDrafts: {},
     teamProviderAssignments: { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } },
-    teamProviderDrafts: { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } },
   };
 
   return true;

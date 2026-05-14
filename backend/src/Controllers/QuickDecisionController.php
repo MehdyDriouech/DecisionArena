@@ -7,8 +7,6 @@ use Http\Response;
 use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\ContextDocumentRepository;
 use Infrastructure\Persistence\DecisionMemoryRepository;
-use Infrastructure\Persistence\SessionAgentProvidersRepository;
-use Infrastructure\Persistence\RunStatusRepository;
 use Domain\DecisionMemory\DecisionMemoryContextBuilder;
 use Domain\Orchestration\QuickDecisionRunner;
 use Domain\Orchestration\PromptBuilder;
@@ -19,14 +17,12 @@ class QuickDecisionController {
     private QuickDecisionRunner       $runner;
     private ContextDocumentRepository $docRepo;
     private DecisionMemoryRepository  $memoryRepo;
-    private RunStatusRepository       $runStatusRepo;
 
     public function __construct() {
         $this->sessionRepo = new SessionRepository();
         $this->runner      = new QuickDecisionRunner();
         $this->docRepo     = new ContextDocumentRepository();
         $this->memoryRepo  = new DecisionMemoryRepository();
-        $this->runStatusRepo = new RunStatusRepository();
     }
 
     public function run(Request $req): array {
@@ -72,63 +68,17 @@ class QuickDecisionController {
         }
         $contextDoc = (new PromptBuilder())->prepareContextDocumentForPrompt($rawDoc);
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($session['decision_threshold'] ?? null);
-        $agentProviders = (new SessionAgentProvidersRepository())->findBySession($sessionId);
 
-        $strategicCtx = isset($session['strategic_context_id']) && (string)$session['strategic_context_id'] !== ''
-            ? (string)$session['strategic_context_id'] : null;
-        $this->sessionRepo->update($sessionId, ['status' => 'running']);
-        $this->runStatusRepo->initialize($sessionId, 'quick-decision', 2);
-        $this->runStatusRepo->appendEvent(
+        $result = $this->runner->run(
             $sessionId,
-            [
-                'level' => 'info',
-                'phase' => 'session_started',
-                'round' => 0,
-                'label' => 'Session demarree',
-            ],
-            [
-                'current_round' => 0,
-                'total_rounds' => 2,
-                'current_phase' => 'session_started',
-                'current_phase_label' => 'Session demarree',
-                'current_step' => 'startup',
-                'percent' => 1,
-            ],
-            'running'
+            $objective,
+            $selectedAgents,
+            $language,
+            $forceDisagreement,
+            $contextDoc,
+            $decisionThreshold,
+            $session['decision_dynamics_preset'] ?? null
         );
-        try {
-            $result = $this->runner->run(
-                $sessionId,
-                $objective,
-                $selectedAgents,
-                $language,
-                $forceDisagreement,
-                $contextDoc,
-                $agentProviders,
-                $decisionThreshold,
-                $session['decision_dynamics_preset'] ?? null,
-                $strategicCtx
-            );
-        } catch (\Throwable $e) {
-            $this->sessionRepo->update($sessionId, ['status' => 'draft']);
-            $this->runStatusRepo->appendEvent(
-                $sessionId,
-                [
-                    'level' => 'error',
-                    'phase' => 'session_failed',
-                    'round' => null,
-                    'label' => 'Execution echouee',
-                ],
-                [
-                    'current_phase' => 'session_failed',
-                    'current_phase_label' => 'Session en echec',
-                    'current_step' => 'failed',
-                ],
-                'failed',
-                (string)$e->getMessage()
-            );
-            return Response::error('Quick decision run failed: ' . $e->getMessage(), 500);
-        }
 
         $memoryReuse = [
             'reuse_mode' => $injectInfo ? 'manual' : null,
@@ -167,24 +117,6 @@ class QuickDecisionController {
                 JSON_UNESCAPED_UNICODE
             ),
         ]);
-        $this->runStatusRepo->appendEvent(
-            $sessionId,
-            [
-                'level' => 'info',
-                'phase' => 'session_completed',
-                'round' => 2,
-                'label' => 'Session terminee',
-            ],
-            [
-                'current_round' => 2,
-                'total_rounds' => 2,
-                'current_phase' => 'session_completed',
-                'current_phase_label' => 'Session terminee',
-                'current_step' => 'done',
-                'percent' => 100,
-            ],
-            'completed'
-        );
 
         // Decision Memory v1 — persist only if memory-safe.
         try { $this->memoryRepo->persistIfSafe($result, $sessionId); } catch (\Throwable $e) {}

@@ -1,69 +1,10 @@
 /* Global action handlers — language switch, error clear */
-import { dispatchAction, registerAction } from './events.js';
+import { registerAction } from './events.js';
 
 function registerGlobalHandlers() {
-  registerAction('cancel-pending-confirmation', ({ element }) => {
-    const state = window.DecisionArena.store.state;
-    const id = element?.dataset?.confirmId || '';
-    if (!state.pendingConfirmation || (id && state.pendingConfirmation.id !== id)) return;
-    state.pendingConfirmation = null;
-    window.DecisionArena.render?.();
-  });
-
-  registerAction('confirm-pending-confirmation', async ({ element }) => {
-    const state = window.DecisionArena.store.state;
-    const pending = state.pendingConfirmation;
-    const id = element?.dataset?.confirmId || '';
-    if (!pending || (id && pending.id !== id)) return;
-
-    const card = element?.closest?.('[data-confirm-card]');
-    const fieldValues = {};
-    let missingLabel = '';
-    card?.querySelectorAll?.('[data-confirm-field]')?.forEach((field) => {
-      const name = field.dataset.confirmField;
-      if (!name) return;
-      const value = String(field.value || '').trim();
-      fieldValues[name] = value;
-      if (!value && field.dataset.confirmRequired === '1' && !missingLabel) {
-        const label = field.closest('.form-group')?.querySelector('label')?.textContent || name;
-        missingLabel = label.replace('*', '').trim();
-      }
-    });
-
-    if (missingLabel) {
-      pending.fields = (pending.fields || []).map((field) => ({
-        ...field,
-        value: Object.prototype.hasOwnProperty.call(fieldValues, field.name) ? fieldValues[field.name] : field.value,
-      }));
-      pending.fieldError = window.i18n?.getLanguage?.() === 'en'
-        ? `${missingLabel} is required before confirming.`
-        : `${missingLabel} est requis avant de confirmer.`;
-      window.DecisionArena.render?.();
-      return;
-    }
-
-    state.pendingConfirmation = null;
-    await dispatchAction(pending.action, {
-      confirmed: true,
-      confirmationPayload: { ...(pending.payload || {}), ...fieldValues },
-      element: {
-        dataset: {
-          ...(pending.payload || {}),
-          ...fieldValues,
-          confirmed: '1',
-        },
-      },
-    });
-  });
-
   registerAction('clear-error', () => {
     const state = window.DecisionArena.store.state;
     state.error = null;
-    window.DecisionArena.render?.();
-  });
-  registerAction('clear-toast', () => {
-    const state = window.DecisionArena.store.state;
-    state.toast = null;
     window.DecisionArena.render?.();
   });
 
@@ -114,25 +55,6 @@ function registerGlobalHandlers() {
     }
     try {
       localStorage.setItem('da_collapsed_panels', JSON.stringify([...state.collapsedPanels]));
-    } catch (_) {}
-    window.DecisionArena.render?.();
-  });
-
-  registerAction('toggle-analyses-submenu', () => {
-    const state = window.DecisionArena.store.state;
-    const current = typeof state.analysesSidebarOpen === 'boolean'
-      ? state.analysesSidebarOpen
-      : (() => {
-        try {
-          return localStorage.getItem('da_nav_analyses_open') !== '0';
-        } catch (_) {
-          return true;
-        }
-      })();
-    const next = !current;
-    state.analysesSidebarOpen = next;
-    try {
-      localStorage.setItem('da_nav_analyses_open', next ? '1' : '0');
     } catch (_) {}
     window.DecisionArena.render?.();
   });

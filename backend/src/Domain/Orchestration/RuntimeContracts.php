@@ -66,8 +66,6 @@ final class RuntimeContracts
         if (str_contains($l, 'proceed') && str_contains($l, 'constraint')) return 'proceed_with_constraints';
         if (str_contains($l, 'proceed')) return 'proceed';
         if (str_contains($l, 'validate')) return 'validate_first';
-        if ($l === 'insufficient_context' || $l === 'no_consensus' || $l === 'blocked') return 'validate_first';
-        if ($l === 'no_go') return 'kill';
         if (str_contains($l, 'pivot') || str_contains($l, 'iterate')) return 'pivot';
         if (str_contains($l, 'kill') || str_contains($l, 'stop')) return 'kill';
 

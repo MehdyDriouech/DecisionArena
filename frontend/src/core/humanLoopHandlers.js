@@ -5,8 +5,6 @@ import {
   resolveChallengeTargetAgent,
   canChallengeMessage,
 } from '../utils/messageLookup.js';
-import { strategicContextPayloadForApi } from '../utils/strategicContextPayload.js';
-import { mapAnalysisLifecycle } from './store.js';
 
 function getCtx() {
   const DA = window.DecisionArena;
@@ -94,13 +92,6 @@ function registerHumanLoopHandlers() {
     if (!sessionId) return;
 
     const { state, render, navigate, SessionService, t } = getCtx();
-    const source = state.sessions.find((s) => String(s.id) === String(sessionId));
-    const lifecycle = mapAnalysisLifecycle(source || null);
-    if (!['completed', 'archived'].includes(lifecycle.primaryStatus)) {
-      state.error = 'Fork indisponible: seules les analyses terminées ou archivées peuvent être forkées.';
-      render();
-      return;
-    }
 
     try {
       state.isLoading = true;
@@ -108,9 +99,8 @@ function registerHumanLoopHandlers() {
       render();
 
       const result = await SessionService.rerun(sessionId, {
-        variations:            ['fork'],
+        variations:            [],
         keep_context_document: true,
-        ...strategicContextPayloadForApi(state),
       });
 
       const child = result?.session;
@@ -161,13 +151,6 @@ function registerHumanLoopHandlers() {
     if (!sessionId) return;
 
     const { state, render, navigate, SessionService, t } = getCtx();
-    const source = state.sessions.find((s) => String(s.id) === String(sessionId));
-    const lifecycle = mapAnalysisLifecycle(source || null);
-    if (!['completed', 'archived'].includes(lifecycle.primaryStatus)) {
-      state.error = 'Relance indisponible: seules les analyses terminées ou archivées peuvent être rejouées.';
-      render();
-      return;
-    }
 
     try {
       state.isLoading = true;
@@ -178,7 +161,6 @@ function registerHumanLoopHandlers() {
         variations:               [],
         keep_context_document:   true,
         include_challenge_context: true,
-        ...strategicContextPayloadForApi(state),
       });
 
       const child = result?.session;

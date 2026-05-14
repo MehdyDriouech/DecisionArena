@@ -50,72 +50,6 @@ function renderAlert({ text = '', bodyHtml = '', variant = 'info' } = {}) {
   return `<div class="alert alert-${escapeHtml(variant)}">${content}</div>`;
 }
 
-function renderPendingConfirmation(confirm, opts = {}) {
-  if (!confirm || typeof confirm !== 'object') return '';
-  const inlineOnly = opts.inlineOnly === true;
-  const modalOnly = opts.modalOnly === true;
-  const mode = confirm.mode === 'inline' ? 'inline' : 'modal';
-  if (inlineOnly && mode !== 'inline') return '';
-  if (modalOnly && mode !== 'modal') return '';
-
-  const uiMode = normalizeComponentUiMode(opts.uiMode ?? window.DecisionArena?.store?.state?.uiMode);
-  const title = escapeHtml(confirm.title || '');
-  const body = confirm.body
-    ? `<div style="margin-top:6px;font-size:13px;color:var(--text-secondary);line-height:1.45;">${escapeHtml(confirm.body)}</div>`
-    : '';
-  const expert = uiMode === 'expert' && confirm.expertBody
-    ? `<div data-ui="expert-only" style="margin-top:8px;font-size:12px;color:var(--text-muted);line-height:1.45;">${escapeHtml(confirm.expertBody)}</div>`
-    : '';
-  const error = confirm.fieldError
-    ? `<div class="error-banner" style="margin-top:10px;padding:8px 10px;font-size:12px;">${escapeHtml(confirm.fieldError)}</div>`
-    : '';
-  const fields = (Array.isArray(confirm.fields) ? confirm.fields : []).map((field) => {
-    const name = String(field.name || '').trim();
-    if (!name) return '';
-    const label = escapeHtml(field.label || name);
-    const placeholder = escapeHtml(field.placeholder || '');
-    const value = escapeHtml(field.value || '');
-    const required = field.required ? ' data-confirm-required="1"' : '';
-    if (field.type === 'textarea') {
-      return `
-        <div class="form-group" style="margin:10px 0 0;">
-          <label>${label}${field.required ? ' *' : ''}</label>
-          <textarea class="textarea" data-confirm-field="${escapeHtml(name)}"${required} placeholder="${placeholder}" style="min-height:72px;">${value}</textarea>
-        </div>`;
-    }
-    return `
-      <div class="form-group" style="margin:10px 0 0;">
-        <label>${label}${field.required ? ' *' : ''}</label>
-        <input class="input" data-confirm-field="${escapeHtml(name)}"${required} value="${value}" placeholder="${placeholder}">
-      </div>`;
-  }).join('');
-  const confirmClass = confirm.tone === 'danger' ? 'btn-danger' : 'btn-primary';
-  const border = confirm.tone === 'danger' ? 'rgba(239,68,68,0.45)' : 'rgba(245,158,11,0.45)';
-  const bg = confirm.tone === 'danger' ? 'rgba(239,68,68,0.06)' : 'rgba(245,158,11,0.07)';
-  const card = `
-    <div data-confirm-card data-confirm-id="${escapeHtml(confirm.id)}" class="card confirmation-card" style="padding:12px 14px;border-color:${border};background:${bg};">
-      <div style="font-weight:800;color:var(--text-primary);">${title}</div>
-      ${body}
-      ${expert}
-      ${fields}
-      ${error}
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
-        <button type="button" class="btn ${confirmClass} btn-sm" data-action="confirm-pending-confirmation" data-confirm-id="${escapeHtml(confirm.id)}">
-          ${escapeHtml(confirm.confirmLabel || 'Confirm')}
-        </button>
-        <button type="button" class="btn btn-secondary btn-sm" data-action="cancel-pending-confirmation" data-confirm-id="${escapeHtml(confirm.id)}">
-          ${escapeHtml(confirm.cancelLabel || 'Cancel')}
-        </button>
-      </div>
-    </div>`;
-
-  if (mode === 'inline') return `<div style="margin-top:12px;">${card}</div>`;
-  return `
-    <div class="persona-modal-overlay confirmation-overlay" data-confirm-card data-confirm-id="${escapeHtml(confirm.id)}">
-      <div class="persona-modal" style="max-width:500px;">${card}</div>
-    </div>`;
-}
-
 function renderActionBar({ actionsHtml = '', className = '' } = {}) {
   const cls = ['action-bar', className].filter(Boolean).join(' ');
   return `<div class="${escapeHtml(cls)}">${actionsHtml}</div>`;
@@ -517,8 +451,7 @@ function renderDecisionOutcomeCard(data, opts = {}) {
   const uiMode = resolveUiMode(opts);
   const isExpert = uiMode === 'expert';
   const sessionId = String(opts.sessionId || opts.session_id || '').trim();
-  const t = (key) => window.i18n?.t(key) ?? key;
-  const status = cleanDecisionBriefText(outcome.status || '') || 'unknown';
+  const status = cleanDecisionBriefText(outcome.status || '') || 'validate_first';
   const confidence = (cleanDecisionBriefText(outcome.confidence || '') || 'weak').toLowerCase();
   const risk = cleanDecisionBriefText(outcome.execution_risk_level || '') || 'unknown';
   const summary = cleanDecisionBriefText(outcome.decision_summary || '') || 'Decision outcome incomplete.';
@@ -539,23 +472,6 @@ function renderDecisionOutcomeCard(data, opts = {}) {
   const safeToPersist = persistenceSafety?.safe_to_persist === true;
   const requiresConfirm = persistenceSafety?.requires_user_confirmation === true;
   const derivedFallback = persistenceSafety?.derived_from_fallback === true;
-  const missingCritical = Array.isArray(persistenceSafety?.missing_critical_fields)
-    ? persistenceSafety.missing_critical_fields.map(cleanDecisionBriefText).filter(Boolean)
-    : [];
-  const criticalRequiredTotal = 2;
-  const canPersistFromUi = !!sessionId && (safeToPersist || (requiresConfirm && missingCritical.length === 0));
-  const persistReason = cleanDecisionBriefText(persistenceSafety?.reason || '');
-  const isPersisting = window.DecisionArena?.store?.state?.memoryConfirmingSessionId === sessionId;
-  const ppm = sessionId
-    ? (window.DecisionArena?.store?.state?.postPersistDecisionMemoryBySession?.[sessionId] || null)
-    : null;
-  const ams = ppm?.agent_memory_sync;
-  const statusKey = safeToPersist
-    ? 'decisionMemory.persist.status.persistable'
-    : ((requiresConfirm && missingCritical.length === 0) ? 'decisionMemory.persist.status.confirmRequired' : 'decisionMemory.persist.status.nonPersistable');
-  const statusClass = safeToPersist
-    ? 'badge-success'
-    : ((requiresConfirm && missingCritical.length === 0) ? 'badge-warning' : 'badge-danger');
   const evidenceClaims = Array.isArray(outcome.evidence_claims)
     ? outcome.evidence_claims.filter((claim) => claim && typeof claim === 'object' && cleanDecisionBriefText(claim.claim || ''))
     : [];
@@ -637,7 +553,7 @@ function renderDecisionOutcomeCard(data, opts = {}) {
   <div class="decision-outcome-top">
     <div>
       <div class="decision-outcome-kicker">Decision outcome</div>
-      <h3>${escHtml(status === 'unknown' ? t('decisionMemory.missingStatusLabel') : label(status))}</h3>
+      <h3>${escHtml(label(status))}</h3>
       <p>${escHtml(summary)}</p>
     </div>
     <div class="decision-outcome-badges">
@@ -663,60 +579,6 @@ function renderDecisionOutcomeCard(data, opts = {}) {
       ${list(unknowns, 'No blocking unknown listed.')}
     </div>
   </div>
-  ${sessionId ? `
-    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-      <span class="badge ${statusClass}">${escHtml(t(statusKey))}</span>
-      <button class="btn btn-primary btn-sm"
-        data-action="confirm-decision-memory"
-        data-session-id="${escHtml(sessionId)}"
-        ${(!canPersistFromUi || isPersisting) ? 'disabled' : ''}>
-        ${isPersisting ? '<span class="spinner"></span>' : '💾'} ${escHtml(t('decisionMemory.persistResultButton'))}
-      </button>
-      ${!canPersistFromUi ? `
-        <button class="btn btn-secondary btn-sm"
-          data-action="attach-session-result-to-active-context"
-          data-session-id="${escHtml(sessionId)}">
-          🧭 ${escHtml(t('decisionMemory.attachToContextButton'))}
-        </button>
-        <span style="font-size:11px;color:var(--text-muted);">${escHtml(t('decisionMemory.attachToContextHint'))}</span>
-      ` : ''}
-      ${canPersistFromUi ? `<span style="font-size:11px;color:var(--text-muted);">${escHtml(t('decisionMemory.persistResultHint'))}</span>` : ''}
-    </div>
-    ${ppm && ppm.memory_id ? `
-    <div style="margin-top:10px;border-top:1px dashed var(--border-color);padding-top:10px;">
-      <div style="font-size:12px;font-weight:600;">${escHtml(t('decisionMemory.postPersist.title'))}</div>
-      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
-        ${escHtml(t('decisionMemory.postPersist.memoryId'))}: <code>${escHtml(ppm.memory_id)}</code>
-        · ${escHtml(t('decisionMemory.postPersist.contextLinked'))}: ${escHtml((ppm.context_memory_linked ?? ppm.strategic_context_linked) ? t('common.yes') : t('common.no'))}
-      </div>
-      ${ams && ams.enabled && Array.isArray(ams.updated) && ams.updated.length ? `
-        <div style="font-size:12px;margin-top:8px;">
-          <strong>${escHtml(t('decisionMemory.postPersist.agentMemUpdated'))}</strong>
-          <ul style="margin:4px 0 0 16px;line-height:1.45;">
-            ${ams.updated.map((u) => `<li><code>${escHtml(String(u.agent_id || ''))}</code>${(u.changed === false) ? ` <span style="color:var(--text-muted);">(${escHtml(t('decisionMemory.postPersist.agentMemUnchanged'))})</span>` : ''}</li>`).join('')}
-          </ul>
-        </div>
-      ` : (ams && Array.isArray(ams.warnings) && ams.warnings.length ? `<div style="font-size:11px;margin-top:6px;color:var(--text-muted);">${escHtml(ams.warnings.join(' · '))}</div>` : '')}
-    </div>
-    ` : ''}
-    ${!canPersistFromUi && missingCritical.length ? `
-      <div style="margin-top:6px;font-size:12px;color:var(--text-muted);">
-        ${escHtml(t('decisionMemory.persistUnavailableUntilCritical'))}
-        <strong>${escHtml(String(missingCritical.length))}/${escHtml(String(criticalRequiredTotal))}</strong>
-      </div>
-    ` : ''}
-  ` : ''}
-  ${sessionId && !canPersistFromUi ? `
-    <div style="margin-top:8px;font-size:12px;color:var(--text-muted);line-height:1.5;">
-      <strong>${escHtml(t('decisionMemory.persistWhyNonPersistable'))}</strong>
-      ${persistReason ? `<div>${escHtml(persistReason)}</div>` : ''}
-      ${missingCritical.length ? `<div>${escHtml(t('decisionMemory.persistMissingFields'))}: ${escHtml(missingCritical.join(', '))}</div>` : ''}
-      ${missingCritical.includes('status') ? `<div>${escHtml(t('decisionMemory.persistMissingStatusDetail'))}</div>` : ''}
-      ${missingCritical.includes('required_next_actions') ? `<div>${escHtml(t('decisionMemory.persistMissingActionsDetail'))}</div>` : ''}
-      ${derivedFallback ? `<div>${escHtml(t('decisionMemory.persistDerivedFallback'))}</div>` : ''}
-      <div>${escHtml(t('decisionMemory.persistRecoveryHint'))}</div>
-    </div>
-  ` : ''}
   ${validationItems.length ? `
     <div class="decision-outcome-section">
       <h4>Validation logic</h4>
@@ -806,7 +668,19 @@ function renderDecisionOutcomeCard(data, opts = {}) {
               : ''}
             ${persistenceSafety.reason ? `<li>reason: ${escHtml(String(persistenceSafety.reason))}</li>` : ''}
           </ul>
-          ${requiresConfirm && sessionId ? `<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">${escHtml(t('decisionMemory.persistAvailableAbove'))}</div>` : ''}
+          ${requiresConfirm && sessionId ? `
+            <div style="margin-top:10px;">
+              <button class="btn btn-primary btn-sm"
+                data-action="confirm-decision-memory"
+                data-session-id="${escHtml(sessionId)}"
+                ${window.DecisionArena?.store?.state?.memoryConfirmingSessionId === sessionId ? 'disabled' : ''}>
+                ${window.DecisionArena?.store?.state?.memoryConfirmingSessionId === sessionId ? '<span class="spinner"></span>' : '✅'} Confirmer &amp; persister la mémoire
+              </button>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">
+                Cette action n&rsquo;enregistre qu&rsquo;un r&eacute;sum&eacute; orient&eacute; d&eacute;cision (pas l&rsquo;historique chat).
+              </div>
+            </div>
+          ` : ''}
         </div>
       ` : ''}
       ${expertSignalRows.length ? `
@@ -1313,7 +1187,6 @@ export {
   renderAlert,
   renderActionBar,
   renderAdvancedPanel,
-  renderPendingConfirmation,
   renderPlaybookCard,
   renderPlaybookDecisionGuide,
   renderPlaybookOutputContract,

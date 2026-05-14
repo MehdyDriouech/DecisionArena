@@ -46,8 +46,7 @@ class SocialDynamicsService {
         ?string $targetFromRunner,
         array $participantIds,
         array $votes,
-        array $positions,
-        ?string $strategicContextId = null
+        array $positions
     ): void {
         if (in_array($sourceAgentId, ['synthesizer', 'devil_advocate'], true)) {
             return;
@@ -67,15 +66,14 @@ class SocialDynamicsService {
             }
 
             $this->repo->addEvent([
-                'session_id'             => $sessionId,
-                'strategic_context_id'   => $strategicContextId,
-                'round_index'            => $roundIndex,
-                'source_agent_id'        => $sourceAgentId,
-                'target_agent_id'        => $ev['target_agent_id'] ?? null,
-                'event_type'             => $ev['event_type'],
-                'intensity'              => $ev['intensity'],
-                'evidence'               => $ev['evidence'] ?? null,
-                'created_at'             => date('c'),
+                'session_id'        => $sessionId,
+                'round_index'       => $roundIndex,
+                'source_agent_id'   => $sourceAgentId,
+                'target_agent_id'   => $ev['target_agent_id'] ?? null,
+                'event_type'        => $ev['event_type'],
+                'intensity'         => $ev['intensity'],
+                'evidence'          => $ev['evidence'] ?? null,
+                'created_at'        => date('c'),
             ]);
 
             if (($ev['event_type'] ?? '') === RelationshipEvent::TYPE_NEUTRAL) {
@@ -87,7 +85,7 @@ class SocialDynamicsService {
                 continue;
             }
 
-            $this->applyEventToPair($sessionId, $sourceAgentId, $tgt, (string)$ev['event_type'], (float)$ev['intensity'], $strategicContextId);
+            $this->applyEventToPair($sessionId, $sourceAgentId, $tgt, (string)$ev['event_type'], (float)$ev['intensity']);
         }
     }
 
@@ -280,8 +278,7 @@ class SocialDynamicsService {
         string $source,
         string $target,
         string $eventType,
-        float $intensity,
-        ?string $strategicContextId = null
+        float $intensity
     ): void {
         $row = $this->repo->findRelationship($sessionId, $source, $target);
         $affinity = $row ? (float)($row['affinity'] ?? 0) : 0.0;
@@ -347,17 +344,16 @@ class SocialDynamicsService {
         $trust = max(0.0, min(1.0, $trust));
 
         $this->repo->upsertRelationship([
-            'session_id'            => $sessionId,
-            'source_agent_id'       => $source,
-            'target_agent_id'       => $target,
-            'strategic_context_id'  => $strategicContextId,
-            'affinity'              => $this->clampAffinity($affinity),
-            'trust'                 => $this->clampTrust($trust),
-            'conflict'              => $this->clampConflict($conflict),
-            'support_count'         => $supportC,
-            'challenge_count'       => $challengeC,
-            'alliance_count'        => $allianceC,
-            'attack_count'          => $attackC,
+            'session_id'          => $sessionId,
+            'source_agent_id'     => $source,
+            'target_agent_id'     => $target,
+            'affinity'            => $this->clampAffinity($affinity),
+            'trust'               => $this->clampTrust($trust),
+            'conflict'            => $this->clampConflict($conflict),
+            'support_count'       => $supportC,
+            'challenge_count'     => $challengeC,
+            'alliance_count'      => $allianceC,
+            'attack_count'        => $attackC,
             'last_interaction_type' => substr($eventType, 0, 32),
         ]);
     }

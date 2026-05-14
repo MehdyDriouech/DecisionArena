@@ -176,13 +176,13 @@ class CanonicalSynthesisExtractor {
         $validation = is_array($validation) ? $validation : [];
         return [
             'playbook_id' => (string)($root['playbook_id'] ?? ''),
-            'decision' => self::normalizeDecision((string)($root['decision'] ?? $root['decision_label'] ?? $root['outcome'] ?? $root['final_verdict'] ?? $root['verdict_label'] ?? $root['verdict'] ?? '')),
-            'status' => self::normalizeStatus((string)($root['status'] ?? $root['decision_status'] ?? $root['recommended_status'] ?? $root['outcome'] ?? '')),
+            'decision' => self::normalizeDecision((string)($root['decision'] ?? $root['verdict_label'] ?? $root['verdict'] ?? '')),
+            'status' => self::normalizeStatus((string)($root['status'] ?? $root['decision_status'] ?? '')),
             'confidence' => self::normalizeConfidence((string)($root['confidence'] ?? $root['confidence_level'] ?? $root['confidence_score'] ?? '')),
             'why' => self::normalizeList($root['why'] ?? $root['reasons'] ?? $root['key_reasons'] ?? []),
             'risks' => self::normalizeList($root['risks'] ?? $root['main_risks'] ?? $root['failure_modes'] ?? []),
             'blocking_unknowns' => self::normalizeList($root['blocking_unknowns'] ?? $root['unknowns'] ?? $root['evidence_gaps'] ?? []),
-            'recommended_next_actions' => self::normalizeList($root['required_next_actions'] ?? $root['recommended_next_actions'] ?? $root['recommended_action'] ?? $root['next_steps'] ?? $root['next_step'] ?? []),
+            'recommended_next_actions' => self::normalizeList($root['recommended_next_actions'] ?? $root['recommended_action'] ?? $root['next_step'] ?? []),
             'validation_logic' => [
                 'success_signal' => (string)($validation['success_signal'] ?? $validation['success'] ?? ''),
                 'validation_threshold' => (string)($validation['validation_threshold'] ?? $validation['threshold'] ?? ''),
@@ -198,7 +198,7 @@ class CanonicalSynthesisExtractor {
         $why = self::listFromSection($content, ['why', 'rationale', 'key reasons', 'verdict summary', 'conclusion']);
         $risks = self::listFromSection($content, ['main risks', 'risks', 'key risks', 'failure modes', 'highest impact risks']);
         $unknowns = self::listFromSection($content, ['blocking unknowns', 'unknowns', 'open questions', 'evidence gaps']);
-        $actions = self::listFromSection($content, ['next step', 'next steps', 'required next actions', 'recommended action', 'recommended next step', 'immediate next action', 'action plan']);
+        $actions = self::listFromSection($content, ['next step', 'recommended action', 'recommended next step', 'immediate next action', 'action plan']);
 
         return [
             'decision' => self::normalizeDecision(self::sectionText($content, ['decision', 'final verdict', 'verdict label', 'recommendation', 'judgment'])),
@@ -327,7 +327,6 @@ class CanonicalSynthesisExtractor {
         if (preg_match('/\b(kill)\b/', $l)) return 'NO-GO';
         if (preg_match('/\b(no consensus|no_consensus)\b/', $l)) return 'NO_CONSENSUS';
         if (preg_match('/\b(insufficient context|needs? more info|not enough information|validate first|validate[_\s-]?first)\b/', $l)) return 'INSUFFICIENT_CONTEXT';
-        if (preg_match('/\b(blocked|cannot proceed|blocked pending)\b/', $l)) return 'INSUFFICIENT_CONTEXT';
         if (preg_match('/\b(iterate|pivot|narrow|defer|reduce scope|reduce-scope|pause|test[_\s-]?first)\b/', $l)) return 'ITERATE';
         return '';
     }

@@ -11,7 +11,6 @@ import { renderContextDocBadge, renderContextDocPanel } from '../../ui/contextDo
 import { renderDecisionBrief, renderDecisionOutcomeCard, renderPremortemInvertedBanner, renderPremortemStructuredCard } from '../../ui/components.js';
 import { formatHitlMessageBadges, formatRerunWithChallengeButton } from '../../utils/messageLookup.js';
 import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
-import { renderLlmRoutingCompact } from '../../utils/llmRoutingUi.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -48,7 +47,6 @@ function renderMessage(msg) {
     ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;font-size:11px;" data-action="challenge-claim" data-message-id="${escHtml(String(msg.id))}">${escHtml(t('hitl.challenge'))}</button>`
     : '';
   const hitlAgent = formatHitlMessageBadges(msg, t, escHtml);
-  const llmMeta = renderLlmRoutingCompact(msg, { escHtml, t, expert: state.uiMode === 'expert' });
   return `
     <div class="message-agent">
       <div class="message-agent-header">
@@ -61,7 +59,8 @@ function renderMessage(msg) {
       ${hitlAgent}
       <div class="message-agent-body md-content">${renderMarkdown(msg.content)}</div>
       <div class="message-agent-footer">
-        ${llmMeta}
+        ${msg.provider_id ? `<span>${t('label.provider')}: ${escHtml(msg.provider_id)}</span>` : ''}
+        ${msg.model ? `<span>${t('label.model')}: ${escHtml(msg.model)}</span>` : ''}
         <span style="margin-left:auto;">${formatDate(msg.created_at)}</span>
       </div>
       ${chBtn}
@@ -85,7 +84,6 @@ function renderDRAgentMessage(msg, isSynth = false, messageKey = '') {
     ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;font-size:11px;" data-action="challenge-claim" data-message-id="${escHtml(String(msg.id))}">${escHtml(t('hitl.challenge'))}</button>`
     : '';
   const hitl = formatHitlMessageBadges(msg, t, escHtml);
-  const llmMeta = renderLlmRoutingCompact(msg, { escHtml, t, expert: state.uiMode === 'expert' });
   return `
     <div class="agent-card ${isSynth ? 'synthesis-card' : ''}">
       <div class="agent-card-header">
@@ -97,7 +95,6 @@ function renderDRAgentMessage(msg, isSynth = false, messageKey = '') {
       </div>
       ${hitl}
       ${contentHtml}
-      <div class="agent-card-footer">${llmMeta}</div>
       ${isLong ? `<button class="btn btn-secondary btn-sm" data-action="toggle-agent-message" data-message-id="${escHtml(messageId)}">${collapsed ? 'Voir' : 'Masquer'}</button>` : ''}
       ${chBtn}
     </div>
@@ -117,10 +114,9 @@ function renderExportButtons(sessionId) {
     <button class="btn btn-secondary btn-sm" data-action="export-session" data-session-id="${escHtml(sessionId)}" data-format="markdown" title="${t('export.exportMd')}">
       ${t('export.exportMd')}
     </button>
-    ${isExpert ? `
-    <button class="btn btn-secondary btn-sm" data-ui="expert-only" data-action="export-session" data-session-id="${escHtml(sessionId)}" data-format="json" title="${t('export.exportJson')}">
+    <button class="btn btn-secondary btn-sm" data-action="export-session" data-session-id="${escHtml(sessionId)}" data-format="json" title="${t('export.exportJson')}">
       ${t('export.exportJson')}
-    </button>` : ''}
+    </button>
     <button class="btn btn-secondary btn-sm" data-action="export-session" data-session-id="${escHtml(sessionId)}" data-format="markdown" data-redacted="1" title="${t('export.redacted')}">
       🔒 ${t('export.redacted')}
     </button>
@@ -193,7 +189,12 @@ function renderReactiveMessage(msg) {
   const name  = agentName(msg.agent_id);
   const role  = msg.reaction_role || null;
   const roleBadge  = renderReactiveRoleBadge(role, t);
-  const provBadge = renderLlmRoutingCompact(msg, { escHtml, t, expert: state.uiMode === 'expert' });
+  const providerLabel = msg.provider_name || msg.provider_id || null;
+  const modelLabel    = msg.model || null;
+  const hasFallback   = msg.provider_fallback_used == 1;
+    const provBadge = (providerLabel || modelLabel)
+    ? `<span class="message-llm-meta provider-badge" style="font-size:10px;">${modelLabel ? escHtml(modelLabel) : ''}${providerLabel ? ` via ${escHtml(providerLabel)}` : ''}${hasFallback ? ` <span class="message-llm-fallback">⚠ ${t('message.llm.fallback')}</span>` : ''}</span>`
+    : '';
     const chBtn = window.DecisionArena?.utils?.canChallengeMessage?.(msg)
       ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;font-size:11px;" data-action="challenge-claim" data-message-id="${escHtml(String(msg.id))}">${escHtml(t('hitl.challenge'))}</button>`
       : '';
@@ -457,7 +458,7 @@ function renderChat() {
             <button class="btn btn-secondary btn-sm" data-action="open-decision-room" data-session-id="${escHtml(session.id)}">
               ${t('chat.decisionRoom')}
             </button>
-            <button class="btn btn-secondary btn-sm" data-nav="analyses">${t('nav.back')}</button>
+            <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
           </div>
         </div>
       </div>

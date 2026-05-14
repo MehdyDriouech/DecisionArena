@@ -357,7 +357,7 @@ function renderGraphView() {
           <h2 style="margin:0 0 4px;">📊 ${t('graph.title')}</h2>
           <div style="color:var(--text-secondary);font-size:13px;">${escHtml(session.title || '')}</div>
         </div>
-        <button class="btn btn-secondary btn-sm" data-nav="analyses">${t('nav.back')}</button>
+        <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
       </div>
       ${renderGraphViewPanel(session.id)}
     </div>

@@ -188,7 +188,7 @@ $pdo->prepare('INSERT OR IGNORE INTO decision_room_memories (room_id, memory_id,
 // 1) context markdown generated
 $md1 = $gen->generateContextMarkdown($cid, ['now' => $now, 'max_memories' => 20]);
 if (!str_contains($md1, '# Snapshot Context')) { echo "FAIL: context title\n"; exit(1); }
-if (!str_contains($md1, '## Decision Chains')) { echo "FAIL: chains section\n"; exit(1); }
+if (!str_contains($md1, '## Decision Rooms / Chains')) { echo "FAIL: rooms section\n"; exit(1); }
 echo "PASS: context markdown generated\n";
 
 // 2) room markdown generated

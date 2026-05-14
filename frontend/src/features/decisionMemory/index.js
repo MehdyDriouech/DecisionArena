@@ -4,11 +4,6 @@
 
 import { deriveChains, deriveEventsForChain, summarizeChainChange, groupTimeline, toDateKey } from './timeline.js';
 import { getPlaybookById } from '../../core/playbooks.js';
-import { renderPendingConfirmation, renderDecisionOutcomeCard, renderDecisionBrief } from '../../ui/components.js';
-import {
-  renderPerspectiveSnapshot,
-  renderPerspectiveSegmentedControl,
-} from '../../utils/perspectiveSnapshotRenderer.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -140,7 +135,7 @@ function applyExplorerMemoryFilter(memories, state) {
   return memories.filter((m) => allow.has(String(m.memory_id)));
 }
 
-function renderMemoryExplorerBar(state, { escHtml, formatDate, t, isExpert }) {
+function renderMemoryExplorerBar(state, { escHtml, formatDate, t }) {
   const nav = state.decisionMemoryNav || {};
   const ui = state.decisionMemoryUi || {};
   const contexts = Array.isArray(nav.contexts) ? nav.contexts : [];
@@ -206,10 +201,6 @@ function renderMemoryExplorerBar(state, { escHtml, formatDate, t, isExpert }) {
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <span style="font-size:11px;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em;">${escHtml(t('decisionMemory.nav.decisionChain'))}</span>
           ${roomLoading}
-          ${isExpert ? `
-          <button type="button" class="btn btn-secondary btn-sm" data-ui="expert-only" data-action="create-decision-room-chain"
-            data-context-id="${escHtml(String(selCtx))}"
-            style="margin-left:4px;">${escHtml(t('decisionMemory.nav.newChain'))}</button>` : ''}
           ${selRoom ? `
             <button type="button" class="btn btn-secondary btn-sm" data-action="toggle-room-memory-md" style="margin-left:auto;">
               ${escHtml(t('snapshots.viewMemoryMd'))}
@@ -238,44 +229,20 @@ function renderMemoryExplorerBar(state, { escHtml, formatDate, t, isExpert }) {
         </div>
       </div>
       ${chainRow}
-      ${(ui.roomMemoryMdOpen && selRoom) ? (() => {
-        const activePerspective = String(ui.roomMemoryMdPerspective || 'default');
-        const isExpertUi = (state.uiComplexity === 'expert');
-        const segmented = renderPerspectiveSegmentedControl({
-          action: 'set-room-memory-perspective',
-          selected: activePerspective,
-          escHtml,
-          t,
-          ariaLabel: t('snapshots.perspective'),
-        });
-        const md = String(ui.roomMemoryMdContent || '');
-        const docHtml = md
-          ? renderPerspectiveSnapshot(md, {
-              escHtml,
-              t,
-              isExpert: isExpertUi,
-              perspective: activePerspective,
-              raw: isExpertUi ? md : '',
-            })
-          : `<div class="ps-empty">${escHtml(t('snapshots.loading'))}</div>`;
-        return `
-        <div class="card ps-panel" data-snapshot-panel="decision-room" style="margin-top:12px;padding:12px;">
-          <div class="ps-panel-toolbar">
-            <div class="ps-panel-toolbar-title">${escHtml(t('snapshots.memoryMdTitle'))}
-              ${ui.roomMemoryMdLoading ? `<span class="ps-panel-status">${escHtml(t('snapshots.loading'))}</span>` : ''}
-            </div>
-            <div class="ps-panel-toolbar-actions">
-              ${segmented}
+      ${(ui.roomMemoryMdOpen && selRoom) ? `
+        <div class="card" style="margin-top:12px;padding:12px 12px;background:rgba(0,0,0,0.02);">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
+            <div style="font-weight:800;">${escHtml(t('snapshots.memoryMdTitle'))}</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
               <button type="button" class="btn btn-secondary btn-sm" data-action="copy-room-memory-md">${escHtml(t('snapshots.copy'))}</button>
               <button type="button" class="btn btn-secondary btn-sm" data-action="close-room-memory-md">${escHtml(t('snapshots.close'))}</button>
             </div>
           </div>
-          ${ui.roomMemoryMdError ? `<div class="error-banner" style="margin-top:6px;">⚠️ ${escHtml(ui.roomMemoryMdError)}</div>` : ''}
-          <div class="ps-scroll" data-snapshot-scroll="decision-room" tabindex="0">
-            ${docHtml}
-          </div>
+          ${ui.roomMemoryMdLoading ? `<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">${escHtml(t('snapshots.loading'))}</div>` : ''}
+          ${ui.roomMemoryMdError ? `<div class="error-banner" style="margin-top:10px;">⚠️ ${escHtml(ui.roomMemoryMdError)}</div>` : ''}
+          <pre style="margin:10px 0 0;white-space:pre-wrap;font-size:12px;line-height:1.5;color:var(--text-secondary);">${escHtml(String(ui.roomMemoryMdContent || ''))}</pre>
         </div>
-      `; })() : ''}
+      ` : ''}
     </div>
   `;
 }
@@ -285,7 +252,6 @@ function renderFiltersBar(state, { escHtml, t }) {
   const filters = ui.filters || {};
   const lang = window.i18n?.getLanguage?.() || 'fr';
   const isExpert = state.uiMode === 'expert';
-  const selCount = Array.isArray(state.selectedMemoryIds) ? state.selectedMemoryIds.length : 0;
   const select = (key, opts) => `
     <select class="input decision-memory-filter-select"
       data-action="set-decision-memory-filter" data-filter-key="${escHtml(key)}">
@@ -355,14 +321,6 @@ function renderFiltersBar(state, { escHtml, t }) {
           </div>
         </div>
       </div>
-      ${isExpert ? `
-        <div data-ui="expert-only" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end;padding:10px 14px 14px;">
-          ${selCount ? `<span class="badge badge-muted">${escHtml(t('decisionMemory.selected'))}: ${selCount}</span>` : ''}
-          <button class="btn btn-secondary btn-sm" data-action="select-all-visible-memories">${escHtml(t('decisionMemory.selectAllVisible'))}</button>
-          <button class="btn btn-secondary btn-sm" data-action="clear-selected-memories" ${selCount ? '' : 'disabled'}>${escHtml(t('decisionMemory.clearSelection'))}</button>
-          <button class="btn btn-danger btn-sm" data-action="request-delete-selected-memories" ${selCount ? '' : 'disabled'}>🗑️ ${escHtml(t('decisionMemory.deleteSelected'))}</button>
-        </div>
-      ` : ''}
     </div>
   `;
 }
@@ -401,7 +359,7 @@ function renderChainView(chainsPkg, state, { escHtml, formatDate, t }, linksInde
     return `
       <div class="card" style="padding:14px 16px;margin-bottom:10px;">
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-          ${state.uiMode === 'expert' ? `<span class="badge badge-muted">#${escHtml(String(m.memory_id).slice(0, 8))}</span>` : ''}
+          <span class="badge badge-muted">#${escHtml(String(m.memory_id).slice(0, 8))}</span>
           <span class="badge badge-info">${escHtml(String(m.playbook_id || ''))}</span>
           <span class="badge ${badgeForStatus(m.decision_status)}">${escHtml(String(m.decision_status || '—'))}</span>
           <span class="badge ${badgeForConfidence(m.confidence)}">${escHtml(String(m.confidence || '—'))}</span>
@@ -546,7 +504,7 @@ function renderTimelineView(memories, links, state, { escHtml, formatDate, t }, 
       <div class="decision-memory-inline-detail">
         <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;">
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-            ${isExpert ? `<span class="badge badge-muted">#${escHtml(String(m.memory_id).slice(0, 8))}</span>` : ''}
+            <span class="badge badge-muted">#${escHtml(String(m.memory_id).slice(0, 8))}</span>
             <span class="badge badge-info">${escHtml(String(m.playbook_id || ''))}</span>
             <span style="margin-left:auto;font-size:11px;color:var(--text-muted);">${escHtml(formatDate(m.created_at))}</span>
           </div>
@@ -617,92 +575,6 @@ function renderDecisionMemory() {
   const searchQ = String(ui.searchQ || '').trim();
   const semanticEnabled = state.semanticMemoryEnabled; // undefined until first call; false when disabled
   const similarState = state.decisionMemorySimilar || {};
-  const parseSessionResult = (raw) => {
-    if (!raw) return null;
-    if (typeof raw === 'object') return raw;
-    if (typeof raw !== 'string') return null;
-    try {
-      return JSON.parse(raw);
-    } catch (_) {
-      return null;
-    }
-  };
-  const renderPastAnalysesFallback = () => {
-    const sessions = Array.isArray(state.sessions) ? state.sessions : [];
-    const sorted = sessions.slice().sort((a, b) => String(b?.created_at || '').localeCompare(String(a?.created_at || '')));
-    const cards = [];
-    for (const session of sorted) {
-      const sid = String(session?.id || '').trim();
-      if (!sid) continue;
-      const payload = parseSessionResult(session?.result);
-      const outcome = session?.decision_outcome || payload?.decision_outcome || payload?.decision_brief?.decision_outcome || null;
-      const brief = payload?.decision_brief || null;
-      if (!outcome && !brief) continue;
-      const ps = (outcome && typeof outcome.persistence_safety === 'object') ? outcome.persistence_safety : {};
-      const autoPersistSafe = ps?.safe_to_persist === true;
-      const needsConfirm = ps?.requires_user_confirmation === true;
-      const missingCritical = Array.isArray(ps?.missing_critical_fields) ? ps.missing_critical_fields : [];
-      const persistReason = String(ps?.reason || '').trim();
-      const canConfirmPersist = needsConfirm && missingCritical.length === 0;
-      const miniStatus = String(outcome?.status || brief?.decision || '').trim() || '—';
-      const miniConfidence = String(outcome?.confidence || brief?.confidence || '').trim() || '—';
-      const miniRisk = String(outcome?.execution_risk_level || '').trim() || '—';
-      const miniSummary = String(outcome?.decision_summary || brief?.why || brief?.nextStep || brief?.next_step || '').trim() || '—';
-      cards.push(`
-        <article class="card" style="padding:14px 16px;margin-bottom:10px;">
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-            <span class="badge badge-info">${escHtml(String(session?.mode || 'session'))}</span>
-            <span style="margin-left:auto;font-size:11px;color:var(--text-muted);">${escHtml(formatDate(session?.created_at || ''))}</span>
-          </div>
-          <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-            <span class="badge ${badgeForStatus(String(outcome?.status || '').trim())}">${escHtml(miniStatus)}</span>
-            <span class="badge ${badgeForConfidence(String(outcome?.confidence || '').trim())}">${escHtml(miniConfidence)}</span>
-            <span class="badge badge-muted">${escHtml(t('decisionMemory.mini.risk'))}: ${escHtml(miniRisk)}</span>
-          </div>
-          <div style="margin-top:8px;font-size:13px;color:var(--text-secondary);line-height:1.5;">
-            <strong>${escHtml(t('decisionMemory.mini.summary'))}:</strong> ${escHtml(miniSummary)}
-          </div>
-          ${!autoPersistSafe ? `
-            <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-              <span class="badge badge-warning">${escHtml(t('decisionMemory.mini.autoPersistNo'))}</span>
-              ${persistReason ? `<span style="font-size:12px;color:var(--text-muted);">${escHtml(persistReason)}</span>` : ''}
-            </div>
-          ` : ''}
-          ${missingCritical.length ? `
-            <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">
-              ${escHtml(t('decisionMemory.mini.persistBlocked'))}: ${escHtml(missingCritical.join(', '))}
-            </div>
-          ` : ''}
-          <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn btn-secondary btn-sm" data-action="open-session" data-session-id="${escHtml(sid)}" data-mode="session-history">${escHtml(t('decisionMemory.openSession'))}</button>
-            ${canConfirmPersist ? `
-              <button class="btn btn-primary btn-sm"
-                data-action="confirm-decision-memory"
-                data-session-id="${escHtml(sid)}"
-                ${state.memoryConfirmingSessionId === sid ? 'disabled' : ''}>
-                ${state.memoryConfirmingSessionId === sid ? '<span class="spinner"></span>' : '✅'} ${escHtml(t('decisionMemory.mini.confirmPersist'))}
-              </button>
-            ` : ''}
-          </div>
-          <details style="margin-top:10px;">
-            <summary style="cursor:pointer;color:var(--text-secondary);font-weight:600;">${escHtml(t('decisionMemory.mini.expand'))}</summary>
-            <div style="margin-top:10px;">
-              ${outcome ? renderDecisionOutcomeCard(outcome, { uiMode: 'basic', sessionId: sid }) : ''}
-              ${brief ? `<div style="margin-top:10px;">${renderDecisionBrief(brief, { uiMode: 'basic' })}</div>` : ''}
-            </div>
-          </details>
-        </article>
-      `);
-      if (cards.length >= 20) break;
-    }
-    if (!cards.length) return '';
-    return `
-      <div class="card" style="padding:14px 16px;margin-top:14px;">
-        <div style="font-weight:700;font-size:14px;margin-bottom:8px;">${escHtml(t('decisionMemory.pastAnalysesFallback'))}</div>
-        ${cards.join('')}
-      </div>
-    `;
-  };
 
   const topBar = `
     <div class="page-header" style="flex-direction:row;justify-content:space-between;align-items:flex-start;gap:12px;">
@@ -735,13 +607,13 @@ function renderDecisionMemory() {
     `;
   }
 
-  const explorerBar = renderMemoryExplorerBar(state, { escHtml, formatDate, t, isExpert });
+  const explorerBar = renderMemoryExplorerBar(state, { escHtml, formatDate, t });
 
   const searchBar = (() => {
     const hint = ui.navDecisionChainId
-      ? t('decisionMemory.search.withinChain')
+      ? 'Search within selected chain'
       : ui.navStrategicContextId
-        ? t('decisionMemory.search.withinContext')
+        ? 'Search within selected context'
         : '';
     const expertMeta = isExpert && searchPkg && !searchPkg.loading && !searchPkg.error ? `
       <div data-ui="expert-only" style="margin-top:8px;font-size:11px;color:var(--text-muted);display:flex;gap:10px;flex-wrap:wrap;">
@@ -754,10 +626,10 @@ function renderDecisionMemory() {
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
           <div style="flex:1;min-width:240px;">
             <label style="display:block;font-size:11px;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">
-              ${escHtml(t('decisionMemory.search.label'))}
+              ${escHtml('Search decision memory')}
             </label>
             <input class="input" data-action="set-decision-memory-search"
-              placeholder="${escHtml(hint || t('decisionMemory.search.label'))}"
+              placeholder="${escHtml(hint || 'Search decision memory')}"
               value="${escHtml(searchQ)}"
               style="width:100%;"
             />
@@ -766,30 +638,28 @@ function renderDecisionMemory() {
             ${searchQ ? `<button type="button" class="btn btn-secondary btn-sm" data-action="clear-decision-memory-search">${escHtml(t('filters.clear') || 'Clear')}</button>` : ''}
             ${isExpert ? `
               <button type="button" class="btn btn-secondary btn-sm ${ui.includeStale ? 'btn-primary' : ''}" data-action="toggle-decision-memory-search-stale">
-                ${escHtml(t('decisionMemory.search.includeStale'))}
+                ${escHtml('include_stale')}
               </button>
               <button type="button" class="btn btn-secondary btn-sm ${ui.expertOverride ? 'btn-primary' : ''}" data-action="toggle-decision-memory-search-expert-override">
-                ${escHtml(t('decisionMemory.search.expertOverride'))}
+                ${escHtml('expert_override')}
               </button>
             ` : ''}
           </div>
         </div>
-        ${searchQ ? `<div style=”margin-top:10px;font-size:12px;color:var(--text-secondary);”>”${escHtml(t('decisionMemory.search.disclaimer'))}”</div>` : ''}
-        ${searchPkg?.error ? `<div class=”error-banner” style=”margin-top:10px;”>⚠️ ${escHtml(String(searchPkg.error))}</div>` : ''}
-        ${searchPkg?.loading ? `<div style=”margin-top:10px;font-size:12px;color:var(--text-muted);”><span class=”spinner”></span> ${escHtml(t('decisionMemory.search.searching'))}</div>` : ''}
+        ${searchQ ? `<div style="margin-top:10px;font-size:12px;color:var(--text-secondary);">“These are prior decision records, not verified facts.”</div>` : ''}
+        ${searchPkg?.error ? `<div class="error-banner" style="margin-top:10px;">⚠️ ${escHtml(String(searchPkg.error))}</div>` : ''}
+        ${searchPkg?.loading ? `<div style="margin-top:10px;font-size:12px;color:var(--text-muted);"><span class="spinner"></span> ${escHtml('Searching…')}</div>` : ''}
         ${expertMeta}
       </div>
     `;
   })();
 
   if (memories.length === 0) {
-    const fallback = renderPastAnalysesFallback();
     return topBar + explorerBar + searchBar + `
       <div class="empty-state">
         <div class="empty-state-icon">🗂️</div>
         <div class="empty-state-text">${escHtml(t('decisionMemory.empty'))}</div>
       </div>
-      ${fallback}
     `;
   }
 
@@ -846,7 +716,6 @@ function renderDecisionMemory() {
           <div style="font-weight:700;font-size:13px;">${escHtml(t('decisionMemory.selected'))}: ${picked.length}</div>
           <button class="btn btn-primary btn-sm" data-action="copy-selected-memories">${escHtml(t('decisionMemory.copyCompact'))}</button>
           <button class="btn btn-secondary btn-sm" data-action="clear-selected-memories">${escHtml(t('decisionMemory.clearSelection'))}</button>
-          ${isExpert ? `<button class="btn btn-danger btn-sm" data-ui="expert-only" data-action="request-delete-selected-memories">🗑️ ${escHtml(t('decisionMemory.deleteSelected'))}</button>` : ''}
         </div>
         <pre data-ui="expert-only" style="margin:10px 0 0;white-space:pre-wrap;font-size:12px;color:var(--text-secondary);">${escHtml(compact)}</pre>
       </div>
@@ -932,18 +801,12 @@ function renderDecisionMemory() {
       </div>
     ` : '';
 
-    const inlineConfirmation = state.pendingConfirmation?.mode === 'inline'
-      && state.pendingConfirmation?.anchor?.kind === 'decision-memory'
-      && String(state.pendingConfirmation?.anchor?.id || '') === String(m.memory_id || '')
-      ? renderPendingConfirmation(state.pendingConfirmation, { inlineOnly: true, uiMode: state.uiMode })
-      : '';
-
     return `
       <div class="card" style="padding:16px 18px;margin-bottom:12px;">
         <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
             <input type="checkbox" data-action="toggle-memory-selection" data-memory-id="${escHtml(m.memory_id)}" ${checked} style="accent-color:var(--accent);">
-            ${isExpert ? `<span class="badge badge-muted">#${escHtml(String(m.memory_id).slice(0, 8))}</span>` : ''}
+            <span class="badge badge-muted">#${escHtml(String(m.memory_id).slice(0, 8))}</span>
           </label>
           <div style="flex:1;min-width:260px;">
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
@@ -981,11 +844,6 @@ function renderDecisionMemory() {
             <button class="btn btn-secondary btn-sm" data-action="open-session" data-session-id="${escHtml(m.session_id)}" data-mode="session-history">
               ${escHtml(t('decisionMemory.openSession'))}
             </button>
-            ${isExpert ? `
-              <button class="btn btn-danger btn-sm" data-ui="expert-only" data-action="request-delete-decision-memory" data-memory-id="${escHtml(m.memory_id)}">
-                🗑️ ${escHtml(t('decisionMemory.deleteOne'))}
-              </button>
-            ` : ''}
             ${(isExpert && semanticEnabled !== false) ? `
               <button class="btn btn-secondary btn-sm" data-ui="expert-only" data-action="toggle-similar-decisions" data-memory-id="${escHtml(m.memory_id)}">
                 ${escHtml('Similar decisions')}
@@ -1005,7 +863,6 @@ function renderDecisionMemory() {
           </div>
         </div>
         ${outboundBadges ? `<div data-ui="expert-only" style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">${outboundBadges}</div>` : ''}
-        ${inlineConfirmation}
         ${simSection}
       </div>
     `;
@@ -1021,3 +878,4 @@ function registerDecisionMemoryFeature() {
 }
 
 export { registerDecisionMemoryFeature };
+

@@ -64,7 +64,7 @@ function renderSessionComparisons() {
               </div>
               <div class="session-card-full-actions">
                 <button class="btn btn-primary btn-sm" data-action="open-comparison" data-comp-id="${escHtml(c.id)}">${t('compare.open')}</button>
-                <button class="btn btn-danger btn-sm" data-ui="expert-only" data-action="delete-comparison" data-comp-id="${escHtml(c.id)}">${t('compare.delete')}</button>
+                <button class="btn btn-danger btn-sm" data-action="delete-comparison" data-comp-id="${escHtml(c.id)}">${t('compare.delete')}</button>
               </div>
             </div>
           `).join('')}
@@ -88,7 +88,7 @@ function renderSessionComparisonView() {
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
           <button class="btn btn-secondary btn-sm" data-action="export-comparison" data-comp-id="${escHtml(comp.id)}">📄 ${t('compare.exportMd')}</button>
-          <button class="btn btn-danger btn-sm" data-ui="expert-only" data-action="delete-comparison" data-comp-id="${escHtml(comp.id)}">${t('compare.delete')}</button>
+          <button class="btn btn-danger btn-sm" data-action="delete-comparison" data-comp-id="${escHtml(comp.id)}">${t('compare.delete')}</button>
           <button class="btn btn-secondary btn-sm" data-nav="session-comparisons">${t('nav.back')}</button>
         </div>
       </div>

@@ -1,6 +1,5 @@
 /* Renderer — manages DOM updates for sidebar and main content */
 import { normalizeUiMode } from './store.js';
-import { renderPendingConfirmation } from '../ui/components.js';
 
 function t(key) {
   return window.i18n?.t(key) ?? key;
@@ -8,16 +7,6 @@ function t(key) {
 
 function escHtml(s) {
   return window.DecisionArena.utils.escHtml(s);
-}
-
-function readAnalysesNavOpen(state) {
-  if (typeof state.analysesSidebarOpen === 'boolean') return state.analysesSidebarOpen;
-  try {
-    const saved = localStorage.getItem('da_nav_analyses_open');
-    if (saved === '0') return false;
-    if (saved === '1') return true;
-  } catch (_) {}
-  return true;
 }
 
 function renderSidebar() {
@@ -28,13 +17,13 @@ function renderSidebar() {
     { id: 'launch-assistant', icon: '🚀', label: t('dashboard.launchAssistant') },
     { id: 'dashboard',        icon: '🏠', label: t('nav.dashboard') },
     { id: 'strategic-contexts', icon: '🧭', label: t('nav.contexts') },
+    { id: 'decision-memory',  icon: '🗂️', label: t('nav.decisionMemory') },
     { id: 'administration',   icon: '⚙️', label: t('nav.admin') },
   ];
 
-  const adminViews   = ['personas', 'persona-builder', 'persona-maker', 'providers', 'souls', 'templates', 'template-maker', 'scenario-packs', 'logs', 'retrospective', 'learning', 'prompt-policies', 'cognitive-governance'];
+  const adminViews   = ['personas', 'persona-builder', 'persona-maker', 'providers', 'souls', 'templates', 'template-maker', 'scenario-packs', 'logs', 'retrospective'];
+  const featureViews = ['launch-assistant', 'session-comparisons', 'session-comparison', 'decision-memory', 'strategic-contexts'];
   const isAdminSubView = adminViews.includes(state.view);
-  const analysesGroupActive = ['analyses', 'sessions', 'new-session', 'session-comparisons', 'session-comparison'].includes(state.view);
-  const analysesOpen = readAnalysesNavOpen(state);
 
   const sidebar = document.getElementById('sidebar');
   if (!sidebar) return;
@@ -46,55 +35,17 @@ function renderSidebar() {
       <div class="sidebar-logo-sub">${t('app.subtitle')}</div>
     </div>
     <nav class="sidebar-nav">
-      <button type="button" class="nav-item ${state.view === 'launch-assistant' ? 'active' : ''}" data-nav="launch-assistant" ${state.view === 'launch-assistant' ? 'aria-current="page"' : ''}>
-        <span class="nav-item-icon">🚀</span>
-        <span>${t('dashboard.launchAssistant')}</span>
-      </button>
-      <button type="button" class="nav-item ${state.view === 'dashboard' ? 'active' : ''}" data-nav="dashboard" ${state.view === 'dashboard' ? 'aria-current="page"' : ''}>
-        <span class="nav-item-icon">🏠</span>
-        <span>${t('nav.dashboard')}</span>
-      </button>
-      <div class="nav-group nav-group-analyses ${analysesOpen ? 'open' : 'closed'}">
-        <div class="nav-group-header">
-          <button type="button" class="nav-item nav-item-group-main ${analysesGroupActive ? 'active' : ''}" data-nav="analyses" ${analysesGroupActive ? 'aria-current="page"' : ''}>
-            <span class="nav-item-icon">🗂️</span>
-            <span>${t('nav.sessions')}</span>
-          </button>
-          <button
-            type="button"
-            class="nav-group-toggle"
-            data-action="toggle-analyses-submenu"
-            aria-expanded="${analysesOpen ? 'true' : 'false'}"
-            aria-label="${escHtml(t('nav.sessions'))}"
-            title="${escHtml(t('nav.sessions'))}"
-          >
-            <span class="nav-group-chevron">▾</span>
-          </button>
-        </div>
-        <div class="nav-submenu ${analysesOpen ? '' : 'is-collapsed'}">
-          <button type="button" class="nav-item nav-item-sub ${state.view === 'new-session' ? 'active' : ''}" data-nav="new-session" ${state.view === 'new-session' ? 'aria-current="page"' : ''}>
-            <span class="nav-item-icon">＋</span>
-            <span>${t('nav.newSession')}</span>
-          </button>
-          <button type="button" class="nav-item nav-item-sub ${(state.view === 'analyses' || state.view === 'sessions') ? 'active' : ''}" data-nav="analyses" ${(state.view === 'analyses' || state.view === 'sessions') ? 'aria-current="page"' : ''}>
-            <span class="nav-item-icon">🕘</span>
-            <span>${t('nav.analysisHistory')}</span>
-          </button>
-          <button type="button" class="nav-item nav-item-sub ${(state.view === 'session-comparisons' || state.view === 'session-comparison') ? 'active' : ''}" data-nav="session-comparisons" ${(state.view === 'session-comparisons' || state.view === 'session-comparison') ? 'aria-current="page"' : ''}>
-            <span class="nav-item-icon">⚖️</span>
-            <span>${t('dashboard.compareSessions')}</span>
-          </button>
-        </div>
-      </div>
       ${nav.map((item) => {
-        if (item.id === 'launch-assistant' || item.id === 'dashboard') return '';
+        const isFeatureSubView = featureViews.includes(state.view);
         const isActive = state.view === item.id
-          || (item.id === 'administration' && isAdminSubView);
+          || (item.id === 'administration' && isAdminSubView)
+          || (item.id === 'dashboard' && isFeatureSubView)
+          || (item.id === 'dashboard' && state.view === 'new-session');
         return `
-          <button type="button" class="nav-item ${isActive ? 'active' : ''}" data-nav="${escHtml(item.id)}" ${isActive ? 'aria-current="page"' : ''}>
+          <div class="nav-item ${isActive ? 'active' : ''}" data-nav="${escHtml(item.id)}">
             <span class="nav-item-icon">${item.icon}</span>
             <span>${item.label}</span>
-          </button>
+          </div>
         `;
       }).join('')}
     </nav>
@@ -138,22 +89,12 @@ function renderMain() {
       <button data-action="clear-error">${t('error.clear')}</button>
     </div>
   ` : '';
-  const toastBanner = state.toast ? `
-    <div class="success-banner">
-      ✅ ${escHtml(String(state.toast))}
-      <button data-action="clear-toast">${t('error.clear')}</button>
-    </div>
-  ` : '';
 
   const views  = window.DecisionArena.views || {};
   const viewFn = views[state.view] || views.dashboard;
-  const confirmationOverlay = renderPendingConfirmation(state.pendingConfirmation, {
-    modalOnly: true,
-    uiMode: state.uiMode,
-  });
 
   if (!viewFn) {
-    main.innerHTML = errorBanner + toastBanner + `<div class="view-container"><p>View "${escHtml(state.view)}" not found.</p></div>`;
+    main.innerHTML = errorBanner + `<div class="view-container"><p>View "${escHtml(state.view)}" not found.</p></div>`;
     return;
   }
 
@@ -161,9 +102,9 @@ function renderMain() {
   const plainViews      = ['persona-builder', 'persona-maker', 'session-history', 'template-maker', 'launch-assistant', 'session-comparisons', 'session-comparison'];
 
   if (fullHeightViews.includes(state.view) || plainViews.includes(state.view)) {
-    main.innerHTML = errorBanner + toastBanner + viewFn() + confirmationOverlay;
+    main.innerHTML = errorBanner + viewFn();
   } else {
-    main.innerHTML = `<div class="view-container">${errorBanner}${toastBanner}${viewFn()}</div>${confirmationOverlay}`;
+    main.innerHTML = `<div class="view-container">${errorBanner}${viewFn()}</div>`;
   }
 
   main.dataset.renderedView = state.view;

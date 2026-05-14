@@ -69,25 +69,17 @@
   font-style: italic;
   cursor: help;
 }
-.message-llm-routing {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 11px;
-  color: var(--text-muted);
-}
-.message-llm-warning {
-  color: #f59e0b;
-  font-weight: 600;
-}
-.message-llm-routing-detail {
-  margin: 0;
-}
 
 /* ── LLM Assignment panel (new session) ── */
 .llm-assignment-panel {
   border-top: 1px solid var(--border);
   margin-top: 16px;
+}
+.llm-assignment-mode {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
 }
 .llm-assignment-grid {
   display: flex;

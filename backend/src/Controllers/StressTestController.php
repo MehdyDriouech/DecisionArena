@@ -7,7 +7,6 @@ use Http\Response;
 use Infrastructure\Persistence\SessionRepository;
 use Infrastructure\Persistence\ContextDocumentRepository;
 use Infrastructure\Persistence\DecisionMemoryRepository;
-use Infrastructure\Persistence\RunStatusRepository;
 use Domain\DecisionMemory\DecisionMemoryContextBuilder;
 use Domain\Orchestration\StressTestRunner;
 use Domain\Orchestration\StructuredRunResult;
@@ -18,14 +17,12 @@ class StressTestController {
     private ContextDocumentRepository $docRepo;
     private StressTestRunner          $runner;
     private DecisionMemoryRepository  $memoryRepo;
-    private RunStatusRepository       $runStatusRepo;
 
     public function __construct() {
         $this->sessionRepo = new SessionRepository();
         $this->docRepo     = new ContextDocumentRepository();
         $this->runner      = new StressTestRunner();
         $this->memoryRepo  = new DecisionMemoryRepository();
-        $this->runStatusRepo = new RunStatusRepository();
     }
 
     public function run(Request $req): array {
@@ -83,64 +80,20 @@ class StressTestController {
         $daThreshold    = (float)($session['devil_advocate_threshold'] ?? 0.65);
         $agentProviders = (new \Infrastructure\Persistence\SessionAgentProvidersRepository())->findBySession($sessionId);
 
-        $strategicCtx = isset($session['strategic_context_id']) && (string)$session['strategic_context_id'] !== ''
-            ? (string)$session['strategic_context_id'] : null;
-        $this->sessionRepo->update($sessionId, ['status' => 'running']);
-        $this->runStatusRepo->initialize($sessionId, 'stress-test', $rounds);
-        $this->runStatusRepo->appendEvent(
+        $result = $this->runner->run(
             $sessionId,
-            [
-                'level' => 'info',
-                'phase' => 'session_started',
-                'round' => 0,
-                'label' => 'Session demarree',
-            ],
-            [
-                'current_round' => 0,
-                'total_rounds' => $rounds,
-                'current_phase' => 'session_started',
-                'current_phase_label' => 'Session demarree',
-                'current_step' => 'startup',
-                'percent' => 1,
-            ],
-            'running'
+            $objective,
+            $selectedAgents,
+            $rounds,
+            $language,
+            $forceDisagree,
+            $contextDoc,
+            $daEnabled,
+            $daThreshold,
+            $agentProviders,
+            $decisionThreshold,
+            $session['decision_dynamics_preset'] ?? null
         );
-        try {
-            $result = $this->runner->run(
-                $sessionId,
-                $objective,
-                $selectedAgents,
-                $rounds,
-                $language,
-                $forceDisagree,
-                $contextDoc,
-                $daEnabled,
-                $daThreshold,
-                $agentProviders,
-                $decisionThreshold,
-                $session['decision_dynamics_preset'] ?? null,
-                $strategicCtx
-            );
-        } catch (\Throwable $e) {
-            $this->sessionRepo->update($sessionId, ['status' => 'draft']);
-            $this->runStatusRepo->appendEvent(
-                $sessionId,
-                [
-                    'level' => 'error',
-                    'phase' => 'session_failed',
-                    'round' => null,
-                    'label' => 'Execution echouee',
-                ],
-                [
-                    'current_phase' => 'session_failed',
-                    'current_phase_label' => 'Session en echec',
-                    'current_step' => 'failed',
-                ],
-                'failed',
-                (string)$e->getMessage()
-            );
-            return Response::error('Stress test run failed: ' . $e->getMessage(), 500);
-        }
 
         $memoryReuse = [
             'reuse_mode' => $injectInfo ? 'manual' : null,
@@ -180,24 +133,6 @@ class StressTestController {
                 JSON_UNESCAPED_UNICODE
             ),
         ]);
-        $this->runStatusRepo->appendEvent(
-            $sessionId,
-            [
-                'level' => 'info',
-                'phase' => 'session_completed',
-                'round' => $rounds,
-                'label' => 'Session terminee',
-            ],
-            [
-                'current_round' => $rounds,
-                'total_rounds' => $rounds,
-                'current_phase' => 'session_completed',
-                'current_phase_label' => 'Session terminee',
-                'current_step' => 'done',
-                'percent' => 100,
-            ],
-            'completed'
-        );
 
         // Decision Memory v1 — persist only if memory-safe.
         try { $this->memoryRepo->persistIfSafe($result, $sessionId); } catch (\Throwable $e) {}

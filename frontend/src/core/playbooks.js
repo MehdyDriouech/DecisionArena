@@ -3,8 +3,8 @@ const PLAYBOOK_COPY = {
     'founder-sprint': {
       id: 'founder-sprint',
       name: 'Founder Sprint',
-      tagline: 'Passer d\'une idée floue à une validation terrain actionnable.',
-      intention: 'Valider une idée',
+      tagline: 'Passer d une idee floue a une validation terrain actionnable.',
+      intention: 'Valider une idee',
       when_to_use: [
         'Vous explorez une nouvelle idee produit, marche ou offre.',
         'Vous devez identifier le wedge, l ICP et le premier test utile.',
@@ -30,19 +30,19 @@ const PLAYBOOK_COPY = {
       estimated_duration: '35-45 min',
       cognitive_load: 'Advanced',
       output_contract: [
-        'Angle d\'entrée critique',
-        'Défi ICP',
-        'Signal de validation',
-        'Critères d\'abandon',
-        'Prochain test',
+        'Wedge critique',
+        'ICP challenge',
+        'Validation signal',
+        'Kill criteria',
+        'Next experiment',
       ],
       decision_type: 'Go test / narrow / pivot / kill sur une idee.',
     },
     'ceo-challenge': {
       id: 'ceo-challenge',
       name: 'CEO Challenge',
-      tagline: 'Mettre une stratégie sous pression avant d\'engager l\'équipe.',
-      intention: 'Challenger une stratégie',
+      tagline: 'Mettre une strategie sous pression avant d engager l equipe.',
+      intention: 'Challenger une strategie',
       when_to_use: [
         'Vous avez une direction strategique importante a valider.',
         'Vous devez exposer les angles morts, compromis et risques d execution.',
@@ -68,19 +68,19 @@ const PLAYBOOK_COPY = {
       estimated_duration: '40-55 min',
       cognitive_load: 'Expert',
       output_contract: [
-        'Hypothèses stratégiques',
-        'Angles morts',
-        'Risques d\'exécution',
-        'Analyse des compromis',
-        'Mémo de décision leadership',
+        'Strategic assumptions',
+        'Blind spots',
+        'Execution risks',
+        'Trade-off analysis',
+        'Leadership decision memo',
       ],
       decision_type: 'Poursuivre / reduire / pivoter / differer / tuer une strategie.',
     },
     'stress-test': {
       id: 'stress-test',
       name: 'Stress Test',
-      tagline: 'Chercher ce qui casse avant que le marché ou l\'exécution ne le fasse.',
-      intention: 'Casser une hypothèse',
+      tagline: 'Chercher ce qui casse avant que le marche ou l execution ne le fasse.',
+      intention: 'Casser une hypothese',
       when_to_use: [
         'Vous avez une hypothese forte a verifier avant engagement.',
         'Vous voulez identifier les scenarios d echec et les preuves manquantes.',
@@ -106,18 +106,18 @@ const PLAYBOOK_COPY = {
       estimated_duration: '25-40 min',
       cognitive_load: 'Advanced',
       output_contract: [
-        'Hypothèse coeur',
-        'Scénarios d\'échec',
-        'Assumptions fragiles',
-        'Trous de preuve',
-        'Signaux de pivot ou kill',
+        'Core hypothesis',
+        'Failure scenarios',
+        'Weakest assumptions',
+        'Evidence gaps',
+        'Pivot / kill signals',
       ],
       decision_type: 'Continuer / prouver davantage / pivoter / tuer une hypothese.',
     },
     jury: {
       id: 'jury',
       name: 'Jury',
-      tagline: 'Comparer des options et produire une recommandation argumentée.',
+      tagline: 'Comparer des options et produire une recommandation argumentee.',
       intention: 'Arbitrer',
       when_to_use: [
         'Vous devez choisir entre plusieurs options defendables.',
@@ -144,18 +144,18 @@ const PLAYBOOK_COPY = {
       estimated_duration: '30-45 min',
       cognitive_load: 'Advanced',
       output_contract: [
-        'Options de décision',
-        'Critères d\'évaluation',
-        'Pour/contre par perspective',
-        'Recommandation finale',
-        'Niveau de confiance',
+        'Decision options',
+        'Evaluation criteria',
+        'Pros / cons by perspective',
+        'Final recommendation',
+        'Confidence level',
       ],
       decision_type: 'Choisir une option et expliciter les conditions du verdict.',
     },
     confrontation: {
       id: 'confrontation',
       name: 'Confrontation',
-      tagline: 'Faire s\'affronter deux visions pour clarifier le vrai désaccord.',
+      tagline: 'Faire s affronter deux visions pour clarifier le vrai desaccord.',
       intention: 'Opposer deux visions',
       when_to_use: [
         'Deux directions, visions ou strategies s opposent.',
@@ -184,9 +184,9 @@ const PLAYBOOK_COPY = {
       output_contract: [
         'Position A',
         'Position B',
-        'Points de conflit',
-        'Arguments les plus solides',
-        'Synthèse ou chemin de décision',
+        'Conflict points',
+        'Strongest arguments',
+        'Synthesis or decision path',
       ],
       decision_type: 'Choisir, combiner ou tester deux visions concurrentes.',
     },
@@ -220,11 +220,11 @@ const PLAYBOOK_COPY = {
       estimated_duration: '10-15 min',
       cognitive_load: 'Basic',
       output_contract: [
-        'Cadrage de la décision',
-        'Contrainte clé',
-        'Meilleure option disponible',
-        'Risque principal',
-        'Action suivante immédiate',
+        'Decision framing',
+        'Key constraint',
+        'Best available option',
+        'Main risk',
+        'Immediate next action',
       ],
       decision_type: 'Choisir maintenant et lancer l action suivante.',
     },
@@ -293,13 +293,6 @@ Object.assign(PLAYBOOK_COPY.en['founder-sprint'], {
     'A decision that is already documented with comparable options.',
     'Executive arbitration matters more than field validation.',
   ],
-  output_contract: [
-    'Wedge critique',
-    'ICP challenge',
-    'Validation signal',
-    'Kill criteria',
-    'Next experiment',
-  ],
 });
 
 Object.assign(PLAYBOOK_COPY.en['ceo-challenge'], {
@@ -324,13 +317,6 @@ Object.assign(PLAYBOOK_COPY.en['ceo-challenge'], {
   anti_patterns: [
     'A simple operational choice that should be made quickly.',
     'An idea too immature to express as a strategic hypothesis.',
-  ],
-  output_contract: [
-    'Strategic assumptions',
-    'Blind spots',
-    'Execution risks',
-    'Trade-off analysis',
-    'Leadership decision memo',
   ],
 });
 
@@ -357,13 +343,6 @@ Object.assign(PLAYBOOK_COPY.en['stress-test'], {
     'Arbitration between several already-known options.',
     'Open ideation rather than falsification.',
   ],
-  output_contract: [
-    'Core hypothesis',
-    'Failure scenarios',
-    'Weakest assumptions',
-    'Evidence gaps',
-    'Pivot / kill signals',
-  ],
 });
 
 Object.assign(PLAYBOOK_COPY.en.jury, {
@@ -388,13 +367,6 @@ Object.assign(PLAYBOOK_COPY.en.jury, {
   anti_patterns: [
     'A single hypothesis to break.',
     'An urgent decision that does not justify multi-criteria evaluation.',
-  ],
-  output_contract: [
-    'Decision options',
-    'Evaluation criteria',
-    'Pros / cons by perspective',
-    'Final recommendation',
-    'Confidence level',
   ],
 });
 
@@ -421,13 +393,6 @@ Object.assign(PLAYBOOK_COPY.en.confrontation, {
     'The decision is already constrained by a non-negotiable fact.',
     'A fast verdict is needed without structured debate.',
   ],
-  output_contract: [
-    'Position A',
-    'Position B',
-    'Conflict points',
-    'Strongest arguments',
-    'Synthesis or decision path',
-  ],
 });
 
 Object.assign(PLAYBOOK_COPY.en['quick-decision'], {
@@ -453,13 +418,6 @@ Object.assign(PLAYBOOK_COPY.en['quick-decision'], {
     'Irreversible or highly regulated decisions.',
     'Strategic conflict that requires Confrontation or Jury.',
   ],
-  output_contract: [
-    'Decision framing',
-    'Key constraint',
-    'Best available option',
-    'Main risk',
-    'Immediate next action',
-  ],
 });
 
 const PLAYBOOK_ORDER = Object.freeze([
@@ -477,21 +435,21 @@ const PLAYBOOK_INTENT_TAXONOMY = Object.freeze({
       id: 'validation',
       label: 'Valider',
       question: 'Faut-il agir maintenant, tester ou resserrer ?',
-      description: 'Pour passer d\'une idée ou d\'un choix rapide à une prochaine action observable.',
+      description: 'Pour passer d une idee ou d un choix rapide a une prochaine action observable.',
       playbookIds: ['founder-sprint', 'quick-decision'],
     },
     {
       id: 'challenge',
       label: 'Challenger',
-      question: 'Qu\'est-ce qui peut casser ?',
-      description: 'Pour exposer les hypothèses fragiles, les risques et les conditions de pivot.',
+      question: 'Qu est-ce qui peut casser ?',
+      description: 'Pour exposer les hypotheses fragiles, les risques et les conditions de pivot.',
       playbookIds: ['stress-test', 'ceo-challenge'],
     },
     {
       id: 'arbitration',
       label: 'Arbitrer',
       question: 'Quelle option ou quelle vision doit gagner ?',
-      description: 'Pour comparer des alternatives et clarifier les vrais désaccords.',
+      description: 'Pour comparer des alternatives et clarifier les vrais desaccords.',
       playbookIds: ['jury', 'confrontation'],
     },
   ],

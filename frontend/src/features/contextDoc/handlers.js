@@ -1,6 +1,5 @@
 /* Context Document feature — action handlers and input live-sync */
 import { registerAction, registerInputListener } from '../../core/events.js';
-import { isConfirmationConfirmed, requestConfirmation, uiCopy } from '../../utils/confirmationUi.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -127,30 +126,10 @@ function registerContextDocHandlers() {
     }
   });
 
-  registerAction('delete-ctx-doc', async (ctx = {}) => {
-    const { element } = ctx;
+  registerAction('delete-ctx-doc', async ({ element }) => {
     const { state, render, ContextDocService, t } = getCtx();
-    if (state.uiMode !== 'expert') {
-      state.error = 'Expert mode required.';
-      render();
-      return;
-    }
     const sessionId = element.dataset.sessionId;
-    if (!isConfirmationConfirmed(ctx)) {
-      requestConfirmation(state, {
-        id: `delete-ctx-doc:${sessionId}`,
-        mode: 'modal',
-        tone: 'danger',
-        title: t('contextDoc.deleteConfirm'),
-        body: uiCopy('Le document ne sera plus joint à cette session.', 'The document will no longer be attached to this session.'),
-        expertBody: uiCopy('La session reste conservée, seul le document de contexte est retiré.', 'The session remains saved; only the context document is removed.'),
-        confirmLabel: uiCopy('Supprimer le document', 'Delete document'),
-        action: 'delete-ctx-doc',
-        payload: { sessionId },
-      });
-      render();
-      return;
-    }
+    if (!confirm(t('contextDoc.deleteConfirm'))) return;
     try {
       await ContextDocService.remove(sessionId);
       state.currentContextDoc = null;

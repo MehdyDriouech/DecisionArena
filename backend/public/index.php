@@ -8,7 +8,7 @@ header('Access-Control-Allow-Headers: Content-Type, Authorization');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
 header('Content-Type: application/json');
 
-if (($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') {
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit;
 }
@@ -48,7 +48,6 @@ $router->get('/api/health', function(Request $req) {
 $router->get('/api/personas/custom', [Controllers\PersonaController::class, 'custom']);
 $router->post('/api/personas/build-draft', [Controllers\PersonaController::class, 'buildDraft']);
 $router->post('/api/personas/save-custom', [Controllers\PersonaController::class, 'saveCustom']);
-$router->post('/api/personas/default-llm', [Controllers\PersonaController::class, 'updateDefaultLlm']);
 $router->post('/api/personas/modes', [Controllers\PersonaController::class, 'saveModes']);
 $router->post('/api/personas/decision-dynamics', [Controllers\PersonaController::class, 'saveDecisionDynamics']);
 $router->post('/api/personas/sandbox-test', [Controllers\PersonaSandboxController::class, 'test']);
@@ -65,8 +64,6 @@ $router->get('/api/providers', [Controllers\ProviderController::class, 'index'])
 $router->post('/api/providers', [Controllers\ProviderController::class, 'store']);
 $router->post('/api/providers/test', [Controllers\ProviderController::class, 'test']);
 $router->post('/api/providers/models', [Controllers\ProviderController::class, 'models']);
-$router->post('/api/providers/{id}/disable', [Controllers\ProviderController::class, 'disable']);
-$router->post('/api/providers/{id}/enable', [Controllers\ProviderController::class, 'enable']);
 $router->get('/api/providers/routing', [Controllers\ProviderRoutingController::class, 'show']);
 $router->put('/api/providers/routing', [Controllers\ProviderRoutingController::class, 'update']);
 $router->delete('/api/providers/{id}', [Controllers\ProviderController::class, 'destroy']);
@@ -86,8 +83,6 @@ $router->post('/api/sessions/from-template', [Controllers\TemplateController::cl
 $router->get('/api/sessions/{id}', [Controllers\SessionController::class, 'show']);
 $router->get('/api/sessions/{id}/decision-memory', [Controllers\DecisionMemoryController::class, 'bySession']);
 $router->post('/api/sessions/{id}/decision-memory/confirm', [Controllers\DecisionMemoryController::class, 'confirm']);
-$router->get('/api/sessions/{id}/decision-memory/agent-memory-preview', [Controllers\DecisionMemoryController::class, 'agentMemoryPreview']);
-$router->post('/api/sessions/{id}/decision-memory/propagate-to-agent-memories', [Controllers\DecisionMemoryController::class, 'propagateToAgentMemories']);
 $router->delete('/api/sessions/{id}', [Controllers\SessionController::class, 'delete']);
 $router->post('/api/sessions/{id}/status', [Controllers\SessionController::class, 'updateStatus']);
 $router->put('/api/sessions/{id}/memory', [Controllers\SessionController::class, 'memory']);
@@ -152,9 +147,6 @@ $router->post('/api/session-comparisons', [Controllers\SessionComparisonControll
 $router->get('/api/session-comparisons/{id}', [Controllers\SessionComparisonController::class, 'show']);
 $router->delete('/api/session-comparisons/{id}', [Controllers\SessionComparisonController::class, 'destroy']);
 
-// Dashboard (cognitive cockpit)
-$router->get('/api/dashboard/cognitive-summary', [Controllers\DashboardController::class, 'cognitiveSummary']);
-
 // Launch Assistant
 $router->post('/api/launch-assistant/recommend', [Controllers\LaunchAssistantController::class, 'recommend']);
 
@@ -206,9 +198,6 @@ $router->post('/api/learning/recompute',  [Controllers\LearningController::class
 $router->get('/api/learning/export',      [Controllers\LearningController::class, 'export']);
 $router->post('/api/learning/export',     [Controllers\LearningController::class, 'export']);
 
-// Cognitive governance (catalogue invariants — lecture seule, expert)
-$router->get('/api/cognitive-governance', [Controllers\CognitiveGovernanceController::class, 'index']);
-
 // Prompt policies (admin — whitelisted files only)
 $router->get('/api/prompt-policies',       [Controllers\PromptPolicyController::class, 'index']);
 $router->get('/api/prompt-policies/{id}',  [Controllers\PromptPolicyController::class, 'show']);
@@ -236,57 +225,13 @@ $router->get('/api/decision-memories/{id}/related', [Controllers\DecisionMemoryC
 $router->get('/api/decision-memories/{id}/audit', [Controllers\DecisionMemoryController::class, 'audit']);
 $router->post('/api/decision-memories/{id}/link', [Controllers\DecisionMemoryController::class, 'link']);
 $router->post('/api/decision-memories/{id}/lifecycle', [Controllers\DecisionMemoryController::class, 'lifecycle']);
-$router->delete('/api/decision-memories/{id}', [Controllers\DecisionMemoryController::class, 'destroy']);
-
-// Global beliefs expert APIs (strict scoped via context_id query)
-$router->get('/api/beliefs', [Controllers\StrategicContextBeliefsController::class, 'indexGlobal']);
-$router->get('/api/beliefs/runtime', [Controllers\StrategicContextBeliefsController::class, 'runtimeProjection']);
-$router->get('/api/beliefs/{id}', [Controllers\StrategicContextBeliefsController::class, 'showGlobal']);
-$router->get('/api/beliefs/{id}/timeline', [Controllers\StrategicContextBeliefsController::class, 'timelineGlobal']);
-$router->get('/api/beliefs/{id}/relations', [Controllers\StrategicContextBeliefsController::class, 'relationsGlobal']);
 
 // Strategic Contexts (lightweight organization layer)
 $router->get('/api/strategic-contexts', [Controllers\StrategicContextController::class, 'index']);
 $router->post('/api/strategic-contexts', [Controllers\StrategicContextController::class, 'create']);
-$router->post('/api/strategic-contexts/compare', [Controllers\StrategicContextController::class, 'compare']);
-$router->get('/api/strategic-contexts/{context_id}/timeline', [Controllers\StrategicContextController::class, 'timeline']);
-$router->get('/api/strategic-contexts/{id}/memory-overview', [Controllers\StrategicContextController::class, 'memoryOverview']);
-$router->post('/api/strategic-contexts/{id}/agent-memories/sync', [Controllers\StrategicContextController::class, 'syncAgentMemories']);
-$router->get('/api/strategic-contexts/{id}/narrative', [Controllers\StrategicContextController::class, 'narrativeShow']);
-$router->get('/api/strategic-contexts/{id}/memory-governance', [Controllers\StrategicContextController::class, 'memoryGovernance']);
-$router->post('/api/strategic-contexts/{id}/narrative/recompute', [Controllers\StrategicContextController::class, 'narrativeRecompute']);
-$router->get('/api/strategic-contexts/{contextId}/beliefs', [Controllers\StrategicContextBeliefsController::class, 'index']);
-$router->get('/api/strategic-contexts/{contextId}/agents/{agentId}/beliefs', [Controllers\StrategicContextBeliefsController::class, 'indexByAgent']);
-$router->post('/api/strategic-contexts/{contextId}/beliefs', [Controllers\StrategicContextBeliefsController::class, 'store']);
-$router->put('/api/strategic-contexts/{contextId}/beliefs/{beliefId}', [Controllers\StrategicContextBeliefsController::class, 'update']);
-$router->post('/api/strategic-contexts/{contextId}/beliefs/{beliefId}/archive', [Controllers\StrategicContextBeliefsController::class, 'archive']);
-$router->post('/api/strategic-contexts/{contextId}/beliefs/{beliefId}/deprecate', [Controllers\StrategicContextBeliefsController::class, 'deprecate']);
-$router->get('/api/strategic-contexts/{id}/memory-compilations', [Controllers\StrategicContextMemoryCompilationsController::class, 'index']);
-$router->post('/api/strategic-contexts/{id}/memory-compilations/compile', [Controllers\StrategicContextMemoryCompilationsController::class, 'compile']);
-$router->get('/api/strategic-contexts/{id}/memory-compilations/{compilationId}', [Controllers\StrategicContextMemoryCompilationsController::class, 'show']);
-$router->post('/api/strategic-contexts/{id}/memory-compilations/{compilationId}/archive', [Controllers\StrategicContextMemoryCompilationsController::class, 'archive']);
-$router->post('/api/strategic-contexts/{id}/memory-compilations/{compilationId}/supersede', [Controllers\StrategicContextMemoryCompilationsController::class, 'supersede']);
-$router->get('/api/strategic-contexts/{id}/snapshots/longitudinal', [Controllers\StrategicContextSnapshotsController::class, 'longitudinal']);
-$router->post('/api/strategic-contexts/{id}/snapshots/compare', [Controllers\StrategicContextSnapshotsController::class, 'compare']);
-$router->get('/api/strategic-contexts/{id}/snapshots', [Controllers\StrategicContextSnapshotsController::class, 'index']);
-$router->post('/api/strategic-contexts/{id}/snapshots', [Controllers\StrategicContextSnapshotsController::class, 'store']);
-$router->get('/api/strategic-contexts/{id}/snapshots/{snapshotId}', [Controllers\StrategicContextSnapshotsController::class, 'show']);
-$router->get('/api/strategic-contexts/{id}/relationships', [Controllers\SocialDynamicsController::class, 'relationshipsByContext']);
-$router->get('/api/strategic-contexts/{id}/relationship-events', [Controllers\SocialDynamicsController::class, 'relationshipEventsByContext']);
 $router->get('/api/strategic-contexts/{context_id}/rooms', [Controllers\DecisionRoomsController::class, 'indexByContext']);
 $router->post('/api/strategic-contexts/{context_id}/rooms', [Controllers\DecisionRoomsController::class, 'createInContext']);
 $router->get('/api/strategic-contexts/{context_id}/memory.md', [Controllers\MemoryMarkdownController::class, 'context']);
-$router->get('/api/strategic-contexts/{context_id}/agents/{agent_id}/memory', [Controllers\AgentContextMemoryController::class, 'show']);
-$router->put('/api/strategic-contexts/{context_id}/agents/{agent_id}/memory', [Controllers\AgentContextMemoryController::class, 'update']);
-$router->post('/api/strategic-contexts/{context_id}/agents/{agent_id}/memory/append', [Controllers\AgentContextMemoryController::class, 'append']);
-$router->post('/api/strategic-contexts/{context_id}/agents/{agent_id}/memory/recent-note', [Controllers\AgentContextMemoryController::class, 'recentNote']);
-$router->post('/api/strategic-contexts/{context_id}/agents/{agent_id}/memory/contradiction', [Controllers\AgentContextMemoryController::class, 'contradiction']);
-$router->post('/api/strategic-contexts/{context_id}/agents/{agent_id}/memory/deprecate', [Controllers\AgentContextMemoryController::class, 'deprecate']);
-$router->post('/api/strategic-contexts/{context_id}/agents/{agent_id}/memory/compact', [Controllers\AgentContextMemoryController::class, 'compact']);
-$router->post('/api/strategic-contexts/{context_id}/agents/{agent_id}/memory/consolidate', [Controllers\AgentContextMemoryController::class, 'consolidate']);
-$router->post('/api/strategic-contexts/{context_id}/agents/{agent_id}/chat', [Controllers\AgentContextChatController::class, 'chat']);
-$router->get('/api/strategic-contexts/active', [Controllers\StrategicContextController::class, 'active']);
-$router->post('/api/strategic-contexts/{id}/activate', [Controllers\StrategicContextController::class, 'activate']);
 $router->get('/api/strategic-contexts/{id}', [Controllers\StrategicContextController::class, 'show']);
 $router->put('/api/strategic-contexts/{id}', [Controllers\StrategicContextController::class, 'update']);
 $router->delete('/api/strategic-contexts/{id}', [Controllers\StrategicContextController::class, 'destroy']);
@@ -305,10 +250,6 @@ $router->get('/api/decision-rooms/{room_id}', [Controllers\DecisionRoomsControll
 $router->put('/api/decision-rooms/{room_id}', [Controllers\DecisionRoomsController::class, 'update']);
 $router->get('/api/decision-rooms/{room_id}/memory.md', [Controllers\MemoryMarkdownController::class, 'room']);
 $router->delete('/api/decision-rooms/{room_id}', [Controllers\DecisionRoomsController::class, 'destroy']);
-
-if (PHP_SAPI === 'cli' && !isset($_SERVER['REQUEST_METHOD'])) {
-    return;
-}
 
 $request = new Request();
 $logger = new Infrastructure\Logging\Logger();

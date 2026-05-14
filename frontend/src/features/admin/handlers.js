@@ -1,11 +1,10 @@
 /* Admin feature — action handlers and change/input listeners for providers, personas, templates */
-import { registerAction, registerChangeListener, registerInputListener, registerSubmit, dispatchAction } from '../../core/events.js';
+import { registerAction, registerChangeListener, registerInputListener, registerSubmit } from '../../core/events.js';
 import { normalizeDecisionDynamics } from '../../utils/decisionDynamics.js';
 import { updateProviderSettings, deleteProviderKey, maskProviderKey } from '../../core/store.js';
 import { withProviderRuntime } from '../../core/providerRuntime.js';
 import { getAvailableProviders } from '../../core/providerRouting.js';
-import { ProviderService, testProviderConnection } from '../../services/providerService.js';
-import { isConfirmationConfirmed, requestConfirmation, uiCopy } from '../../utils/confirmationUi.js';
+import { testProviderConnection } from '../../services/providerService.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -14,7 +13,6 @@ function getCtx() {
     render:         () => a.render?.(),
     navigate:       (v) => a.router.navigate(v),
     apiFetch:       a.services.apiFetch,
-    LoaderService:  a.services.LoaderService,
     PersonaService: a.services.PersonaService,
     escHtml:        a.utils.escHtml,
     t:              (key) => window.i18n?.t(key) ?? key,
@@ -337,21 +335,6 @@ function mountLocalServerProviderIntoModal(provider) {
 }
 
 function registerAdminHandlers() {
-  registerAction('load-admin-memories-data', async () => {
-    const { state, render, LoaderService } = getCtx();
-    try {
-      await LoaderService.loadSessions();
-    } catch (_) {}
-    try {
-      await dispatchAction('load-decision-memories', {});
-    } catch (err) {
-      state.error = String(err?.message || err);
-      render();
-      return;
-    }
-    render();
-  });
-
   /* ── Persona ──────────────────────────────────────────────────────────── */
   registerAction('show-persona', ({ element }) => {
     const fn = getViews().showPersonaModal;
@@ -416,36 +399,6 @@ function registerAdminHandlers() {
     } catch (err) {
       if (statusEl) { statusEl.textContent = t('personas.modesError'); statusEl.className = 'mode-save-status fail'; }
       setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2500);
-    }
-  });
-
-  registerAction('save-persona-default-llm', async ({ element }) => {
-    const { state, render, PersonaService, t } = getCtx();
-    const personaId = element?.dataset?.personaId ?? '';
-    if (!personaId) return;
-    const card = document.querySelector(`[data-persona-llm-card="${personaId}"]`);
-    const prov = card?.querySelector('[data-persona-llm-prov]')?.value ?? '';
-    const model = card?.querySelector('[data-persona-llm-model]')?.value ?? '';
-    const statusEl = document.getElementById(`persona-llm-status-${personaId}`);
-    try {
-      await PersonaService.updateDefaultLlm({
-        persona_id: personaId,
-        default_provider: prov,
-        default_model: model,
-      });
-      const data = await PersonaService.list();
-      state.personas = Array.isArray(data) ? data : (data.personas || []);
-      if (statusEl) {
-        statusEl.textContent = t('personas.defaultLlm.saved');
-        statusEl.style.color = '#059669';
-        setTimeout(() => { statusEl.textContent = ''; statusEl.style.color = ''; }, 2800);
-      }
-      render();
-    } catch (err) {
-      if (statusEl) {
-        statusEl.textContent = `${t('personas.defaultLlm.error')}: ${err?.message || err}`;
-        statusEl.style.color = '#dc2626';
-      }
     }
   });
 
@@ -566,18 +519,15 @@ function registerAdminHandlers() {
 
   /* ── Providers ────────────────────────────────────────────────────────── */
   registerAction('test-provider', async ({ element }) => {
-    const { state, apiFetch, escHtml, t } = getCtx();
+    const { apiFetch, escHtml, t } = getCtx();
     const providerId = element.dataset.providerId;
     const resultEl   = document.getElementById(`provider-test-result-${providerId}`);
-    const provider = (state.providers || []).find((p) => String(p.id) === String(providerId));
-    const isEnabled = provider && (provider.enabled == 1 || provider.enabled === true);
     if (resultEl) resultEl.innerHTML = `<span style="color:var(--text-muted);font-size:12px;">${t('providers.testing')}</span>`;
     try {
       const result = await apiFetch('/api/providers/test', { method: 'POST', body: JSON.stringify({ provider_id: providerId }) });
       if (resultEl) {
         const ok = result.success || result.status === 'ok';
-        const manualDisabledHint = !isEnabled ? `<div style="margin-top:6px;font-size:11px;color:var(--text-muted);">${escHtml(t('providers.manualTestDisabledHint'))}</div>` : '';
-        resultEl.innerHTML = `<div class="provider-test-result ${ok ? 'ok' : 'fail'}">${ok ? '✅ Connected' : '❌ Failed'}: ${escHtml(result.message || result.error || JSON.stringify(result))}${manualDisabledHint}</div>`;
+        resultEl.innerHTML = `<div class="provider-test-result ${ok ? 'ok' : 'fail'}">${ok ? '✅ Connected' : '❌ Failed'}: ${escHtml(result.message || result.error || JSON.stringify(result))}</div>`;
       }
     } catch (err) {
       if (resultEl) resultEl.innerHTML = `<div class="provider-test-result fail">❌ ${escHtml(err.message)}</div>`;
@@ -683,26 +633,11 @@ function registerAdminHandlers() {
     render();
   });
 
-  registerAction('delete-provider', async (ctx = {}) => {
-    const { element } = ctx;
+  registerAction('delete-provider', async ({ element }) => {
     const { state, render, apiFetch, t } = getCtx();
     const providerId = element.dataset.providerId;
     if (!providerId) return;
-    if (!isConfirmationConfirmed(ctx)) {
-      requestConfirmation(state, {
-        id: `delete-provider:${providerId}`,
-        mode: 'modal',
-        tone: 'danger',
-        title: t('providers.confirmDelete'),
-        body: uiCopy('Ce provider ne sera plus disponible pour les nouveaux runs.', 'This provider will no longer be available for new runs.'),
-        expertBody: uiCopy('Les sessions déjà enregistrées ne sont pas supprimées.', 'Already saved sessions are not deleted.'),
-        confirmLabel: uiCopy('Supprimer le provider', 'Delete provider'),
-        action: 'delete-provider',
-        payload: { providerId },
-      });
-      render();
-      return;
-    }
+    if (!confirm(t('providers.confirmDelete'))) return;
     try {
       await apiFetch(`/api/providers/${providerId}`, { method: 'DELETE' });
       state.providers = state.providers.filter((p) => p.id !== providerId);
@@ -712,50 +647,6 @@ function registerAdminHandlers() {
       state.error = err.message;
       render();
     }
-  });
-
-  registerAction('toggle-local-provider-enabled', async (ctx = {}) => {
-    const { element } = ctx;
-    const { state, render, t } = getCtx();
-    const providerId = String(element?.dataset?.providerId || '').trim();
-    if (!providerId) return;
-    const provider = (state.providers || []).find((p) => String(p.id) === providerId);
-    if (!provider) return;
-    const currentlyEnabled = provider.enabled == 1 || provider.enabled === true;
-    const nextEnabled = !currentlyEnabled;
-    if (!isConfirmationConfirmed(ctx)) {
-      requestConfirmation(state, {
-        id: `toggle-provider-enabled:${providerId}:${nextEnabled ? 'on' : 'off'}`,
-        mode: 'modal',
-        tone: 'warning',
-        title: nextEnabled ? t('providers.confirmEnable') : t('providers.confirmDisable'),
-        body: nextEnabled
-          ? uiCopy('Ce provider redeviendra disponible pour le routage et les nouvelles analyses.', 'This provider will be available again for routing and new analyses.')
-          : uiCopy('Il ne sera plus utilise par le routage ni propose par defaut pour les nouvelles analyses.', 'It will no longer be used by routing nor proposed by default for new analyses.'),
-        expertBody: uiCopy('Aucune configuration n’est supprimée.', 'No configuration is deleted.'),
-        confirmLabel: nextEnabled ? t('providers.enable') : t('providers.disable'),
-        action: 'toggle-local-provider-enabled',
-        payload: { providerId },
-      });
-      render();
-      return;
-    }
-    try {
-      const result = nextEnabled
-        ? await ProviderService.enable(providerId)
-        : await ProviderService.disable(providerId);
-      const updated = result?.provider || null;
-      if (updated) {
-        const idx = state.providers.findIndex((p) => String(p.id) === providerId);
-        if (idx >= 0) {
-          state.providers[idx] = { ...state.providers[idx], ...updated };
-        }
-      }
-      state.error = null;
-    } catch (err) {
-      state.error = err.message || String(err);
-    }
-    render();
   });
 
   /* ── BYOK (clés API locales, store navigateur) ────────────────────────── */
@@ -1101,22 +992,9 @@ function registerAdminHandlers() {
     try { await navigator.clipboard.writeText(String(text)); } catch (_) {}
   });
 
-  registerAction('logs-delete-old', async (ctx = {}) => {
+  registerAction('logs-delete-old', async () => {
     const { state, render, apiFetch, t } = getCtx();
-    if (!isConfirmationConfirmed(ctx)) {
-      requestConfirmation(state, {
-        id: 'logs-delete-old',
-        mode: 'modal',
-        tone: 'warning',
-        title: t('logs.confirmDeleteOld'),
-        body: uiCopy('Les logs récents restent disponibles.', 'Recent logs remain available.'),
-        expertBody: uiCopy('Suppression par filtre older_than_days=7.', 'Deletion uses older_than_days=7.'),
-        confirmLabel: uiCopy('Nettoyer les anciens logs', 'Clean old logs'),
-        action: 'logs-delete-old',
-      });
-      render();
-      return;
-    }
+    if (!confirm(t('logs.confirmDeleteOld'))) return;
     state.logs.maintenanceStatus = t('logs.deleting');
     render();
     try {
@@ -1128,22 +1006,10 @@ function registerAdminHandlers() {
     render();
   });
 
-  registerAction('logs-delete-all', async (ctx = {}) => {
+  registerAction('logs-delete-all', async () => {
     const { state, render, apiFetch, t } = getCtx();
-    if (!isConfirmationConfirmed(ctx)) {
-      requestConfirmation(state, {
-        id: 'logs-delete-all',
-        mode: 'modal',
-        tone: 'danger',
-        title: t('logs.confirmDeleteAllPrompt'),
-        body: uiCopy('Tous les logs visibles seront supprimés.', 'All visible logs will be deleted.'),
-        expertBody: uiCopy('Envoie confirm=DELETE à /api/logs.', 'Sends confirm=DELETE to /api/logs.'),
-        confirmLabel: uiCopy('Supprimer les logs', 'Delete logs'),
-        action: 'logs-delete-all',
-      });
-      render();
-      return;
-    }
+    const conf = prompt(t('logs.confirmDeleteAllPrompt'), '');
+    if (conf !== 'DELETE') return;
     state.logs.maintenanceStatus = t('logs.deleting');
     render();
     try {
@@ -1242,26 +1108,11 @@ function registerAdminHandlers() {
     }
   });
 
-  registerAction('delete-template', async (ctx = {}) => {
-    const { element } = ctx;
+  registerAction('delete-template', async ({ element }) => {
     const { state, render, apiFetch, t } = getCtx();
     const templateId = element.dataset.templateId;
     const name       = element.dataset.templateName || '';
-    if (!isConfirmationConfirmed(ctx)) {
-      requestConfirmation(state, {
-        id: `delete-template:${templateId}`,
-        mode: 'modal',
-        tone: 'danger',
-        title: `${t('template.confirmDelete')} "${name}" ?`,
-        body: uiCopy('Ce modèle ne sera plus proposé pour démarrer une session.', 'This template will no longer be offered to start a session.'),
-        expertBody: uiCopy('Les sessions déjà créées depuis ce template restent conservées.', 'Sessions already created from this template remain saved.'),
-        confirmLabel: uiCopy('Supprimer le template', 'Delete template'),
-        action: 'delete-template',
-        payload: { templateId, templateName: name },
-      });
-      render();
-      return;
-    }
+    if (!window.confirm(`${t('template.confirmDelete')} "${name}" ?`)) return;
     try {
       await apiFetch(`/api/templates/${templateId}`, { method: 'DELETE' });
       state.templates = state.templates.filter((tmpl) => tmpl.id !== templateId);
@@ -1790,27 +1641,12 @@ function registerScenarioPackAdminHandlers() {
     render();
   });
 
-  registerAction('delete-scenario-pack', async (ctx = {}) => {
-    const { element } = ctx;
+  registerAction('delete-scenario-pack', async ({ element }) => {
     const { state, render, ScenarioPackService, t } = spCtx();
     const packId   = element?.dataset?.scenarioId;
     const packName = element?.dataset?.scenarioName || packId;
     if (!packId) return;
-    if (!isConfirmationConfirmed(ctx)) {
-      requestConfirmation(state, {
-        id: `delete-scenario-pack:${packId}`,
-        mode: 'modal',
-        tone: 'danger',
-        title: `${t('scenario.admin.delete')} "${packName}" ?`,
-        body: uiCopy('Ce pack ne sera plus disponible dans les scénarios.', 'This pack will no longer be available in scenarios.'),
-        expertBody: uiCopy('Les sessions existantes ne sont pas modifiées.', 'Existing sessions are not modified.'),
-        confirmLabel: uiCopy('Supprimer le scénario', 'Delete scenario'),
-        action: 'delete-scenario-pack',
-        payload: { scenarioId: packId, scenarioName: packName },
-      });
-      render();
-      return;
-    }
+    if (!window.confirm(`${t('scenario.admin.delete')} "${packName}" ?`)) return;
     try {
       await ScenarioPackService.remove(packId);
       await reloadPacks(state, ScenarioPackService);
@@ -1913,8 +1749,7 @@ function registerPromptPolicyHandlers() {
   });
 
   // Select a policy from the sidebar
-  registerAction('policy-select', async (ctx = {}) => {
-    const { element } = ctx;
+  registerAction('policy-select', async ({ element }) => {
     const { state, render, t } = getCtx();
     const id = element?.dataset?.policyId;
     if (!id) return;
@@ -1924,21 +1759,7 @@ function registerPromptPolicyHandlers() {
 
     // Warn if unsaved changes
     if (ps.draft !== null && ps.draft !== undefined && ps.activeId && ps.activeId !== id) {
-      if (!isConfirmationConfirmed(ctx)) {
-        requestConfirmation(state, {
-          id: `policy-discard:${id}`,
-          mode: 'modal',
-          tone: 'warning',
-          title: uiCopy('Abandonner les modifications ?', 'Discard changes?'),
-          body: t('admin.promptPolicies.confirmDiscard'),
-          expertBody: uiCopy('La policy chargée change, le brouillon local est abandonné.', 'The loaded policy changes, and the local draft is discarded.'),
-          confirmLabel: uiCopy('Changer de policy', 'Switch policy'),
-          action: 'policy-select',
-          payload: { policyId: id },
-        });
-        render();
-        return;
-      }
+      if (!window.confirm(t('admin.promptPolicies.confirmDiscard'))) return;
     }
 
     state.promptPolicies = { ...ps, loadingId: id, error: null };

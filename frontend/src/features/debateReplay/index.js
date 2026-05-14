@@ -3,7 +3,6 @@
  */
 
 import { renderPanelRecommendBadge, renderTooltip, getInteractionSourceLabel, getInteractionSourceClass, renderInteractionContractVerifiedBadge, renderInteractionContractExpertDetail } from '../../ui/components.js';
-import { renderLlmRoutingCompact } from '../../utils/llmRoutingUi.js';
 
 function panelHl(state) {
   return state.sessionHistory?.panelHighlights || state.auditData?.highlights || [];
@@ -26,7 +25,7 @@ const EVENT_ICONS = {
 };
 
 function renderEventCard(event, isCurrent) {
-  const { state, escHtml, t } = getCtx();
+  const { escHtml } = getCtx();
   if (!event) return '';
   const icon = EVENT_ICONS[event.type] || '•';
   const meta = event.metadata ?? {};
@@ -65,19 +64,6 @@ function renderEventCard(event, isCurrent) {
        })()}`
     : '';
 
-  const llmRoutingMeta = !isInteraction && event.type === 'message' && event.role === 'assistant'
-    ? (meta.llm_routing && typeof meta.llm_routing === 'object' ? meta.llm_routing : null)
-    : null;
-  const llmBadge = llmRoutingMeta
-    ? renderLlmRoutingCompact(
-      {
-        role: 'assistant',
-        meta_json: JSON.stringify({ llm_routing: llmRoutingMeta }),
-      },
-      { escHtml, t, expert: state.uiMode === 'expert' },
-    )
-    : '';
-
   return `
     <div class="replay-event-card ${isCurrent ? 'replay-event-active' : ''}" id="replay-event-${event.id ?? ''}">
       <div class="replay-event-header">
@@ -95,7 +81,6 @@ function renderEventCard(event, isCurrent) {
           ${event.timestamp ? event.timestamp.slice(0, 16).replace('T', ' ') : ''}
         </div>
       </div>
-      ${llmBadge ? `<div style="margin-top:8px;">${llmBadge}</div>` : ''}
       ${event.content && isCurrent && !isInteraction ? `<div class="replay-event-content">${escHtml(event.content)}</div>` : ''}
     </div>
   `;

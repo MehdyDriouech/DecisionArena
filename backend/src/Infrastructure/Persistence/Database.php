@@ -1,8 +1,6 @@
 <?php
 namespace Infrastructure\Persistence;
 
-use Domain\CognitiveGovernance\RuntimeFilesystemGuard;
-
 class Database {
     private static ?Database $instance = null;
     private \PDO $pdo;
@@ -11,10 +9,10 @@ class Database {
         $dbPath = __DIR__ . '/../../../storage/database/app.sqlite';
         $dir = dirname($dbPath);
         if (!is_dir($dir)) {
-            RuntimeFilesystemGuard::inspect('mkdir', $dir, ['source' => 'Database::__construct']);
             mkdir($dir, 0755, true);
         }
-        $this->pdo = new RuntimeAwarePdo('sqlite:' . $dbPath);
+        $this->pdo = new \PDO('sqlite:' . $dbPath);
+        $this->pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
         $this->pdo->exec('PRAGMA journal_mode=WAL;');
         $this->pdo->exec('PRAGMA foreign_keys=ON;');
     }

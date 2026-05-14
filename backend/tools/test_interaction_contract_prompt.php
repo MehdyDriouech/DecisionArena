@@ -25,8 +25,6 @@ require_once $base . '/Infrastructure/Markdown/MarkdownFileLoader.php';
 require_once $base . '/Domain/Agents/DecisionDynamics.php';
 require_once $base . '/Domain/Agents/Persona.php';
 require_once $base . '/Domain/Agents/Agent.php';
-require_once $base . '/Domain/Orchestration/RuntimeContracts.php';
-require_once $base . '/Domain/Orchestration/PlaybookRuntime.php';
 require_once $base . '/Domain/Orchestration/PromptBuilder.php';
 
 // Stub DB-dependent class — not needed for prompt-only tests

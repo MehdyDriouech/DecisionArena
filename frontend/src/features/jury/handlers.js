@@ -1,11 +1,5 @@
 import { registerAction } from '../../core/events.js';
 import { withProviderRuntime } from '../../core/providerRuntime.js';
-import { isConfirmationConfirmed, requestConfirmation } from '../../utils/confirmationUi.js';
-import {
-  ensureRunProgressEntry,
-  updateRunProgressEntry,
-  startRunProgressPolling,
-} from '../../services/runProgressService.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -17,6 +11,24 @@ function getCtx() {
     SessionService:    a.services.SessionService,
     ContextDocService: a.services.ContextDocService,
   };
+}
+
+function pollRunStatus(sessionId, onUpdate, intervalMs = 2000) {
+  let active = true;
+  let timer  = null;
+  const loop = () => {
+    if (!active) return;
+    const { apiFetch } = getCtx();
+    apiFetch(`/api/sessions/${sessionId}/run-status`)
+      .then(data => {
+        if (!active) return;
+        onUpdate(data.run_status);
+        timer = setTimeout(loop, intervalMs);
+      })
+      .catch(() => { if (active) timer = setTimeout(loop, intervalMs); });
+  };
+  timer = setTimeout(loop, intervalMs);
+  return () => { active = false; if (timer) clearTimeout(timer); };
 }
 
 function registerJuryHandlers() {
@@ -45,7 +57,7 @@ function registerJuryHandlers() {
   });
 
   registerAction('run-jury', async () => {
-    const { state, render, apiFetch, SessionService } = getCtx();
+    const { state, render, apiFetch } = getCtx();
     const session = state.currentSession;
     if (!session) return;
 
@@ -53,87 +65,18 @@ function registerJuryHandlers() {
     state.juryResults = null;
     state.juryAutoRetryBanner = null;
     state.error       = null;
-    state.runProgress = {
-      session_id: session.id,
-      mode: 'jury',
-      status: 'running',
-      started_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      elapsed_seconds: 0,
-      progress: {
-        percent: 1,
-        current_round: 0,
-        total_rounds: Number(session.rounds || 3),
-        current_phase: 'session_started',
-        current_phase_label: 'Session started',
-        estimated: true,
-      },
-      events: [],
-      last_error: null,
-    };
-    ensureRunProgressEntry(state, session.id, state.runProgress);
-    updateRunProgressEntry(state, session.id, {
-      data: state.runProgress,
-      loading: true,
-      error: null,
-      pollActive: true,
-      pollStartedAt: new Date().toISOString(),
-    });
-    state.runProgressPolling = { active: true, intervalMs: 1500, error: null };
     try { render(); } catch (_) { /* render errors must not block the jury run */ }
 
-    const localTicker = setInterval(() => {
+    const stopPolling = pollRunStatus(session.id, (runStatus) => {
       const { state: s, render: r } = getCtx();
-      if (!s.juryRunning || s.view !== 'jury') {
-        clearInterval(localTicker);
-        return;
-      }
-      if (s.runProgress?.started_at) {
-        const startedMs = new Date(s.runProgress.started_at).getTime();
-        if (Number.isFinite(startedMs)) {
-          const elapsed = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
-          s.runProgress.elapsed_seconds = Math.max(Number(s.runProgress.elapsed_seconds || 0), elapsed);
-          const entry = s.runProgressBySessionId?.[session.id];
-          if (entry?.data) {
-            entry.data.elapsed_seconds = Math.max(Number(entry.data.elapsed_seconds || 0), elapsed);
-          }
-        }
-      }
-      try { r(); } catch (_) {}
-    }, 1000);
-
-    const stopPolling = startRunProgressPolling({
-      sessionId: session.id,
-      state,
-      intervalMs: 1500,
-      fetchRunStatus: (sessionId, signal) => SessionService.getRunStatus(sessionId, { signal }),
-      shouldContinue: () => {
-        const { state: s } = getCtx();
-        return s.juryRunning
-          && s.view === 'jury'
-          && String(s.currentSession?.id || '') === String(session.id);
-      },
-      onTick: (payload, pollErr, meta) => {
-        const { state: s, render: r } = getCtx();
-        const runStatus = payload?.run_status || payload?.progress || null;
-        if (payload) {
-          s.runProgress = payload;
-          s.runProgressPolling = { active: !meta?.terminal, intervalMs: 1500, error: null, lastUpdateAt: Date.now() };
-        } else if (pollErr) {
-          s.runProgressPolling = {
-            active: true,
-            intervalMs: 1500,
-            error: pollErr?.message || String(pollErr),
-            lastUpdateAt: Date.now(),
-          };
-        }
-        if (runStatus?.phase === 'auto_retry' || runStatus?.current_phase === 'auto_retry') {
-          s.juryAutoRetryBanner = 'running';
-        } else if (runStatus?.phase === 'auto_retry_complete' || runStatus?.current_phase === 'auto_retry_complete') {
-          s.juryAutoRetryBanner = 'complete';
-        }
+      if (!runStatus) return;
+      if (runStatus.phase === 'auto_retry') {
+        s.juryAutoRetryBanner = 'running';
         try { r(); } catch (_) {}
-      },
+      } else if (runStatus.phase === 'auto_retry_complete') {
+        s.juryAutoRetryBanner = 'complete';
+        try { r(); } catch (_) {}
+      }
     });
 
     try {
@@ -166,9 +109,6 @@ function registerJuryHandlers() {
       state.error = 'Jury failed: ' + err.message;
     } finally {
       stopPolling();
-      clearInterval(localTicker);
-      state.runProgressPolling = { active: false, intervalMs: 1500, error: null, lastUpdateAt: Date.now() };
-      updateRunProgressEntry(state, session.id, { loading: false, pollActive: false });
       state.juryAutoRetryBanner = null;
       state.juryRunning = false;
       try { render(); } catch (_) { /* prevent render crash from hiding results */ }
@@ -176,26 +116,15 @@ function registerJuryHandlers() {
   });
 
   // Rerun with stronger adversarial settings
-  registerAction('rerun-jury-strong', async (ctx = {}) => {
+  registerAction('rerun-jury-strong', async () => {
     const { state, render, apiFetch } = getCtx();
     const session = state.currentSession;
     if (!session) return;
 
-    if (!isConfirmationConfirmed(ctx)) {
-      requestConfirmation(state, {
-        id: `rerun-jury-strong:${session.id}`,
-        mode: 'modal',
-        tone: 'warning',
-        title: 'Relancer le jury avec debat renforce ?',
-        body: 'Une nouvelle analyse sera creee. La session originale est conservee.',
-        expertBody: 'Le nombre de rounds peut augmenter et les parametres adversariaux sont renforces.',
-        confirmLabel: 'Relancer le jury',
-        action: 'rerun-jury-strong',
-      });
-      render();
-      return;
-    }
-    
+    const confirmed = window.confirm(
+      'Relancer le jury avec débat renforcé ? Une nouvelle analyse sera créée. La session originale est conservée.'
+    );
+    if (!confirmed) return;
 
     state.juryRunning = true;
     state.juryResults = null;

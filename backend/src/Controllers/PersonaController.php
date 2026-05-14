@@ -9,7 +9,6 @@ use Infrastructure\Persistence\PersonaDecisionDynamicsRepository;
 use Infrastructure\Persistence\PersonaRepository;
 use Domain\Personas\PersonaDraftService;
 use Domain\Personas\PersonaFileWriter;
-use Domain\Personas\PersonaFrontmatterLlmUpdater;
 
 class PersonaController {
     private MarkdownFileLoader $loader;
@@ -151,48 +150,6 @@ class PersonaController {
         }
     }
 
-    /**
-     * POST /api/personas/default-llm
-     * Body: { persona_id, default_provider?, default_model? } — only supplied keys are written; empty string removes that key from frontmatter.
-     */
-    public function updateDefaultLlm(Request $req): array {
-        $data      = $req->body();
-        $personaId = preg_replace('/[^a-z0-9\-]/', '', (string)($data['persona_id'] ?? ''));
-        if ($personaId === '') {
-            return Response::error('persona_id required', 400);
-        }
-        $patch = [];
-        if (array_key_exists('default_provider', $data)) {
-            $patch['default_provider'] = (string)$data['default_provider'];
-        }
-        if (array_key_exists('default_model', $data)) {
-            $patch['default_model'] = (string)$data['default_model'];
-        }
-        if ($patch === []) {
-            return Response::error('default_provider or default_model required', 400);
-        }
-
-        $path = $this->resolvePersonaMarkdownPath($personaId);
-        if ($path === null || !is_file($path)) {
-            return Response::error('Persona markdown file not found', 404);
-        }
-
-        $raw = file_get_contents($path);
-        if ($raw === false) {
-            return Response::error('Failed to read persona file', 500);
-        }
-        try {
-            $new = PersonaFrontmatterLlmUpdater::mergePatch($raw, $patch);
-        } catch (\Throwable $e) {
-            return Response::error('Frontmatter update failed: ' . $e->getMessage(), 400);
-        }
-        if (file_put_contents($path, $new, LOCK_EX) === false) {
-            return Response::error('Failed to write persona file', 500);
-        }
-
-        return ['success' => true, 'persona_id' => $personaId];
-    }
-
     public function saveCustom(Request $req): array {
         $data = $req->body();
         $personaData = $data['persona'] ?? [];
@@ -234,23 +191,6 @@ class PersonaController {
             $result[] = $item;
         }
         return $result;
-    }
-
-    /** Standard `personas/{id}.md` or custom `personas/custom/{id}.md` (custom wins if both exist). */
-    private function resolvePersonaMarkdownPath(string $id): ?string {
-        $id = preg_replace('/[^a-z0-9\-]/', '', $id);
-        if ($id === '') {
-            return null;
-        }
-        $custom = $this->storageDir . '/personas/custom/' . $id . '.md';
-        $std    = $this->storageDir . '/personas/' . $id . '.md';
-        if (is_file($custom)) {
-            return $custom;
-        }
-        if (is_file($std)) {
-            return $std;
-        }
-        return null;
     }
 
     private function loadCustomPersonaById(string $id): ?array {

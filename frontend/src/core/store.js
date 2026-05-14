@@ -31,78 +31,6 @@ function isBasicMode(uiMode) {
   return normalizeUiMode(uiMode) === 'basic';
 }
 
-const PERSISTED_ANALYSIS_STATUSES = Object.freeze(new Set(['draft', 'running', 'completed', 'archived']));
-
-function parseSessionResultPayload(resultRaw) {
-  if (!resultRaw) return null;
-  if (typeof resultRaw === 'object') return resultRaw;
-  if (typeof resultRaw !== 'string') return null;
-  try {
-    return JSON.parse(resultRaw);
-  } catch (_) {
-    return null;
-  }
-}
-
-function normalizePersistedAnalysisStatus(status) {
-  const raw = String(status || '').trim().toLowerCase();
-  if (PERSISTED_ANALYSIS_STATUSES.has(raw)) return raw;
-  if (raw === 'active') return 'running';
-  if (raw === 'error' || raw === 'blocked') return 'draft';
-  return 'draft';
-}
-
-function mapAnalysisLifecycle(session) {
-  const result = parseSessionResultPayload(session?.result);
-  const baseStatus = normalizePersistedAnalysisStatus(session?.status);
-  const overlays = [];
-
-  const falseConsensusRisk = String(
-    session?.false_consensus_risk ||
-      session?.false_consensus?.risk_level ||
-      result?.false_consensus_risk ||
-      result?.false_consensus?.risk_level ||
-      '',
-  ).toLowerCase();
-  if (falseConsensusRisk === 'high' || falseConsensusRisk === 'critical') {
-    overlays.push('fragile');
-  }
-
-  const guardrailStatus = String(
-    session?.guardrails?.guardrail_status ||
-      result?.guardrails?.guardrail_status ||
-      '',
-  ).toLowerCase();
-  const rawStatus = String(session?.status || '').toLowerCase();
-  if (
-    guardrailStatus === 'blocked' ||
-    guardrailStatus === 'auto_retry_triggered' ||
-    rawStatus === 'blocked' ||
-    rawStatus === 'error'
-  ) {
-    overlays.push('blocked');
-  }
-
-  const lineageSource = String(
-    session?.parent_session_id ||
-      session?.source_session_id ||
-      session?.rerun_of_session_id ||
-      '',
-  ).trim();
-  const lineageReason = String(session?.rerun_reason || '').toLowerCase();
-  const isForked = lineageReason.includes('fork');
-  if (lineageSource) {
-    overlays.push(isForked ? 'forked' : 'rerun');
-  }
-
-  return {
-    baseStatus,
-    overlays,
-    primaryStatus: baseStatus,
-    allStatuses: [baseStatus, ...overlays],
-  };
-}
-
 function readInitialUiMode() {
   try {
     const savedMode = localStorage.getItem('da_ui_mode');
@@ -355,9 +283,6 @@ const createInitialState = () => {
   isLoading: false,
   drResults: null,
   drRunning: false,
-  runProgress: null,
-  runProgressBySessionId: {},
-  runProgressPolling: { active: false, intervalMs: 1500, error: null, lastUpdateAt: null },
   decisionBrief: null,
   confrontationResults: null,
   confrontationRunning: false,
@@ -381,10 +306,6 @@ const createInitialState = () => {
   snapshotStatus: null,
   error: null,
   toast: null,
-  pendingConfirmation: null,
-  /** Contexte stratégique « workspace » unique (persisté côté API, hydraté au bootstrap). */
-  activeStrategicContextId: null,
-  activeStrategicContext: null,
   strategicContexts: { loading: false, error: null, items: [] },
   strategicContextUi: {
     statusFilter: 'active',
@@ -407,120 +328,10 @@ const createInitialState = () => {
     memoryMdLoading: false,
     memoryMdError: '',
     memoryMdContent: '',
-    /** GET /api/strategic-contexts/{id}/memory-overview — résumé mémoire (Basic + données diagnostics Expert). */
-    memoryOverview: { loading: false, error: '', data: null },
-    agentMemoryForceSync: { loading: false, error: '', report: null },
-    /** Comparaison non destructive entre deux contextes (ne modifie pas l’actif workspace). */
-    compareOpen: false,
-    compareLeftId: null,
-    compareRightId: null,
-    /** Comparaison Basic (POST compare) — cible choisie + résultat court, sans ouvrir le panneau Expert. */
-    basicCompare: { targetId: null, loading: false, error: '', result: null },
-    /** GET /api/strategic-contexts/{context_id}/timeline — rempli par load-workspace-timeline */
-    workspaceTimeline: { loading: false, error: '', data: null },
-    /** GET /api/strategic-contexts/{id}/narrative — rempli par load-strategic-narrative */
-    strategicNarrative: { loading: false, error: '', data: null },
-    /** Beliefs Engine MVP (expert) — load-context-beliefs / load-agent-beliefs */
-    beliefsEngine: {
-      loading: false,
-      error: '',
-      items: [],
-      mode: 'context',
-      filterAgent: '',
-      filterType: '',
-      filterStatus: '',
-      disputedOnly: false,
-      byAgentId: '',
-      saving: false,
-      formError: '',
-    },
-    /** Memory Compiler (expert) — consolidations dérivées, audit trail. */
-    memoryCompiler: {
-      loading: false,
-      error: '',
-      compileSaving: false,
-      items: [],
-      filterType: '',
-      filterStatus: '',
-      selectedCompilationId: null,
-      detailLoading: false,
-      detail: null,
-    },
-    /** Context Snapshots (expert) — captures immuables du contexte stratégique. */
-    contextSnapshots: {
-      loading: false,
-      error: '',
-      createSaving: false,
-      items: [],
-      selectedSnapshotId: null,
-      detailLoading: false,
-      detail: null,
-      compareLeft: '',
-      compareRight: '',
-      compareLoading: false,
-      compareResult: null,
-      longLoading: false,
-      longError: '',
-      longViewMarkdown: '',
-    },
-    /** Panneau expert : mémoire markdown par agent (fichier memory.md par contexte). */
-    agentContextMemory: {
-      open: false,
-      agentId: 'pm',
-      loading: false,
-      saving: false,
-      consolidating: false,
-      recentNoteBusy: false,
-      contradictionBusy: false,
-      deprecateBusy: false,
-      compactBusy: false,
-      error: '',
-      content: '',
-      appendNote: '',
-      appendSection: 'recent',
-      maintenanceRecentNote: '',
-      maintenanceSessionId: '',
-      contradictionText: '',
-      contradictionSource: '',
-      deprecateText: '',
-      deprecateReason: '',
-    },
-    /** Chat situé (expert) — POST /api/strategic-contexts/.../agents/.../chat */
-    situatedAgentChat: {
-      open: false,
-      conversationId: null,
-      agentId: 'pm',
-      messages: [],
-      input: '',
-      loading: false,
-      includeMemory: true,
-      includeRecentDecisions: true,
-      includeSocialContext: true,
-      lastWarnings: [],
-      error: '',
-    },
-    /** Comparaison croisée read-only (POST /api/strategic-contexts/compare) — expert. */
-    contextDeepCompare: {
-      panelOpen: false,
-      leftId: null,
-      rightId: null,
-      includeSessions: true,
-      includeDecisions: true,
-      includeAgentMemories: false,
-      includeSocialDynamics: true,
-      includeTimeline: true,
-      loading: false,
-      error: '',
-      result: null,
-    },
   },
   decisionMemory: { loading: false, error: null, memories: null },
   selectedMemoryIds: [],
   memoryConfirmingSessionId: null,
-  /** @type {Record<string, { memory_id: string, strategic_context_id: string|null, strategic_context_linked: boolean }>} */
-  postPersistDecisionMemoryBySession: {},
-  agentMemoryPropagationPreview: null,
-  agentMemoryPropagationBusy: false,
   decisionMemoryNav: {
     contextsLoading: false,
     contextsError: null,
@@ -528,8 +339,6 @@ const createInitialState = () => {
     roomsError: null,
     contexts: [],
     roomsByContextId: {},
-    /** Une fois true, on ne ré-applique plus le workspace actif sur navStrategicContextId automatiquement. */
-    initialWorkspaceNavHydrated: false,
   },
   decisionMemoryUi: {
     mode: 'timeline', // "timeline" | "chain"
@@ -561,16 +370,8 @@ const createInitialState = () => {
   dynamicsRecoBySession: {},
   /** GET /api/analysis/agent-dynamics-suggestions (full list) when admin personas panel loaded */
   adminDynamicsReco: null,
-  /** Catalogue Cognitive Governance (GET /api/cognitive-governance) — expert, lecture seule */
-  cognitiveGovernance: {
-    loading: false,
-    error: null,
-    catalog: null,
-  },
   collapsedMessages: {},
   showDebateDetails: false,
-  /** providerId -> { status, models, error } — liste modèles pour routage LLM (nouvelle session). */
-  providerModelsCache: {},
     newSession: {
     title: '',
     idea: '',
@@ -612,18 +413,6 @@ const createInitialState = () => {
     forkDraftSessionId: null,
     /** Session-only DecisionDynamicsPreset id (balanced|conservative|aggressive|critical) */
     decisionDynamicsPreset: 'balanced',
-    /** Expert : contourner le garde-fou « contexte stratégique actif requis » (compatibilité legacy). */
-    confirmLegacyNoActiveStrategicContext: false,
-    /** Overrides appliqués (persistés en session_agent_providers via POST /api/sessions). */
-    agentProviders: {},
-    /** Sélections en brouillon (non persistées tant que « Appliquer l’override » n’est pas cliqué). */
-    agentProviderDrafts: {},
-    /** Overrides appliqués par équipe (confrontation). */
-    teamProviderAssignments: { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } },
-    /** Brouillons d’override par équipe (confrontation). */
-    teamProviderDrafts: { blue: { provider_id: '', model: '' }, red: { provider_id: '', model: '' } },
-    /** UI : saisie manuelle modèle (liste déroulante masquée) par agent / équipe. */
-    llmModelManualOpen: { agents: {}, teams: {} },
   },
   currentContextDoc: null,
   ctxDocPanelOpen: false,
@@ -674,70 +463,7 @@ const createInitialState = () => {
     generationError: null,
     overwrite: false,
   },
-  analysesWorkspace: {
-    query: '',
-    mode: 'all',
-    status: 'all',
-    contextId: 'all',
-    verdict: 'all',
-    dateRange: 'all',
-    selectedIds: [],
-    visibleIds: [],
-  },
-  dashboardSummary: {
-    loading: false,
-    error: null,
-    data: null,
-    lastLoadedAt: null,
-    collapsedSections: (() => {
-      try {
-        const raw = localStorage.getItem('da_dashboard_collapsed_sections');
-        const parsed = raw ? JSON.parse(raw) : null;
-        return parsed && typeof parsed === 'object' ? parsed : {};
-      } catch (_) {
-        return {};
-      }
-    })(),
-    contextsFilterStatus: (() => {
-      try {
-        const raw = localStorage.getItem('da_dashboard_context_filter_status');
-        const allowed = ['all', 'active', 'paused', 'completed', 'abandoned'];
-        return allowed.includes(raw || '') ? raw : 'all';
-      } catch (_) {
-        return 'all';
-      }
-    })(),
-    contextsSortBy: (() => {
-      try {
-        const raw = localStorage.getItem('da_dashboard_context_sort_by');
-        const allowed = ['open_risks_desc', 'analyses_desc', 'reruns_desc', 'snapshot_desc'];
-        return allowed.includes(raw || '') ? raw : 'open_risks_desc';
-      } catch (_) {
-        return 'open_risks_desc';
-      }
-    })(),
-    contextsHighRiskOnly: (() => {
-      try {
-        return localStorage.getItem('da_dashboard_context_high_risk_only') === '1';
-      } catch (_) {
-        return false;
-      }
-    })(),
-    scopeContextId: (() => {
-      try {
-        return localStorage.getItem('da_dashboard_scope_context_id') || 'auto';
-      } catch (_) {
-        return 'auto';
-      }
-    })(),
-    scopePickerOpen: false,
-    detailPanel: {
-      open: false,
-      kind: '',
-    },
-  },
-  /** Expert : `GET /api/sessions?all_contexts=1` pour lister toutes les sessions (y compris hors contexte actif / legacy). */
-  sessionsListAllContexts: false,
+  sessionFilter: 'all',
   templates: [],
   scenarioPacks: [],
   qdResults: null,
@@ -781,7 +507,6 @@ const createInitialState = () => {
     customInstruction: '',
     keepContext: true,
     loading: false,
-    confirmLegacyNoWorkspace: false,
   },
   launchAssistant: {
     step: 1,
@@ -884,7 +609,6 @@ export {
   isBasicMode,
   legacyComplexityToUiMode,
   uiModeToLegacyComplexity,
-  mapAnalysisLifecycle,
   getPlaybookById,
   getPlaybooks,
   getSelectedPlaybook,

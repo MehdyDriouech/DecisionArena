@@ -4,10 +4,8 @@ namespace Domain\Orchestration;
 use Domain\Agents\AgentAssembler;
 use Domain\Providers\ProviderRouter;
 use Domain\SocialDynamics\SocialDynamicsService;
-use Domain\StrategicContext\AgentContextMemoryService;
 use Infrastructure\Persistence\MessageRepository;
 use Infrastructure\Persistence\SessionAgentProvidersRepository;
-use Infrastructure\Persistence\SessionRepository;
 
 /**
  * ReactiveChatRunner
@@ -31,11 +29,6 @@ class ReactiveChatRunner
     private ?array $reactiveContextDoc = null;
 
     private string $reactiveSessionId = '';
-
-    /** @var ?non-empty-string */
-    private ?string $reactiveStrategicContextId = null;
-
-    private ?AgentContextMemoryService $reactiveAgentMemoryService = null;
 
     private AgentAssembler                  $assembler;
     private PromptBuilder                   $promptBuilder;
@@ -72,23 +65,10 @@ class ReactiveChatRunner
         array  $reactorAgentIds,
         array  $config = [],
         ?array $contextDoc = null,
-        ?string $decisionDynamicsPreset = null,
-        ?string $strategicContextId = null
+        ?string $decisionDynamicsPreset = null
     ): array {
         $this->reactiveContextDoc = $contextDoc;
         $this->reactiveSessionId = $sessionId;
-        $this->reactiveStrategicContextId = ($strategicContextId !== null && trim($strategicContextId) !== '')
-            ? trim($strategicContextId)
-            : null;
-        if ($this->reactiveStrategicContextId === null) {
-            try {
-                $row = (new SessionRepository())->findById($sessionId);
-                if (!empty($row['strategic_context_id'])) {
-                    $this->reactiveStrategicContextId = (string)$row['strategic_context_id'];
-                }
-            } catch (\Throwable) {
-            }
-        }
         $dynamicsPreset = \Domain\Agents\DecisionDynamicsPreset::normalizeId($decisionDynamicsPreset);
         $turnsMin   = max(self::MIN_TURNS, min(self::MAX_TURNS, (int)($config['turns_min']   ?? 2)));
         $turnsMax   = max(self::MIN_TURNS, min(self::MAX_TURNS, (int)($config['turns_max']   ?? 4)));
@@ -98,7 +78,6 @@ class ReactiveChatRunner
         $intensity  = (string)($config['debate_intensity']     ?? 'medium');
         $style      = (string)($config['reaction_style']       ?? 'critical');
         $synth      = (bool)($config['include_final_synthesis'] ?? true);
-        $socialCtx  = $strategicContextId;
 
         $threadId = $this->uuid();
         $stopPolicy = new ReactiveChatStopPolicy($config);
@@ -107,7 +86,6 @@ class ReactiveChatRunner
 
         $allMessages    = [];
         $allTurnsHistory = [];
-        $runtimeTraces  = [];
         $earlyStop      = false;
         $earlyStopReason = null;
         $primaryLatestAnswer = '';
@@ -133,38 +111,19 @@ class ReactiveChatRunner
                 try {
                     $isFirstTurn = ($turn === 1);
                     $primaryPrompt = $isFirstTurn
-                        ? $this->buildPrimaryInitialPrompt($question, $language, $intensity, $primaryAgentId)
-                        : $this->buildPrimaryResponsePrompt($question, $primaryLatestAnswer, $this->collectReactorFeedback($allTurnsHistory, $turn - 1), $language, $intensity, $turn, $primaryAgentId);
-                    $governedPrimary = CognitiveRuntimeGovernance::tracePromptPayload(
-                        $primaryPrompt,
-                        [
-                            'session_id' => $sessionId,
-                            'strategic_context_id' => $this->reactiveStrategicContextId,
-                            'round' => $turn,
-                            'agent_id' => $primaryAgentId,
-                            'mode' => 'reactive-chat',
-                        ],
-                        'reactive_user_payload',
-                        'orchestration',
-                        'reactive_runtime_user_payload',
-                        ['phase' => 'primary']
-                    );
-                    $primaryPrompt = $governedPrimary['messages'];
-                    $promptMetaJson = $governedPrimary['meta_json'];
-                    if (is_array($governedPrimary['trace'] ?? null)) {
-                        $runtimeTraces[] = $governedPrimary['trace'];
-                    }
+                        ? $this->buildPrimaryInitialPrompt($question, $language, $intensity)
+                        : $this->buildPrimaryResponsePrompt($question, $primaryLatestAnswer, $this->collectReactorFeedback($allTurnsHistory, $turn - 1), $language, $intensity, $turn);
 
                 $routed = $this->router->chat($primaryPrompt, $primaryAgent, null, null, $agentOverrides[$primaryAgentId] ?? null);
                 $primaryLatestAnswer = $routed['content'];
 
-                $msg = $this->saveMessage($sessionId, $threadId, $primaryAgentId, 'primary', $turn, $routed, null, $promptMetaJson);
+                $msg = $this->saveMessage($sessionId, $threadId, $primaryAgentId, 'primary', $turn, $routed, null);
                 $turnMessages[] = $msg;
                 $allMessages[]  = $msg;
 
                 if ($socialDynamics) {
                     try {
-                        $socialDynamics->ingestAgentResponse($sessionId, $turn, $primaryAgentId, $routed['content'], null, array_merge([$primaryAgentId], $reactorAgentIds), [], [], $socialCtx);
+                        $socialDynamics->ingestAgentResponse($sessionId, $turn, $primaryAgentId, $routed['content'], null, array_merge([$primaryAgentId], $reactorAgentIds), [], []);
                     } catch (\Throwable $_) {}
                 }
             } catch (\Throwable $e) {
@@ -190,38 +149,18 @@ class ReactiveChatRunner
                         $language,
                         $intensity,
                         $style,
-                        $turn,
-                        $reactorId
+                        $turn
                     );
-                    $governedReactor = CognitiveRuntimeGovernance::tracePromptPayload(
-                        $reactorPrompt,
-                        [
-                            'session_id' => $sessionId,
-                            'strategic_context_id' => $this->reactiveStrategicContextId,
-                            'round' => $turn,
-                            'agent_id' => $reactorId,
-                            'mode' => 'reactive-chat',
-                        ],
-                        'reactive_user_payload',
-                        'orchestration',
-                        'reactive_runtime_user_payload',
-                        ['phase' => 'reactor']
-                    );
-                    $reactorPrompt = $governedReactor['messages'];
-                    $promptMetaJson = $governedReactor['meta_json'];
-                    if (is_array($governedReactor['trace'] ?? null)) {
-                        $runtimeTraces[] = $governedReactor['trace'];
-                    }
 
                     $routed = $this->router->chat($reactorPrompt, $reactorAgent, null, null, $agentOverrides[$reactorId] ?? null);
-                    $msg = $this->saveMessage($sessionId, $threadId, $reactorId, 'reactor', $turn, $routed, $primaryAgentId, $promptMetaJson);
+                    $msg = $this->saveMessage($sessionId, $threadId, $reactorId, 'reactor', $turn, $routed, $primaryAgentId);
                     $turnMessages[] = $msg;
                     $allMessages[]  = $msg;
                     $previousReactionsThisTurn[] = ['agent' => $reactorId, 'content' => $routed['content']];
 
                     if ($socialDynamics) {
                         try {
-                            $socialDynamics->ingestAgentResponse($sessionId, $turn, $reactorId, $routed['content'], $primaryAgentId, array_merge([$primaryAgentId], $reactorAgentIds), [], [], $socialCtx);
+                            $socialDynamics->ingestAgentResponse($sessionId, $turn, $reactorId, $routed['content'], $primaryAgentId, array_merge([$primaryAgentId], $reactorAgentIds), [], []);
                         } catch (\Throwable $_) {}
                     }
                 } catch (\Throwable $e) {
@@ -254,27 +193,8 @@ class ReactiveChatRunner
             if ($synthAgent) {
                 try {
                     $synthPrompt = $this->buildSynthesisPrompt($question, $allMessages, $language);
-                    $governedSynth = CognitiveRuntimeGovernance::tracePromptPayload(
-                        $synthPrompt,
-                        [
-                            'session_id' => $sessionId,
-                            'strategic_context_id' => $this->reactiveStrategicContextId,
-                            'round' => $executedTurns + 1,
-                            'agent_id' => $synthAgentId,
-                            'mode' => 'reactive-chat',
-                        ],
-                        'reactive_user_payload',
-                        'orchestration',
-                        'reactive_runtime_user_payload',
-                        ['phase' => 'synthesis']
-                    );
-                    $synthPrompt = $governedSynth['messages'];
-                    $promptMetaJson = $governedSynth['meta_json'];
-                    if (is_array($governedSynth['trace'] ?? null)) {
-                        $runtimeTraces[] = $governedSynth['trace'];
-                    }
                     $routed      = $this->router->chat($synthPrompt, $synthAgent, null, null, $agentOverrides[$synthAgentId] ?? null);
-                    $msg = $this->saveMessage($sessionId, $threadId, $synthAgentId, 'synthesizer', $executedTurns + 1, $routed, null, $promptMetaJson);
+                    $msg = $this->saveMessage($sessionId, $threadId, $synthAgentId, 'synthesizer', $executedTurns + 1, $routed, null);
                     $allMessages[]  = $msg;
                     $finalSynthesis = $msg;
                 } catch (\Throwable $e) {
@@ -285,27 +205,18 @@ class ReactiveChatRunner
             }
         }
 
-        return array_merge([
+        return [
             'turns_executed'   => $executedTurns,
             'early_stopped'    => $earlyStop,
             'early_stop_reason'=> $earlyStopReason,
             'messages'         => $allMessages,
             'final_synthesis'  => $finalSynthesis,
-        ], CognitiveRuntimeGovernance::summarizeTraces($runtimeTraces, 'reactive-chat'));
+        ];
     }
 
     // ── Prompt builders ────────────────────────────────────────────────────
 
-    private function reactiveAgentMemoryBlock(string $agentId): string
-    {
-        if ($this->reactiveStrategicContextId === null || $this->reactiveStrategicContextId === '') {
-            return '';
-        }
-        $this->reactiveAgentMemoryService ??= new AgentContextMemoryService();
-        return $this->reactiveAgentMemoryService->buildPromptInjectionBlock($this->reactiveStrategicContextId, $agentId);
-    }
-
-    private function buildPrimaryInitialPrompt(string $question, string $language, string $intensity, string $primaryAgentId): array
+    private function buildPrimaryInitialPrompt(string $question, string $language, string $intensity): array
     {
         $intensityNote = $this->intensityNote($intensity);
         $sys = "You are the primary expert agent in a structured reactive debate.
@@ -320,7 +231,7 @@ Do not add pleasantries. Be direct.";
             $question,
             null
         );
-        $user = $ctx . $this->reactiveAgentMemoryBlock($primaryAgentId) . "## User Question\n{$question}\n\n## Your Role\nYou are the primary agent.\n\n## Task\nAnswer the question with your best expert answer.\nBe clear, actionable and specific.\nPrepare for other agents to challenge or improve your answer.\n\n## Output Format\n## Position\nGO | NO-GO | ITERATE | ANSWER\n\n## Answer\n[Your detailed answer]\n\n## Confidence\n[0.0 to 1.0]";
+        $user = $ctx . "## User Question\n{$question}\n\n## Your Role\nYou are the primary agent.\n\n## Task\nAnswer the question with your best expert answer.\nBe clear, actionable and specific.\nPrepare for other agents to challenge or improve your answer.\n\n## Output Format\n## Position\nGO | NO-GO | ITERATE | ANSWER\n\n## Answer\n[Your detailed answer]\n\n## Confidence\n[0.0 to 1.0]";
         return [
             [
                 'role'    => 'system',
@@ -333,7 +244,7 @@ Do not add pleasantries. Be direct.";
         ];
     }
 
-    private function buildPrimaryResponsePrompt(string $question, string $previousAnswer, string $reactorFeedback, string $language, string $intensity, int $turn, string $primaryAgentId): array
+    private function buildPrimaryResponsePrompt(string $question, string $previousAnswer, string $reactorFeedback, string $language, string $intensity, int $turn): array
     {
         $intensityNote = $this->intensityNote($intensity);
         $sys = "You are the primary expert agent responding to challengers.
@@ -348,7 +259,7 @@ Be direct and substantive. Do not be defensive without argument.";
             $question,
             null
         ) : '';
-        $user = $ctx . $this->reactiveAgentMemoryBlock($primaryAgentId) . "## User Question\n{$question}\n\n## Your Previous Answer\n{$previousAnswer}\n\n## Reactor Feedback\n{$reactorFeedback}\n\n## Task\nRespond to the objections and improve your answer.\nAcknowledge valid critiques.\nDefend what remains valid.\nAdjust your final recommendation if needed.\n\n## Output Format\n## Response To Feedback\n- Acknowledged:\n- Defended:\n- Adjusted:\n\n## Improved Answer\n[Your updated answer]\n\n## New Argument\nyes|no\n\n## Confidence\n[0.0 to 1.0]";
+        $user = $ctx . "## User Question\n{$question}\n\n## Your Previous Answer\n{$previousAnswer}\n\n## Reactor Feedback\n{$reactorFeedback}\n\n## Task\nRespond to the objections and improve your answer.\nAcknowledge valid critiques.\nDefend what remains valid.\nAdjust your final recommendation if needed.\n\n## Output Format\n## Response To Feedback\n- Acknowledged:\n- Defended:\n- Adjusted:\n\n## Improved Answer\n[Your updated answer]\n\n## New Argument\nyes|no\n\n## Confidence\n[0.0 to 1.0]";
         return [
             ['role' => 'system', 'content' => $sys],
             ['role' => 'user',   'content' => $user],
@@ -363,8 +274,7 @@ Be direct and substantive. Do not be defensive without argument.";
         string $language,
         string $intensity,
         string $style,
-        int $turn,
-        string $reactorAgentId
+        int $turn
     ): array {
         $styleNote = $this->styleNote($style);
         $intensityNote = $this->intensityNote($intensity);
@@ -382,7 +292,7 @@ Do not repeat the primary agent. Add value. Be specific.";
             $question,
             null
         ) : '';
-        $user = $ctx . $this->reactiveAgentMemoryBlock($reactorAgentId) . "## User Question\n{$question}\n\n## Primary Agent Answer\n{$primaryAnswer}{$priorHistorySection}{$prevReactSection}\n\n## Your Role\nYou are a reactor agent.\n\n## Task\nReact to the question and to the primary agent's latest answer.\nDo not repeat generic agreement.\nQuote or summarize the specific point you react to.\nAdd a useful objection, improvement, risk or nuance.\n\n## Output Format\n## Reaction\n- Point challenged or improved:\n- Why it matters:\n- Suggested improvement:\n\n## New Argument\nyes|no\n\n## Confidence\n[0.0 to 1.0]";
+        $user = $ctx . "## User Question\n{$question}\n\n## Primary Agent Answer\n{$primaryAnswer}{$priorHistorySection}{$prevReactSection}\n\n## Your Role\nYou are a reactor agent.\n\n## Task\nReact to the question and to the primary agent's latest answer.\nDo not repeat generic agreement.\nQuote or summarize the specific point you react to.\nAdd a useful objection, improvement, risk or nuance.\n\n## Output Format\n## Reaction\n- Point challenged or improved:\n- Why it matters:\n- Suggested improvement:\n\n## New Argument\nyes|no\n\n## Confidence\n[0.0 to 1.0]";
         return [
             ['role' => 'system', 'content' => $sys],
             ['role' => 'user',   'content' => $user],
@@ -479,8 +389,7 @@ Be concrete. Avoid repetition. Focus on what was resolved and what remains uncer
         string $reactionRole,
         int    $turn,
         array  $routed,
-        ?string $targetAgentId,
-        ?string $metaJson = null
+        ?string $targetAgentId
     ): array {
         return $this->messageRepo->create([
             'id'                       => $this->uuid(),
@@ -494,14 +403,6 @@ Be concrete. Avoid repetition. Focus on what was resolved and what remains uncer
             'requested_model'          => $routed['requested_model'] ?? null,
             'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
             'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
-            'routing_source'           => $routed['routing_source'] ?? null,
-            'resolved_provider_id'     => $routed['resolved_provider_id'] ?? null,
-            'resolved_provider_label'  => $routed['resolved_provider_label'] ?? null,
-            'resolved_model'           => $routed['resolved_model'] ?? null,
-            'session_override_present' => $routed['session_override_present'] ?? null,
-            'persona_default_provider_ignored' => $routed['persona_default_provider_ignored'] ?? null,
-            'fallback_from_provider_id' => $routed['fallback_from_provider_id'] ?? null,
-            'fallback_from_model'      => $routed['fallback_from_model'] ?? null,
             'round'                    => $turn,
             'phase'                    => "reactive-turn-{$turn}",
             'mode_context'             => 'reactive-chat',
@@ -511,7 +412,6 @@ Be concrete. Avoid repetition. Focus on what was resolved and what remains uncer
             'thread_turn'              => $turn,
             'reaction_role'            => $reactionRole,
             'reactive_thread_id'       => $threadId,
-            'meta_json'                => $metaJson,
             'content'                  => $routed['content'],
             'created_at'               => date('c'),
         ]);

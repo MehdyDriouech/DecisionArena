@@ -235,16 +235,6 @@ class DecisionSummaryService {
         ];
         $rawLabel = strtolower($adj['decision_label'] ?? 'no_consensus');
         $decision = $decisionMap[$rawLabel] ?? 'NO_CONSENSUS';
-        $outcomeStatus = strtolower(trim((string)($decisionOutcome['status'] ?? '')));
-        if (($decision === 'NO_CONSENSUS' || $decision === 'INSUFFICIENT_CONTEXT') && $outcomeStatus !== '') {
-            $decision = match ($outcomeStatus) {
-                'proceed', 'proceed_with_constraints' => 'GO',
-                'kill' => 'NO-GO',
-                'pivot' => 'ITERATE',
-                'validate_first' => 'INSUFFICIENT_CONTEXT',
-                default => $decision,
-            };
-        }
         if (($decision === 'NO_CONSENSUS' || $decision === 'INSUFFICIENT_CONTEXT') && !empty($canonicalSynthesis['decision'])) {
             $decision = (string)$canonicalSynthesis['decision'];
         }
@@ -260,9 +250,7 @@ class DecisionSummaryService {
 
         $why      = is_array($canonicalSynthesis['why'] ?? null) ? $canonicalSynthesis['why'] : [];
         $risks    = is_array($canonicalSynthesis['risks'] ?? null) ? $canonicalSynthesis['risks'] : [];
-        $nextActions = is_array($decisionOutcome['required_next_actions'] ?? null)
-            ? $decisionOutcome['required_next_actions']
-            : (is_array($canonicalSynthesis['recommended_next_actions'] ?? null) ? $canonicalSynthesis['recommended_next_actions'] : []);
+        $nextActions = is_array($canonicalSynthesis['recommended_next_actions'] ?? null) ? $canonicalSynthesis['recommended_next_actions'] : [];
         $nextStep = $nextActions !== [] ? implode("\n", array_slice($nextActions, 0, 3)) : '';
         $validationLogic = is_array($canonicalSynthesis['validation_logic'] ?? null)
             && count(array_filter($canonicalSynthesis['validation_logic'], fn($v) => trim((string)$v) !== '')) > 0

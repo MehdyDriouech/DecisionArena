@@ -19,18 +19,11 @@ use Infrastructure\Persistence\SnapshotRepository;
 use Infrastructure\Persistence\DebateRepository;
 use Infrastructure\Persistence\JuryAdversarialReportRepository;
 use Infrastructure\Persistence\PersonaDecisionDynamicsRepository;
-use Infrastructure\Persistence\RunStatusRepository;
-use Domain\Sessions\SessionStrategicContextGuard;
 use Domain\Orchestration\PromptBuilder;
 use Domain\Vote\VoteAggregator;
 use Infrastructure\Persistence\VoteRepository;
-use Infrastructure\Persistence\StrategicContextRepository;
 
 class SessionController {
-    private const LIFECYCLE_ALLOWED = ['draft', 'running', 'completed', 'archived'];
-    private const LIFECYCLE_ALIASES = [
-        'active' => 'running',
-    ];
     private SessionRepository               $sessionRepo;
     private MessageRepository               $messageRepo;
     private SnapshotRepository              $snapshotRepo;
@@ -62,17 +55,7 @@ class SessionController {
     }
 
     public function index(Request $req): array {
-        if (trim((string)$req->query('all_contexts', '')) === '1') {
-            return $this->sessionRepo->findAll('all');
-        }
-        $active = (new StrategicContextRepository())->getActiveContext();
-        $aid = ($active['context_id'] ?? null) !== null && (string)$active['context_id'] !== ''
-            ? (string)$active['context_id']
-            : null;
-        if ($aid !== null) {
-            return $this->sessionRepo->findAll($aid);
-        }
-        return $this->sessionRepo->findAll('all');
+        return $this->sessionRepo->findAll();
     }
 
     public function show(Request $req): array {
@@ -211,18 +194,6 @@ class SessionController {
         if (empty($data['title'])) {
             return Response::error('title required', 400);
         }
-
-        $mode = (string)($data['mode'] ?? 'chat');
-        $resolved = SessionStrategicContextGuard::resolveStrategicContextForCreation(
-            $mode,
-            is_array($data) ? $data : [],
-            null
-        );
-        if ($resolved['block'] !== null) {
-            return $resolved['block'];
-        }
-        $strategicContextId = $resolved['strategic_context_id'];
-
         $now = date('c');
         $id  = $this->uuid();
         $session = [
@@ -243,7 +214,6 @@ class SessionController {
             'decision_threshold'   => ReliabilityConfig::normalizeThreshold($data['decision_threshold'] ?? null),
             'parent_session_id'    => $data['parent_session_id'] ?? null,
             'rerun_reason'         => $data['rerun_reason'] ?? null,
-            'strategic_context_id' => $strategicContextId,
             'selected_memory_ids'  => is_array($data['selected_memory_ids'] ?? null)
                 ? json_encode($data['selected_memory_ids'], JSON_UNESCAPED_UNICODE)
                 : ($data['selected_memory_ids'] ?? '[]'),
@@ -260,49 +230,31 @@ class SessionController {
 
         $created = $this->sessionRepo->create($session);
 
-        SessionStrategicContextGuard::syncStrategicContextSessionLink($strategicContextId, $id);
-
-        // Convert team_provider_assignments to per-agent session_agent_providers (UX convenience).
-        $agentProviders = $this->filterEmptyAgentProviderMap(
-            is_array($data['agent_providers'] ?? null) ? $data['agent_providers'] : []
-        );
+        // Convert team_provider_assignments to agent_providers if present
+        $agentProviders = is_array($data['agent_providers'] ?? null) ? $data['agent_providers'] : [];
         if (!empty($data['team_provider_assignments']) && is_array($data['team_provider_assignments'])) {
             $blueAgents = is_array($data['blue_team_agents'] ?? null) ? $data['blue_team_agents'] : [];
             $redAgents  = is_array($data['red_team_agents']  ?? null) ? $data['red_team_agents']  : [];
             $blueAssign = $data['team_provider_assignments']['blue'] ?? [];
             $redAssign  = $data['team_provider_assignments']['red']  ?? [];
-            $bluePid = trim((string)($blueAssign['provider_id'] ?? ''));
-            $redPid  = trim((string)($redAssign['provider_id'] ?? ''));
 
             foreach ($blueAgents as $agentId) {
-                $normalizedAgentId = $this->normalizeAgentId((string)$agentId);
-                if ($normalizedAgentId === '') {
-                    continue;
-                }
-                if (!isset($agentProviders[$normalizedAgentId]) && $bluePid !== '') {
-                    $m = trim((string)($blueAssign['model'] ?? ''));
-                    $agentProviders[$normalizedAgentId] = [
-                        'provider_id' => $bluePid,
-                        'model'       => $m !== '' ? $m : null,
+                if (!isset($agentProviders[$agentId]) && !empty($blueAssign['provider_id'])) {
+                    $agentProviders[(string)$agentId] = [
+                        'provider_id' => $blueAssign['provider_id'],
+                        'model'       => $blueAssign['model'] ?? null,
                     ];
                 }
             }
             foreach ($redAgents as $agentId) {
-                $normalizedAgentId = $this->normalizeAgentId((string)$agentId);
-                if ($normalizedAgentId === '') {
-                    continue;
-                }
-                if (!isset($agentProviders[$normalizedAgentId]) && $redPid !== '') {
-                    $m = trim((string)($redAssign['model'] ?? ''));
-                    $agentProviders[$normalizedAgentId] = [
-                        'provider_id' => $redPid,
-                        'model'       => $m !== '' ? $m : null,
+                if (!isset($agentProviders[$agentId]) && !empty($redAssign['provider_id'])) {
+                    $agentProviders[(string)$agentId] = [
+                        'provider_id' => $redAssign['provider_id'],
+                        'model'       => $redAssign['model'] ?? null,
                     ];
                 }
             }
         }
-
-        $agentProviders = $this->filterEmptyAgentProviderMap($agentProviders);
 
         if (!empty($agentProviders)) {
             $this->agentProvidersRepo->saveForSession($id, $agentProviders);
@@ -332,37 +284,6 @@ class SessionController {
         }
 
         return $this->sessionRepo->findById($id);
-    }
-
-    /**
-     * @param array<string, mixed> $raw
-     * @return array<string, array{provider_id: string, model: ?string}>
-     */
-    private function filterEmptyAgentProviderMap(array $raw): array {
-        $out = [];
-        foreach ($raw as $agentId => $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-            $normalizedAgentId = $this->normalizeAgentId((string)$agentId);
-            if ($normalizedAgentId === '') {
-                continue;
-            }
-            $pid = trim((string)($row['provider_id'] ?? ''));
-            if ($pid === '') {
-                continue;
-            }
-            $model = trim((string)($row['model'] ?? ''));
-            $out[$normalizedAgentId] = [
-                'provider_id' => $pid,
-                'model'       => $model !== '' ? $model : null,
-            ];
-        }
-        return $out;
-    }
-
-    private function normalizeAgentId(string $agentId): string {
-        return strtolower(trim($agentId));
     }
 
     /**
@@ -451,212 +372,23 @@ class SessionController {
     public function updateStatus(Request $req): array {
         $id     = $req->param('id');
         $data   = $req->body();
-        $rawStatus = strtolower(trim((string)($data['status'] ?? 'completed')));
-        if ($rawStatus === '') {
-            $rawStatus = 'completed';
-        }
-        $status = self::LIFECYCLE_ALIASES[$rawStatus] ?? $rawStatus;
-        if (!in_array($status, self::LIFECYCLE_ALLOWED, true)) {
-            return Response::error('Invalid status. Allowed: draft|running|completed|archived', 400);
-        }
-        $this->sessionRepo->update($id, ['status' => $status]);
-        return ['success' => true, 'status' => $status];
+        $status = $data['status'] ?? 'completed';
+        $this->pdo()->exec(
+            "UPDATE sessions SET status = " . $this->pdo()->quote($status) .
+            ", updated_at = " . $this->pdo()->quote(date('c')) .
+            " WHERE id = " . $this->pdo()->quote($id)
+        );
+        return ['success' => true];
     }
 
     public function runStatus(Request $req): array {
         $sessionId = $req->param('id');
-        $session = $this->sessionRepo->findById($sessionId);
-        if (!$session) {
-            return Response::error('Session not found', 404);
-        }
-        $runStatusRepo = new RunStatusRepository();
-        $raw = $runStatusRepo->load($sessionId) ?? [];
-        $messages = $this->messageRepo->findBySession($sessionId);
-        $payload = $this->buildRunStatusPayload($session, $raw, $messages);
-
-        $legacy = array_merge(
-            is_array($raw) ? $raw : [],
-            [
-                'status' => $payload['status'],
-                'phase' => $payload['progress']['current_phase'] ?? null,
-                'current_round' => $payload['progress']['current_round'] ?? null,
-                'total_rounds' => $payload['progress']['total_rounds'] ?? null,
-                'started_at' => $payload['started_at'],
-                'updated_at' => $payload['updated_at'],
-                'completed_at' => $payload['completed_at'],
-                'error' => $payload['last_error'],
-            ]
-        );
-        return array_merge($payload, ['run_status' => $legacy]);
-    }
-
-    private function buildRunStatusPayload(array $session, array $raw, array $messages): array
-    {
-        $mode = (string)($session['mode'] ?? 'chat');
-        $sessionStatus = strtolower((string)($session['status'] ?? 'draft'));
-        $status = (string)($raw['status'] ?? ($sessionStatus === 'completed' ? 'completed' : ($sessionStatus === 'running' ? 'running' : 'idle')));
-
-        $events = $this->normalizeRuntimeEvents($raw['events'] ?? []);
-        $lastEvent = !empty($events) ? $events[count($events) - 1] : null;
-        $lastMessage = !empty($messages) ? $messages[count($messages) - 1] : null;
-        $lastMessageAt = $lastMessage['created_at'] ?? null;
-
-        $startedAt = (string)($raw['started_at'] ?? ($events[0]['ts'] ?? ($session['updated_at'] ?? $session['created_at'] ?? date('c'))));
-        $updatedAt = (string)($raw['updated_at'] ?? ($lastEvent['ts'] ?? ($lastMessageAt ?? ($session['updated_at'] ?? date('c')))));
-        $completedAt = $raw['completed_at'] ?? (($status === 'completed' || $status === 'failed' || $status === 'blocked') ? $updatedAt : null);
-        $elapsedSeconds = $this->elapsedSeconds($startedAt, $updatedAt);
-
-        $rawProgress = isset($raw['progress']) && is_array($raw['progress']) ? $raw['progress'] : [];
-        $currentRound = (int)($rawProgress['current_round'] ?? ($lastMessage['round'] ?? 0));
-        $totalRounds = (int)($rawProgress['total_rounds'] ?? ($mode === 'confrontation' ? ($session['cf_rounds'] ?? 3) : ($session['rounds'] ?? 3)));
-        if ($totalRounds <= 0) {
-            $totalRounds = 1;
-        }
-        $currentPhase = (string)($rawProgress['current_phase'] ?? ($raw['phase'] ?? ($lastEvent['phase'] ?? ($lastMessage['phase'] ?? 'idle'))));
-        $phaseLabel = (string)($rawProgress['current_phase_label'] ?? $this->phaseLabel($currentPhase));
-        $currentTeam = $rawProgress['current_team'] ?? ($lastEvent['team'] ?? null);
-        $currentAgentId = $rawProgress['current_agent_id'] ?? ($lastEvent['agent_id'] ?? ($lastMessage['agent_id'] ?? null));
-        $currentAgentName = $rawProgress['current_agent_name'] ?? null;
-        $currentStep = (string)($rawProgress['current_step'] ?? ($status === 'running' ? 'llm_call' : 'done'));
-        $estimated = array_key_exists('estimated', $rawProgress) ? (bool)$rawProgress['estimated'] : true;
-        $percent = isset($rawProgress['percent'])
-            ? (int)$rawProgress['percent']
-            : $this->estimatedPercent($status, $mode, $currentRound, $totalRounds, $currentPhase);
-        // Stale guard: persisted percent can stay high while round/phase show "not started" yet.
-        if ($status === 'running' && $currentRound <= 0
-            && in_array($currentPhase, ['idle', '', 'session_started'], true)
-            && count($events) === 0
-            && $percent > 15
-        ) {
-            $percent = $this->estimatedPercent($status, $mode, $currentRound, $totalRounds, $currentPhase);
-        }
-        if ($status !== 'completed') {
-            $percent = min(99, max(0, $percent));
-        } else {
-            $percent = 100;
-        }
-
-        return [
-            'session_id' => (string)($session['id'] ?? ''),
-            'mode' => $mode,
-            'status' => $status,
-            'started_at' => $startedAt,
-            'updated_at' => $updatedAt,
-            'completed_at' => $completedAt,
-            'elapsed_seconds' => $elapsedSeconds,
-            'progress' => [
-                'percent' => $percent,
-                'current_round' => $currentRound,
-                'total_rounds' => $totalRounds,
-                'current_phase' => $currentPhase,
-                'current_phase_label' => $phaseLabel,
-                'current_team' => $currentTeam,
-                'current_agent_id' => $currentAgentId,
-                'current_agent_name' => $currentAgentName,
-                'current_step' => $currentStep,
-                'estimated' => $estimated,
-            ],
-            'events' => $events,
-            'last_message_at' => $lastMessageAt,
-            'last_error' => $raw['last_error'] ?? null,
-        ];
-    }
-
-    private function normalizeRuntimeEvents($events): array
-    {
-        if (!is_array($events)) {
-            return [];
-        }
-        $out = [];
-        foreach ($events as $event) {
-            if (!is_array($event)) {
-                continue;
-            }
-            $out[] = [
-                'ts' => (string)($event['ts'] ?? date('c')),
-                'level' => (string)($event['level'] ?? 'info'),
-                'phase' => $event['phase'] ?? null,
-                'round' => isset($event['round']) ? (int)$event['round'] : null,
-                'team' => $event['team'] ?? null,
-                'agent_id' => $event['agent_id'] ?? null,
-                'label' => (string)($event['label'] ?? ''),
-            ];
-        }
-        usort($out, fn(array $a, array $b): int => strcmp((string)$a['ts'], (string)$b['ts']));
-        return $out;
-    }
-
-    private function estimatedPercent(string $status, string $mode, int $currentRound, int $totalRounds, string $phase): int
-    {
-        if ($status === 'completed') {
-            return 100;
-        }
-        if (in_array($status, ['idle', 'pending', 'draft'], true)) {
-            if ($currentRound <= 0) {
-                return 0;
-            }
-            $safeTotal = max(1, $totalRounds);
-            return (int)round(min(0.99, $currentRound / $safeTotal) * 100);
-        }
-        if ($status === 'failed') {
-            return 0;
-        }
-        if ($status === 'blocked') {
-            return 10;
-        }
-        $safeTotal = max(1, $totalRounds);
-        $ratio = ($currentRound > 0 ? $currentRound / $safeTotal : 0.02);
-        if ($mode === 'confrontation') {
-            $weight = match ($phase) {
-                'session_started' => 0.02,
-                'blue_opening' => 0.18,
-                'red_attack' => 0.45,
-                'blue_rebuttal' => 0.7,
-                'synthesis', 'synthesis_started' => 0.88,
-                default => $ratio,
-            };
-            return (int)round(min(0.99, max($ratio, $weight)) * 100);
-        }
-        return (int)round(min(0.99, max(0.02, $ratio)) * 100);
-    }
-
-    private function phaseLabel(string $phase): string
-    {
-        return match ($phase) {
-            'session_started' => 'Session demarree',
-            'round_started' => 'Round en cours',
-            'blue_opening' => 'Blue Team ouverture',
-            'red_attack' => 'Red Team attaque',
-            'blue_rebuttal' => 'Blue Team riposte',
-            'analysis' => 'Analyse agents',
-            'stress-analysis' => 'Stress test analyse',
-            'stress-synthesis' => 'Stress test synthese',
-            'jury-opening' => 'Jury ouverture',
-            'jury-cross-examination' => 'Jury contre-interrogatoire',
-            'jury-defense' => 'Jury defense',
-            'jury-deliberation' => 'Jury deliberation',
-            'jury-minority-report' => 'Jury minority report',
-            'jury-mini-challenge' => 'Jury mini challenge',
-            'jury-verdict' => 'Jury verdict',
-            'synthesis' => 'Synthese',
-            'synthesis_started' => 'Synthese',
-            'synthesis_completed' => 'Synthese terminee',
-            'auto_retry_started' => 'Auto-retry demarre',
-            'auto_retry_completed' => 'Auto-retry termine',
-            'session_completed' => 'Session terminee',
-            'session_failed' => 'Session en echec',
-            default => $phase !== '' ? $phase : 'En cours',
-        };
-    }
-
-    private function elapsedSeconds(string $startedAt, string $updatedAt): int
-    {
-        $startTs = strtotime($startedAt);
-        $endTs = strtotime($updatedAt);
-        if ($startTs === false || $endTs === false || $endTs < $startTs) {
-            return 0;
-        }
-        return (int)($endTs - $startTs);
+        $pdo  = \Infrastructure\Persistence\Database::getConnection();
+        $stmt = $pdo->prepare("SELECT run_status FROM sessions WHERE id = :id");
+        $stmt->execute([':id' => $sessionId]);
+        $row    = $stmt->fetch(\PDO::FETCH_ASSOC);
+        $status = $row ? json_decode($row['run_status'] ?? 'null', true) : null;
+        return ['run_status' => $status];
     }
 
     private function pdo(): \PDO {
