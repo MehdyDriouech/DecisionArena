@@ -10,9 +10,20 @@ class SessionRepository {
         $this->pdo = Database::getInstance()->pdo();
     }
 
-    public function findAll(): array {
-        $stmt = $this->pdo->query('SELECT * FROM sessions ORDER BY created_at DESC');
-        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+    /**
+     * @param 'all'|non-empty-string $scope Liste complète, ou filtre sur `sessions.strategic_context_id`.
+     */
+    public function findAll(string $scope = 'all'): array {
+        if ($scope === 'all') {
+            $stmt = $this->pdo->query('SELECT * FROM sessions ORDER BY created_at DESC');
+            $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        } else {
+            $stmt = $this->pdo->prepare(
+                'SELECT * FROM sessions WHERE strategic_context_id = :c ORDER BY created_at DESC'
+            );
+            $stmt->execute([':c' => $scope]);
+            $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        }
         return array_map([$this, 'decodeRow'], $rows);
     }
 
@@ -30,14 +41,14 @@ class SessionRepository {
                  status, cf_rounds, cf_interaction_style, cf_reply_policy,
                  is_favorite, is_reference, force_disagreement,
                  decision_threshold, context_quality_score, context_quality_level, context_quality_report, reliability_cap,
-                 parent_session_id, rerun_reason,
+                 parent_session_id, rerun_reason, strategic_context_id,
                  created_at, updated_at)
             VALUES
                 (:id, :title, :mode, :initial_prompt, :selected_agents, :rounds, :language,
                  :status, :cf_rounds, :cf_interaction_style, :cf_reply_policy,
                  :is_favorite, :is_reference, :force_disagreement,
                  :decision_threshold, :context_quality_score, :context_quality_level, :context_quality_report, :reliability_cap,
-                 :parent_session_id, :rerun_reason,
+                 :parent_session_id, :rerun_reason, :strategic_context_id,
                  :created_at, :updated_at)
         ');
         $stmt->execute([
@@ -66,6 +77,9 @@ class SessionRepository {
             ':reliability_cap'      => $data['reliability_cap'] ?? null,
             ':parent_session_id'    => $data['parent_session_id'] ?? null,
             ':rerun_reason'         => $data['rerun_reason'] ?? null,
+            ':strategic_context_id' => isset($data['strategic_context_id']) && $data['strategic_context_id'] !== ''
+                ? (string)$data['strategic_context_id']
+                : null,
             ':created_at'           => $data['created_at'],
             ':updated_at'           => $data['updated_at'],
         ]);
@@ -77,6 +91,7 @@ class SessionRepository {
         if (!empty($extras)) {
             try { $this->update($data['id'], $extras); } catch (\Throwable $e) {}
         }
+        ParticipantMemorySyncTrigger::onSessionLikelyParticipantChange((string)$data['id']);
         return $this->findById($data['id']);
     }
 
@@ -92,6 +107,7 @@ class SessionRepository {
         $sets[] = 'updated_at = :updated_at';
         $sql = 'UPDATE sessions SET ' . implode(', ', $sets) . ' WHERE id = :id';
         $this->pdo->prepare($sql)->execute($params);
+        ParticipantMemorySyncTrigger::onSessionLikelyParticipantChange($id);
     }
 
     private function decodeRow(array $row): array {

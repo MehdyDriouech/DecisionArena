@@ -1,6 +1,7 @@
 <?php
 namespace Infrastructure\Persistence;
 
+use Domain\CognitiveGovernance\CanonicalLayerMutationGuard;
 use Domain\SocialDynamics\RelationshipEvent;
 
 class AgentRelationshipRepository {
@@ -10,6 +11,20 @@ class AgentRelationshipRepository {
         $this->pdo = Database::getInstance()->pdo();
     }
 
+    public function readSessionStrategicContextId(string $sessionId): ?string {
+        try {
+            $stmt = $this->pdo->prepare('SELECT strategic_context_id FROM sessions WHERE id = ?');
+            $stmt->execute([$sessionId]);
+            $v = $stmt->fetchColumn();
+            if ($v === false || $v === null || trim((string)$v) === '') {
+                return null;
+            }
+            return (string)$v;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
     public function deleteBySession(string $sessionId): void {
         $stmt = $this->pdo->prepare('DELETE FROM relationship_events WHERE session_id = ?');
         $stmt->execute([$sessionId]);
@@ -17,31 +32,131 @@ class AgentRelationshipRepository {
         $stmt->execute([$sessionId]);
     }
 
-    /** @return array<int,array<string,mixed>> */
-    public function findBySession(string $sessionId): array {
-        $stmt = $this->pdo->prepare(
-            'SELECT * FROM agent_relationships WHERE session_id = ? ORDER BY updated_at ASC'
+    /**
+     * @param bool $includeLegacyNullRows Si la session a un contexte : true = lignes `strategic_context_id` NULL (legacy) ou égales au contexte ; false = uniquement `strategic_context_id` = contexte (anti-mélange).
+     * @return array<int,array<string,mixed>>
+     */
+    public function findBySession(string $sessionId, ?string $sessionStrategicContextId = null, bool $includeLegacyNullRows = false): array {
+        if ($sessionStrategicContextId === null) {
+            $sessionStrategicContextId = $this->readSessionStrategicContextId($sessionId);
+        }
+        if ($sessionStrategicContextId === null || $sessionStrategicContextId === '') {
+            $stmt = $this->pdo->prepare(
+                'SELECT * FROM agent_relationships WHERE session_id = ? ORDER BY updated_at ASC'
+            );
+            $stmt->execute([$sessionId]);
+        } elseif ($includeLegacyNullRows) {
+            $stmt = $this->pdo->prepare(
+                'SELECT * FROM agent_relationships WHERE session_id = ?
+                 AND (strategic_context_id IS NULL OR strategic_context_id = ?)
+                 ORDER BY updated_at ASC'
+            );
+            $stmt->execute([$sessionId, $sessionStrategicContextId]);
+        } else {
+            $stmt = $this->pdo->prepare(
+                'SELECT * FROM agent_relationships WHERE session_id = ? AND strategic_context_id = ?
+                 ORDER BY updated_at ASC'
+            );
+            $stmt->execute([$sessionId, $sessionStrategicContextId]);
+        }
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        CanonicalLayerMutationGuard::assertStrictContextSocialRead(
+            'agent_relationship_repository::findBySession',
+            $sessionStrategicContextId,
+            $includeLegacyNullRows,
+            $rows
         );
-        $stmt->execute([$sessionId]);
+        return $rows;
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    public function findForAgent(string $sessionId, string $agentId, ?string $sessionStrategicContextId = null, bool $includeLegacyNullRows = false): array {
+        if ($sessionStrategicContextId === null) {
+            $sessionStrategicContextId = $this->readSessionStrategicContextId($sessionId);
+        }
+        if ($sessionStrategicContextId === null || $sessionStrategicContextId === '') {
+            $stmt = $this->pdo->prepare(
+                'SELECT * FROM agent_relationships WHERE session_id = ?
+                 AND (source_agent_id = ? OR target_agent_id = ?)
+                 ORDER BY updated_at ASC'
+            );
+            $stmt->execute([$sessionId, $agentId, $agentId]);
+        } elseif ($includeLegacyNullRows) {
+            $stmt = $this->pdo->prepare(
+                'SELECT * FROM agent_relationships WHERE session_id = ?
+                 AND (source_agent_id = ? OR target_agent_id = ?)
+                 AND (strategic_context_id IS NULL OR strategic_context_id = ?)
+                 ORDER BY updated_at ASC'
+            );
+            $stmt->execute([$sessionId, $agentId, $agentId, $sessionStrategicContextId]);
+        } else {
+            $stmt = $this->pdo->prepare(
+                'SELECT * FROM agent_relationships WHERE session_id = ?
+                 AND (source_agent_id = ? OR target_agent_id = ?)
+                 AND strategic_context_id = ?
+                 ORDER BY updated_at ASC'
+            );
+            $stmt->execute([$sessionId, $agentId, $agentId, $sessionStrategicContextId]);
+        }
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        CanonicalLayerMutationGuard::assertStrictContextSocialRead(
+            'agent_relationship_repository::findForAgent',
+            $sessionStrategicContextId,
+            $includeLegacyNullRows,
+            $rows
+        );
+        return $rows;
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    public function findEventsBySession(string $sessionId, ?string $sessionStrategicContextId = null, bool $includeLegacyNullRows = false): array {
+        if ($sessionStrategicContextId === null) {
+            $sessionStrategicContextId = $this->readSessionStrategicContextId($sessionId);
+        }
+        if ($sessionStrategicContextId === null || $sessionStrategicContextId === '') {
+            $stmt = $this->pdo->prepare(
+                'SELECT * FROM relationship_events WHERE session_id = ? ORDER BY created_at ASC, id ASC'
+            );
+            $stmt->execute([$sessionId]);
+        } elseif ($includeLegacyNullRows) {
+            $stmt = $this->pdo->prepare(
+                'SELECT * FROM relationship_events WHERE session_id = ?
+                 AND (strategic_context_id IS NULL OR strategic_context_id = ?)
+                 ORDER BY created_at ASC, id ASC'
+            );
+            $stmt->execute([$sessionId, $sessionStrategicContextId]);
+        } else {
+            $stmt = $this->pdo->prepare(
+                'SELECT * FROM relationship_events WHERE session_id = ? AND strategic_context_id = ?
+                 ORDER BY created_at ASC, id ASC'
+            );
+            $stmt->execute([$sessionId, $sessionStrategicContextId]);
+        }
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        CanonicalLayerMutationGuard::assertStrictContextSocialRead(
+            'agent_relationship_repository::findEventsBySession',
+            $sessionStrategicContextId,
+            $includeLegacyNullRows,
+            $rows
+        );
+        return $rows;
+    }
+
+    /** @return array<int,array<string,mixed>> */
+    public function findByStrategicContext(string $contextId): array {
+        $stmt = $this->pdo->prepare(
+            'SELECT * FROM agent_relationships WHERE strategic_context_id = ? ORDER BY updated_at ASC'
+        );
+        $stmt->execute([$contextId]);
         return $stmt->fetchAll(\PDO::FETCH_ASSOC);
     }
 
     /** @return array<int,array<string,mixed>> */
-    public function findForAgent(string $sessionId, string $agentId): array {
+    public function findEventsByStrategicContext(string $contextId): array {
         $stmt = $this->pdo->prepare(
-            'SELECT * FROM agent_relationships WHERE session_id = ?
-             AND (source_agent_id = ? OR target_agent_id = ?)'
+            'SELECT * FROM relationship_events WHERE strategic_context_id = ? ORDER BY created_at ASC, id ASC'
         );
-        $stmt->execute([$sessionId, $agentId, $agentId]);
-        return $stmt->fetchAll(\PDO::FETCH_ASSOC);
-    }
-
-    /** @return array<int,array<string,mixed>> */
-    public function findEventsBySession(string $sessionId): array {
-        $stmt = $this->pdo->prepare(
-            'SELECT * FROM relationship_events WHERE session_id = ? ORDER BY created_at ASC, id ASC'
-        );
-        $stmt->execute([$sessionId]);
+        $stmt->execute([$contextId]);
         return $stmt->fetchAll(\PDO::FETCH_ASSOC);
     }
 
@@ -60,6 +175,9 @@ class AgentRelationshipRepository {
         $sessionId       = $data['session_id'];
         $source          = $data['source_agent_id'];
         $target          = $data['target_agent_id'];
+        $strategicCtx    = isset($data['strategic_context_id']) && $data['strategic_context_id'] !== ''
+            ? (string)$data['strategic_context_id']
+            : null;
         $affinity        = (float)$data['affinity'];
         $trust           = (float)$data['trust'];
         $conflict        = (float)$data['conflict'];
@@ -73,23 +191,25 @@ class AgentRelationshipRepository {
         if ($existing === null) {
             $stmt = $this->pdo->prepare(
                 'INSERT INTO agent_relationships
-                  (session_id, source_agent_id, target_agent_id, affinity, trust, conflict,
+                  (session_id, source_agent_id, target_agent_id, strategic_context_id, affinity, trust, conflict,
                    support_count, challenge_count, alliance_count, attack_count, last_interaction_type, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             );
             $stmt->execute([
-                $sessionId, $source, $target, $affinity, $trust, $conflict,
+                $sessionId, $source, $target, $strategicCtx, $affinity, $trust, $conflict,
                 $supportCount, $challengeCount, $allianceCount, $attackCount, $lastType,
                 $now, $now,
             ]);
         } else {
             $stmt = $this->pdo->prepare(
                 'UPDATE agent_relationships SET
+                  strategic_context_id = COALESCE(?, strategic_context_id),
                   affinity = ?, trust = ?, conflict = ?, support_count = ?, challenge_count = ?,
                   alliance_count = ?, attack_count = ?, last_interaction_type = ?, updated_at = ?
                  WHERE session_id = ? AND source_agent_id = ? AND target_agent_id = ?'
             );
             $stmt->execute([
+                $strategicCtx,
                 $affinity, $trust, $conflict, $supportCount, $challengeCount,
                 $allianceCount, $attackCount, $lastType, $now,
                 $sessionId, $source, $target,
@@ -102,11 +222,14 @@ class AgentRelationshipRepository {
     public function addEvent(array $data): array {
         $stmt = $this->pdo->prepare(
             'INSERT INTO relationship_events
-              (session_id, round_index, source_agent_id, target_agent_id, event_type, intensity, evidence, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+              (session_id, strategic_context_id, round_index, source_agent_id, target_agent_id, event_type, intensity, evidence, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         $stmt->execute([
             $data['session_id'],
+            isset($data['strategic_context_id']) && $data['strategic_context_id'] !== '' && $data['strategic_context_id'] !== null
+                ? (string)$data['strategic_context_id']
+                : null,
             $data['round_index'] ?? null,
             $data['source_agent_id'],
             $data['target_agent_id'] ?? null,
@@ -124,8 +247,20 @@ class AgentRelationshipRepository {
     /**
      * @return array{text_lines:array<int,string>,relations:array<int,array<string,mixed>>}
      */
-    public function summarizeForPrompt(string $sessionId, string $agentId): array {
-        $rels     = $this->findForAgent($sessionId, $agentId);
+    public function summarizeForPrompt(
+        string $sessionId,
+        string $agentId,
+        ?string $sessionStrategicContextId = null,
+        bool $includeLegacyNullRows = false
+    ): array {
+        $sessionCtx = $sessionStrategicContextId;
+        if ($sessionCtx === null) {
+            $sessionCtx = $this->readSessionStrategicContextId($sessionId);
+        }
+        $hasScopedContext = is_string($sessionCtx) && trim($sessionCtx) !== '';
+        $effectiveIncludeLegacy = $hasScopedContext ? $includeLegacyNullRows : true;
+
+        $rels = $this->findForAgent($sessionId, $agentId, $sessionCtx, $effectiveIncludeLegacy);
         $linesOut = [];
 
         $outAffinity = [];
@@ -172,7 +307,7 @@ class AgentRelationshipRepository {
             }
         }
 
-        $events = $this->findEventsBySession($sessionId);
+        $events = $this->findEventsBySession($sessionId, $sessionCtx, $effectiveIncludeLegacy);
         $maxRound = 0;
         foreach ($events as $e) {
             $maxRound = max($maxRound, (int)($e['round_index'] ?? 0));
@@ -189,6 +324,18 @@ class AgentRelationshipRepository {
             }
         }
 
-        return ['text_lines' => array_slice(array_unique($linesOut), 0, 8), 'relations' => $rels];
+        return [
+            'text_lines' => array_slice(array_unique($linesOut), 0, 8),
+            'relations' => $rels,
+            'meta' => [
+                'session_strategic_context_id' => $hasScopedContext ? $sessionCtx : null,
+                'strict_context' => $hasScopedContext && !$effectiveIncludeLegacy,
+                'include_legacy' => $effectiveIncludeLegacy,
+                'legacy_unscoped_session' => !$hasScopedContext,
+                'warning' => !$hasScopedContext
+                    ? 'Session sans strategic_context_id : résumé social legacy non contextualisé.'
+                    : null,
+            ],
+        ];
     }
 }

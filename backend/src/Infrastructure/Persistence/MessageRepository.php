@@ -51,6 +51,7 @@ class MessageRepository {
     }
 
     public function create(array $data): array {
+        $metaJson = $this->enrichMetaJson($data);
         $stmt = $this->pdo->prepare('
             INSERT INTO messages
                 (id, session_id, role, agent_id,
@@ -92,12 +93,118 @@ class MessageRepository {
             ':thread_turn'             => isset($data['thread_turn']) ? (int)$data['thread_turn'] : null,
             ':reaction_role'           => $data['reaction_role'] ?? null,
             ':reactive_thread_id'      => $data['reactive_thread_id'] ?? null,
-            ':meta_json'               => $data['meta_json'] ?? null,
+            ':meta_json'               => $metaJson,
             ':content'                 => $data['content'],
             ':created_at'              => $data['created_at'],
         ]);
         $stmt2 = $this->pdo->prepare('SELECT * FROM messages WHERE id = ?');
         $stmt2->execute([$data['id']]);
-        return $stmt2->fetch(\PDO::FETCH_ASSOC);
+        $out = $stmt2->fetch(\PDO::FETCH_ASSOC);
+        ParticipantMemorySyncTrigger::onSessionLikelyParticipantChange((string)$data['session_id']);
+        return $out;
+    }
+
+    private function enrichMetaJson(array $data): ?string
+    {
+        $decoded = $this->decodeMetaJson($data['meta_json'] ?? null);
+        $routing = $this->buildRoutingMeta($data, $decoded);
+
+        if (empty($decoded) && $routing === null) {
+            return null;
+        }
+
+        if ($routing !== null) {
+            $decoded['llm_routing'] = $routing;
+            // Keep top-level mirror keys for legacy consumers.
+            $decoded['routing_source'] = $routing['routing_source'];
+            $decoded['resolved_provider_id'] = $routing['resolved_provider_id'];
+            $decoded['resolved_provider_label'] = $routing['resolved_provider_label'];
+            $decoded['resolved_model'] = $routing['resolved_model'];
+            $decoded['provider_fallback_used'] = $routing['provider_fallback_used'];
+            $decoded['fallback_reason'] = $routing['fallback_reason'];
+        }
+
+        return json_encode($decoded, JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
+     * @param mixed $value
+     * @return array<string,mixed>
+     */
+    private function decodeMetaJson($value): array
+    {
+        if (is_array($value)) {
+            return $value;
+        }
+        if (!is_string($value) || trim($value) === '') {
+            return [];
+        }
+        $decoded = json_decode($value, true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     * @param array<string,mixed> $meta
+     * @return array<string,mixed>|null
+     */
+    private function buildRoutingMeta(array $data, array $meta): ?array
+    {
+        $existing = $meta['llm_routing'] ?? null;
+        if (!is_array($existing)) {
+            $existing = [];
+        }
+
+        $requestedProviderId = trim((string)($data['requested_provider_id'] ?? ($existing['requested_provider_id'] ?? '')));
+        $requestedModel = trim((string)($data['requested_model'] ?? ($existing['requested_model'] ?? '')));
+        $resolvedProviderId = trim((string)($data['resolved_provider_id'] ?? ($data['provider_id'] ?? ($existing['resolved_provider_id'] ?? ''))));
+        $resolvedProviderLabel = trim((string)($data['resolved_provider_label'] ?? ($data['provider_name'] ?? ($existing['resolved_provider_label'] ?? ''))));
+        $resolvedModel = trim((string)($data['resolved_model'] ?? ($data['model'] ?? ($existing['resolved_model'] ?? ''))));
+        $routingSource = trim((string)($data['routing_source'] ?? ($existing['routing_source'] ?? '')));
+        $fallbackUsed = isset($data['provider_fallback_used'])
+            ? ((int)$data['provider_fallback_used'] === 1)
+            : ((int)($existing['provider_fallback_used'] ?? 0) === 1);
+        $fallbackReason = trim((string)($data['provider_fallback_reason'] ?? ($existing['fallback_reason'] ?? '')));
+        $sessionOverridePresent = isset($data['session_override_present'])
+            ? (bool)$data['session_override_present']
+            : ($requestedProviderId !== '');
+        $personaDefaultIgnored = isset($data['persona_default_provider_ignored'])
+            ? (bool)$data['persona_default_provider_ignored']
+            : ((bool)($existing['persona_default_ignored'] ?? false));
+        $fallbackFromProviderId = trim((string)($data['fallback_from_provider_id'] ?? ($existing['fallback_from_provider_id'] ?? '')));
+        $fallbackFromModel = trim((string)($data['fallback_from_model'] ?? ($existing['fallback_from_model'] ?? '')));
+
+        if ($fallbackUsed && $fallbackFromProviderId === '') {
+            $fallbackFromProviderId = $requestedProviderId;
+        }
+        if ($fallbackUsed && $fallbackFromModel === '') {
+            $fallbackFromModel = $requestedModel;
+        }
+
+        if (
+            $requestedProviderId === ''
+            && $resolvedProviderId === ''
+            && $resolvedModel === ''
+            && $routingSource === ''
+            && !$fallbackUsed
+            && $fallbackReason === ''
+        ) {
+            return null;
+        }
+
+        return [
+            'requested_provider_id' => $requestedProviderId !== '' ? $requestedProviderId : null,
+            'requested_model' => $requestedModel !== '' ? $requestedModel : null,
+            'resolved_provider_id' => $resolvedProviderId !== '' ? $resolvedProviderId : null,
+            'resolved_provider_label' => $resolvedProviderLabel !== '' ? $resolvedProviderLabel : null,
+            'resolved_model' => $resolvedModel !== '' ? $resolvedModel : null,
+            'routing_source' => $routingSource !== '' ? $routingSource : null,
+            'session_override_present' => $sessionOverridePresent,
+            'persona_default_ignored' => $personaDefaultIgnored,
+            'provider_fallback_used' => $fallbackUsed,
+            'fallback_reason' => $fallbackReason !== '' ? $fallbackReason : null,
+            'fallback_from_provider_id' => $fallbackFromProviderId !== '' ? $fallbackFromProviderId : null,
+            'fallback_from_model' => $fallbackFromModel !== '' ? $fallbackFromModel : null,
+        ];
     }
 }

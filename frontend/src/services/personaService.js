@@ -29,6 +29,12 @@ const PersonaService = {
       body: JSON.stringify(payload),
     });
   },
+  updateDefaultLlm(payload) {
+    return apiFetch('/api/personas/default-llm', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
 };
 
 export { PersonaService };

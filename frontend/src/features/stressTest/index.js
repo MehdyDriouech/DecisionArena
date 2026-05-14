@@ -16,6 +16,8 @@ import { renderGraphViewPanel } from '../graphView/index.js';
 import { renderArgumentHeatmapPanel } from '../argumentHeatmap/index.js';
 import { renderDebateReplayPanel } from '../debateReplay/index.js';
 import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
+import { renderRunProgressPanel } from '../../ui/runProgressPanel.js';
+import { ensureLiveRunSessionHydratedIfMismatch } from '../../utils/liveRunCompletion.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -70,7 +72,16 @@ function renderStressTestResults(results) {
   }) + renderTradeoffSection(results.decision_brief || null, { uiMode: state.uiMode, tradeoffUid: sessionId });
   const debateHtml = `<details id="debate-section-${sessionId}" data-section="debate-details" ${state.showDebateDetails ? 'open' : ''} style="margin:0 0 16px;"><summary class="btn btn-secondary btn-sm">Voir le debat complet</summary><div style="margin-top:12px;">${roundsHtml}</div></details>`;
 
-  return renderDecisionOutcomeCard(results.decision_outcome || results.decision_brief?.decision_outcome || null, { uiMode: state.uiMode })
+  const rp = sessionId ? (state.runProgressBySessionId?.[sessionId]?.data || state.runProgress) : null;
+  const terminalRunCompleted = String(rp?.status || '').toLowerCase() === 'completed';
+
+  return renderDecisionOutcomeCard(results.decision_outcome || results.decision_brief?.decision_outcome || null, {
+    uiMode: state.uiMode,
+    sessionId,
+    verdict: results.verdict || null,
+    sessionCompleted: String(state.currentSession?.status || '').toLowerCase() === 'completed',
+    terminalRunCompleted,
+  })
     + briefHtml + renderPremortemStructuredCard(results.premortem_summary || null, t, escHtml) + dynamicsHtml + debateHtml + insightsHtml + voteHtml + reliabilityHtml + verdictHtml
     + renderGraphViewPanel(sessionId)
     + renderDebateAuditPanel(sessionId)
@@ -82,7 +93,19 @@ function renderStressTest() {
   const { state, escHtml, t } = getCtx();
   const session = state.currentSession;
   if (!session) return `<div class="view-container"><p>${t('chat.noSession')}</p></div>`;
+  const arena = window.DecisionArena;
+  queueMicrotask(() => {
+    ensureLiveRunSessionHydratedIfMismatch({
+      state: arena.store.state,
+      sessionId: session.id,
+      mode: 'stress-test',
+      SessionService: arena.services.SessionService,
+      render: () => arena.render?.(),
+    });
+  });
   const results = state.stResults;
+  const runProgressEntry = session?.id ? state.runProgressBySessionId?.[session.id] : null;
+  const liveRunProgress = runProgressEntry?.data || state.runProgress;
 
   return `
     <div class="full-height-view">
@@ -103,13 +126,20 @@ function renderStressTest() {
               </button>
             ` : ''}
             <div class="export-actions">${renderExportButtons(session.id)}</div>
-            <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
+            <button class="btn btn-secondary btn-sm" data-nav="analyses">${t('nav.back')}</button>
           </div>
         </div>
       </div>
       ${renderContextDocPanel()}
 
       <div class="dr-content">
+        ${state.stRunning ? renderRunProgressPanel(liveRunProgress, {
+    t,
+    escHtml,
+    uiMode: state.uiMode,
+    mode: 'stress-test',
+    polling: state.runProgressPolling || null,
+  }) : ''}
         ${state.stRunning ? `
           <div class="loading-state"><span class="spinner spinner-lg"></span> ${t('st.running')}</div>
         ` : ''}

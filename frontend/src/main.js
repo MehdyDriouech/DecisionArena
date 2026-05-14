@@ -11,12 +11,13 @@ import { validatePlaybookCatalog } from './core/playbooks.js';
 
 /* ── Core: renderer + router + events ── */
 import { render, renderSidebar, renderMain, applyUiModeVisibility, applyComplexityVisibility } from './core/renderer.js';
-import { navigate, scrollMainToTop, scrollMessagesToBottom, scrollFollowUpToBottom } from './core/router.js';
-import { bindGlobalEventDelegation } from './core/events.js';
+import * as Router from './core/router.js';
+import { bindGlobalEventDelegation, dispatchAction } from './core/events.js';
 import { registerHumanLoopHandlers } from './core/humanLoopHandlers.js';
 
 /* ── Feature view modules ── */
-import { renderDashboard, renderSessions, renderSessionCard } from './features/sessions/view.js';
+import { renderSessionCard } from './features/sessions/view.js';
+import { registerDashboardFeature } from './features/dashboard/index.js';
 import { renderChat, renderMessage, renderDRAgentMessage, renderExportButtons, renderAgentChatPanel } from './features/chat/view.js';
 import { renderContextDocBadge, renderContextDocPanel, renderInlineContextDocEditor } from './ui/contextDoc.js';
 import { registerLaunchAssistantFeature } from './features/launchAssistant/index.js';
@@ -35,13 +36,22 @@ import { registerArgumentHeatmapFeature } from './features/argumentHeatmap/index
 import { registerDebateReplayFeature } from './features/debateReplay/index.js';
 import { registerDecisionMemoryFeature } from './features/decisionMemory/index.js';
 import { registerStrategicContextsFeature } from './features/strategicContexts/index.js';
+import { registerCognitiveGovernanceFeature } from './features/cognitiveGovernance/index.js';
+import { registerAnalysesFeature } from './features/analyses/index.js';
+import { registerOpenSpaceFeature } from './features/openSpace/index.js';
+import { registerExperimentalGateFeature } from './features/experimentalGate/index.js';
+import { registerAboutFeature } from './features/about/index.js';
 
 /* ── Feature handler modules ── */
 import { registerGlobalHandlers } from './core/globalHandlers.js';
 import { registerSessionsHandlers } from './features/sessions/handlers.js';
 import { registerChatHandlers } from './features/chat/handlers.js';
 import { registerContextDocHandlers } from './features/contextDoc/handlers.js';
-import { registerNewSessionHandlers, registerScenarioHandlers } from './features/newSession/handlers.js';
+import {
+  registerNewSessionHandlers,
+  registerScenarioHandlers,
+  hydrateNewSessionDefaultAgents,
+} from './features/newSession/handlers.js';
 import { registerDecisionRoomHandlers } from './features/decisionRoom/handlers.js';
 import { registerConfrontationHandlers } from './features/confrontation/handlers.js';
 import { registerQuickDecisionHandlers } from './features/quickDecision/handlers.js';
@@ -57,6 +67,10 @@ import { registerArgumentHeatmapHandlers } from './features/argumentHeatmap/hand
 import { registerDebateReplayHandlers } from './features/debateReplay/handlers.js';
 import { registerDecisionMemoryHandlers } from './features/decisionMemory/handlers.js';
 import { registerStrategicContextsHandlers } from './features/strategicContexts/handlers.js';
+import { registerCognitiveGovernanceHandlers } from './features/cognitiveGovernance/handlers.js';
+import { registerAnalysesHandlers } from './features/analyses/handlers.js';
+import { registerDashboardHandlers } from './features/dashboard/handlers.js';
+import { registerOpenSpaceHandlers } from './features/openSpace/handlers.js';
 
 function bootstrapModuleArchitecture() {
   /* Core namespace */
@@ -72,16 +86,14 @@ function bootstrapModuleArchitecture() {
       ...messageLookup,
     },
     router: {
-      navigate,
-      scrollMainToTop,
-      scrollMessagesToBottom,
-      scrollFollowUpToBottom,
+      navigate: Router.navigate,
+      scrollMainToTop: Router.scrollMainToTop,
+      scrollMessagesToBottom: Router.scrollMessagesToBottom,
+      scrollFollowUpToBottom: Router.scrollFollowUpToBottom,
     },
     render,
     /* Views registry: populated by feature modules below. */
     views: {
-      dashboard: renderDashboard,
-      sessions:  renderSessions,
       chat:      renderChat,
 
       shared: {
@@ -99,6 +111,7 @@ function bootstrapModuleArchitecture() {
 
   /* ── Register view modules (self-register into window.DecisionArena.views) ── */
   registerLaunchAssistantFeature();
+  registerDashboardFeature();
   registerComparisonsFeature();
   registerStressTestFeature();
   registerNewSessionFeature();
@@ -114,6 +127,11 @@ function bootstrapModuleArchitecture() {
   registerDebateReplayFeature();
   registerDecisionMemoryFeature();
   registerStrategicContextsFeature();
+  registerCognitiveGovernanceFeature();
+  registerAnalysesFeature();
+  registerOpenSpaceFeature();
+  registerExperimentalGateFeature();
+  registerAboutFeature();
 
   /* ── Register all action/event handlers ── */
   registerGlobalHandlers();
@@ -141,6 +159,10 @@ function bootstrapModuleArchitecture() {
   registerDebateReplayHandlers();
   registerDecisionMemoryHandlers();
   registerStrategicContextsHandlers();
+  registerCognitiveGovernanceHandlers();
+  registerAnalysesHandlers();
+  registerDashboardHandlers();
+  registerOpenSpaceHandlers();
   registerHumanLoopHandlers();
 
   /* ── Wire global event delegation (replaces legacy-app.js listeners) ── */
@@ -151,11 +173,16 @@ async function init() {
   const { LoaderService } = services;
   window.DecisionArena.render();
   await LoaderService.loadInitialData();
+  hydrateNewSessionDefaultAgents(window.DecisionArena.store.state.newSession);
+  await dispatchAction('load-dashboard-summary').catch(() => {});
   window.DecisionArena.render();
 }
 
 async function startApp() {
   bootstrapModuleArchitecture();
+  if (typeof Router.initHashRouting === 'function') {
+    Router.initHashRouting();
+  }
   validatePlaybookCatalog();
   // Expose complexity helpers on the global namespace
   window.DecisionArena.setUiComplexity = (level) => {

@@ -1,6 +1,7 @@
 <?php
 namespace Controllers;
 
+use Domain\Sessions\SessionStrategicContextGuard;
 use Http\Request;
 use Http\Response;
 use Infrastructure\Persistence\SessionRepository;
@@ -24,6 +25,13 @@ class RerunController {
 
         $session = $this->sessionRepo->findById($id);
         if (!$session) return Response::error('Session not found', 404);
+        $parentStatus = strtolower((string)($session['status'] ?? 'draft'));
+        if ($parentStatus === 'active') {
+            $parentStatus = 'running';
+        }
+        if (!in_array($parentStatus, ['completed', 'archived'], true)) {
+            return Response::error('Rerun/fork is only allowed from completed or archived analyses', 409);
+        }
 
         $variations       = (array)($data['variations'] ?? []);
         $targetMode       = $data['target_mode'] ?? null;
@@ -49,6 +57,9 @@ class RerunController {
                 continue;
             }
             switch ($variation) {
+                case 'fork':
+                    // Explicit lineage intent for UI lifecycle overlays.
+                    break;
                 case 'more-disagreement':
                     $forceDisagreement = true;
                     if (!in_array('critic', $selectedAgents, true)) {
@@ -147,6 +158,9 @@ class RerunController {
             if ($isPremortem) {
                 $reasonBits[] = 'premortem';
             }
+            if (in_array('fork', $variations, true)) {
+                $reasonBits[] = 'fork';
+            }
             $varStr = implode(', ', array_values(array_filter(array_map('strval', $variations))));
             if ($varStr !== '') {
                 $reasonBits[] = $varStr;
@@ -159,7 +173,23 @@ class RerunController {
             $newData['rerun_reason'] = implode(', ', $reasonBits);
         } catch (\Throwable $_) {}
 
+        $inheritCtx = isset($session['strategic_context_id']) && (string)$session['strategic_context_id'] !== ''
+            ? (string)$session['strategic_context_id']
+            : null;
+        $resolved = SessionStrategicContextGuard::resolveStrategicContextForCreation(
+            $mode,
+            is_array($data) ? $data : [],
+            $inheritCtx
+        );
+        if ($resolved['block'] !== null) {
+            return $resolved['block'];
+        }
+        $strategicContextId = $resolved['strategic_context_id'];
+        $newData['strategic_context_id'] = $strategicContextId;
+
         $created = $this->sessionRepo->create($newData);
+
+        SessionStrategicContextGuard::syncStrategicContextSessionLink($strategicContextId, $newId);
 
         try {
             $preset = \Domain\Agents\DecisionDynamicsPreset::normalizeId($session['decision_dynamics_preset'] ?? null);

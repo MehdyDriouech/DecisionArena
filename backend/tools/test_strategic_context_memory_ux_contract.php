@@ -152,6 +152,14 @@ if (in_array('persona_fallback_no_memory', $badges, true)) {
     echo "FAIL: architect should not be persona_fallback_no_memory\n";
     exit(1);
 }
+if (!empty($archRow['needs_memory_sync'])) {
+    echo "FAIL: architect should not need_memory_sync when participant marker present\n";
+    exit(1);
+}
+if (empty($archRow['participation_memory_synced'])) {
+    echo "FAIL: architect participation_memory_synced expected true\n";
+    exit(1);
+}
 
 $storageUx = dirname(__DIR__) . '/storage/strategic-contexts/' . strtolower($cid2) . '/agents/architect/memory.md';
 $archMd = is_file($storageUx) ? (string)file_get_contents($storageUx) : '';
@@ -234,5 +242,13 @@ foreach ($catalog->buildExpertPersonaFallbackForContext($cid2) as $erow) {
         exit(1);
     }
 }
+
+foreach ($catalog->buildForOpenSpaceAgentChat($cid3) as $row) {
+    if (strtolower((string)($row['agent_id'] ?? '')) === 'ghost-only-ux') {
+        echo "FAIL: OpenSpace chat list must not include ghost-only-ux in unrelated empty context\n";
+        exit(1);
+    }
+}
+echo "PASS: open space chat agent filter (isolation)\n";
 
 echo "PASS: workspace agents catalog (session sans DM + hors contexte + fichier seul)\n";

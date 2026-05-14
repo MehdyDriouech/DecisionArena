@@ -8,12 +8,12 @@
 |---|---|
 | **Stack** | PHP 8+ · Vanilla JS (ES modules) · SQLite · sans framework · sans npm |
 | **Cible** | Fondateurs, EM, lead devs, PM/PO, équipes produit/tech — pas uniquement un usage “boardroom enterprise” abstrait |
-| **Statut** | **Alpha** — bugs possibles, API et UX encore évolutifs |
+| **Statut** | **Beta fonctionnelle** — API et UX encore évolutifs ; détail dans [release_notes_alpha.md](release_notes_alpha.md) |
 
 **Pitch court :** “Ne plus demander une réponse à une IA, mais observer une décision émerger d’un système.”
 
-Pour une version plus courte et partageable : **[README_marketing.md](README_marketing.md)**.  
-Notes de version alpha : **[release_notes_alpha.md](release_notes_alpha.md)**.
+Pour une version plus courte et partageable : **[README_Express.md](README_Express.md)** (README Express).  
+Notes de version (catalogue beta consolidé, synthèse exécutive et risques) : **[release_notes_alpha.md](release_notes_alpha.md)**.
 
 ---
 
@@ -70,6 +70,21 @@ Decision Arena ne promet pas “la bonne réponse”. Il propose :
 - **Providers locaux et cloud** — Ollama, LM Studio, API compatible OpenAI ; routage multi-provider.
 - **Personas en Markdown** — définitions versionnables, âmes / dynamiques de décision selon configuration.
 - **Local-first** — vos données et votre stack restent chez vous ; pas de dépendance à un SaaS fermé pour fonctionner.
+- **Mode expert : suppressions en lot** — sélection multiple et suppression groupée des **contextes stratégiques** et des entrées **Decision Memory** (actions “Tout sélectionner (vue)” + “Supprimer sélection”).
+- **Contextes stratégiques — sync mémoires agents (expert)** — action explicite « Synchroniser les mémoires agents » : `POST /api/strategic-contexts/{id}/agent-memories/sync` (prévisualisation `dry_run`), reconstruction idempotente des `memory.md` par agent à partir des sessions **completed** et des Decision Memories liées, sans toucher aux beliefs, narrative, compiler, snapshots ni aux runners.
+
+---
+
+## Mises a jour recentes (Phase 2)
+
+- **Workspace Analyses consolide** — la vue `analyses` devient l'entree principale pour les sessions passees et les actions lifecycle.
+- **Lifecycle hybride unifie** — statuts persistes (`draft`, `running`, `completed`, `archived`) + overlays derives (`blocked`, `fragile`, `rerun`, `forked`) via un mapping frontend unique.
+- **Historique d'analyses en navigation** — ajout d'une entree dediee dans la sidebar pour acceder plus vite aux analyses passees.
+- **Deep-link session par hash fiabilise** — les routes `#/sessions/<session_id>` (canonique) et `#/analyses/<session_id>` (alias) ouvrent directement la session via `GET /api/sessions/{id}` (support du chargement initial direct + `hashchange` dans le meme onglet).
+- **Contextes strategiques fiabilises** — bouton `Voir memory.md` fiable, colonne liste sticky sur desktop, bouton `Activer l'espace` dans chaque card.
+- **Formulaire contexte stabilise** — correction du bug "Titre obligatoire" (synchronisation DOM/state avant validation).
+- **Suppression des contextes robuste** — endpoint backend de suppression corrige avec suppression transactionnelle des dependances SQLite.
+- **Observabilite UI renforcee** — erreurs critiques harmonisees via i18n + logs frontend uniformises pour le diagnostic.
 
 ---
 
@@ -139,6 +154,14 @@ Base URL  : http://localhost:11434
 Model     : (modèle installé localement, ex. qwen2.5:14b)
 ```
 
+### Modèles Ollama supportés et testés
+
+- **Supportés (backend/provider routing)** : tout modèle servi par Ollama et sélectionné via `default_model` / override session.
+- **Testés dans ce projet** :
+  - `qwen2.5:14b`
+  - `gemma4:26b`
+- **Note** : le modèle effectivement utilisé dépend du routing et des overrides de session/agent. Vérifiez le panneau **LLM utilisés** après un run.
+
 ### LM Studio (exemple)
 
 ```
@@ -170,6 +193,32 @@ Le routage (priorité, fallback, *load balancing*) est réglable dans l’admin 
 Presets **Fast Decision** (Decision Room accéléré), **Launch Assistant**, templates et *scenario packs* orientent le paramétrage sans changer l’architecture.
 
 Référence détaillée sur les panneaux (*Deliberation Intelligence*, evidence, risk, etc.) : explorez l’UI après un run — les écrans varient selon le mode et les données persistées.
+
+---
+
+## Navigation (Phase 1 + Phase 2)
+
+Navigation unifiée autour des **analyses** :
+
+- **`analyses`** : workspace principal (liste, filtres, lifecycle, bulk actions).
+- **`analysis-history`** : entree de navigation pour l'historique d'analyses (redirige vers l'experience analyses/historique selon contexte).
+- **`new-session`** : création d’une nouvelle analyse.
+- **`session-comparisons`** : comparaison multi-analyses.
+- **`session-history`** : détail d’une analyse.
+- **Deep-links supportés** :
+  - canonique : `#/sessions/<session_id>`
+  - alias compat : `#/analyses/<session_id>`
+  - compat legacy : `#/session-history/<session_id>`
+
+Conventions frontend (cleanup Phase 1) :
+
+- `data-nav="analyses"` est la cible de retour par défaut depuis les vues de run/historique.
+- L’ancienne vue `sessions` est conservée en alias de compatibilité vers `analyses`.
+- Lifecycle UI basé sur `mapAnalysisLifecycle(session)` :
+  - **persisté** : `draft|running|completed|archived`
+  - **dérivé** : `blocked|fragile|rerun|forked`
+
+Doc détaillée UX/navigation : `docs/ux-navigation-mapping.md`.
 
 ---
 
@@ -229,6 +278,11 @@ Optionnel et **secondaire** : aide à découvrir des décisions **similaires** (
 - Rebuild FTS: `php backend/tools/rebuild_decision_memory_fts.php`
 - Rebuild embeddings (expérimental): `php backend/tools/rebuild_decision_memory_embeddings.php`
 
+### Admin / maintenance (expert-only)
+
+- Suppression hard d’une décision : `DELETE /api/decision-memories/{id}`  
+  (supprime aussi ses liens `decision_memory_links`, `decision_room_memories`, `strategic_context_memories`, `decision_memory_audit_events` et l’index embedding si présent).
+
 ---
 
 ## Philosophie produit
@@ -243,7 +297,7 @@ Optionnel et **secondaire** : aide à découvrir des décisions **similaires** (
 
 ## Limitations
 
-- **Alpha** — comportements inattendus, régressions possibles.
+- **Beta / alpha résiduelle** — comportements inattendus, régressions possibles ; surface experte dense (voir notes de version).
 - **Qualité des modèles** — tout le pipeline est sensible au modèle choisi (respect des formats, profondeur du débat).
 - **Prompts** — utiles et itérés, mais jamais “terminés” ; mauvais réglages produisent des sorties faibles.
 - **Pas un substitut d’équipe** — pas de responsabilité légale, métier ou humaine ; outil d’aide à penser et à documenter.

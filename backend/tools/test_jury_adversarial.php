@@ -20,6 +20,7 @@
 $base = __DIR__ . '/../src';
 
 // Bootstrap — minimal requires (no Composer, no npm)
+require_once __DIR__ . '/bootstrap.php';
 require_once $base . '/Infrastructure/Persistence/Database.php';
 require_once $base . '/Infrastructure/Persistence/DebateRepository.php';
 require_once $base . '/Infrastructure/Persistence/MessageRepository.php';
@@ -27,15 +28,25 @@ require_once $base . '/Infrastructure/Persistence/VoteRepository.php';
 require_once $base . '/Infrastructure/Persistence/SnapshotRepository.php';
 require_once $base . '/Infrastructure/Persistence/SessionRepository.php';
 require_once $base . '/Infrastructure/Persistence/ContextDocumentRepository.php';
+require_once $base . '/Infrastructure/Persistence/JuryAdversarialReportRepository.php';
 require_once $base . '/Infrastructure/Persistence/EvidenceRepository.php';
 require_once $base . '/Infrastructure/Persistence/RiskProfileRepository.php';
+require_once $base . '/Infrastructure/Persistence/PersonaDecisionDynamicsRepository.php';
 require_once $base . '/Infrastructure/Logging/Logger.php';
 require_once $base . '/Infrastructure/Markdown/FrontMatterParser.php';
 require_once $base . '/Infrastructure/Markdown/MarkdownFileLoader.php';
+require_once $base . '/Domain/Agents/DecisionDynamics.php';
+require_once $base . '/Domain/Agents/DecisionDynamicsPreset.php';
 require_once $base . '/Domain/Agents/Persona.php';
 require_once $base . '/Domain/Agents/Agent.php';
 require_once $base . '/Domain/Agents/AgentAssembler.php';
+require_once $base . '/Domain/DecisionReliability/DecisionGuardrailService.php';
+require_once $base . '/Domain/DecisionReliability/DecisionQualityScoreService.php';
 require_once $base . '/Domain/Orchestration/DebateMemoryService.php';
+require_once $base . '/Domain/Orchestration/RuntimeContracts.php';
+require_once $base . '/Domain/Orchestration/PlaybookRuntime.php';
+require_once $base . '/Domain/Orchestration/PromptBuilder.php';
+require_once $base . '/Domain/Orchestration/DecisionSummaryService.php';
 require_once $base . '/Domain/DecisionReliability/ReliabilityConfig.php';
 
 // Stub out complex dependencies to avoid deep require chains

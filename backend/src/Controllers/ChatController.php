@@ -85,7 +85,7 @@ class ChatController {
             (new ContextDocumentRepository())->findBySession($sessionId)
         );
 
-        $agentMessages = $this->runner->run(
+        $chatRuntime = $this->runner->runWithRuntime(
             $sessionId,
             $message,
             $selectedAgents,
@@ -94,6 +94,7 @@ class ChatController {
             $contextDoc,
             $session['decision_dynamics_preset'] ?? null
         );
+        $agentMessages = is_array($chatRuntime['messages'] ?? null) ? $chatRuntime['messages'] : [];
 
         if ($contextMode === 'challenge') {
             $origin = trim((string)($data['challenge_origin'] ?? ''));
@@ -122,6 +123,15 @@ class ChatController {
         return [
             'user_message'   => $userMsg,
             'agent_messages' => $agentMessages,
+            'chat_runtime'   => [
+                'prompt_injection_trace' => $chatRuntime['prompt_injection_trace'] ?? [],
+                'cognitive_budget' => $chatRuntime['cognitive_budget'] ?? [],
+                'cognitive_runtime' => $chatRuntime['cognitive_runtime'] ?? [],
+                'runtime_warnings' => $chatRuntime['runtime_warnings'] ?? [],
+                'deduplication_events' => $chatRuntime['deduplication_events'] ?? [],
+                'qa_mode' => $chatRuntime['qa_mode'] ?? null,
+                'provenance_integrity' => $chatRuntime['provenance_integrity'] ?? [],
+            ],
         ];
     }
 
@@ -183,6 +193,8 @@ class ChatController {
             (new ContextDocumentRepository())->findBySession($sessionId)
         );
 
+        $strategicCtx = isset($session['strategic_context_id']) && (string)$session['strategic_context_id'] !== ''
+            ? (string)$session['strategic_context_id'] : null;
         $result = $this->reactiveRunner->run(
             $sessionId,
             $question,
@@ -190,7 +202,8 @@ class ChatController {
             $reactorIds,
             $config,
             $contextDoc,
-            $session['decision_dynamics_preset'] ?? null
+            $session['decision_dynamics_preset'] ?? null,
+            $strategicCtx
         );
 
         return [

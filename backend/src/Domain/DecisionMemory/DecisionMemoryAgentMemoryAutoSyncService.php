@@ -114,6 +114,18 @@ final class DecisionMemoryAgentMemoryAutoSyncService
             }
         }
 
+        $ps = is_array($memory['persistence_safety'] ?? null) ? $memory['persistence_safety'] : [];
+        $verdictLabel = trim((string)($ps['da_verdict_label'] ?? ''));
+        if ($verdictLabel === '' && !empty($session['result']) && is_string($session['result'])) {
+            $res = json_decode($session['result'], true);
+            if (is_array($res) && is_array($res['verdict'] ?? null)) {
+                $verdictLabel = strtolower(trim((string)($res['verdict']['verdict_label'] ?? '')));
+            }
+        }
+        $cx = is_array($ps['da_decision_signal_contradictions'] ?? null)
+            ? array_values(array_filter(array_map('strval', $ps['da_decision_signal_contradictions'])))
+            : [];
+
         foreach ($detailed as $row) {
             $aid = (string)($row['agent_id'] ?? '');
             if ($aid === '') {
@@ -132,6 +144,12 @@ final class DecisionMemoryAgentMemoryAutoSyncService
                     'required_next_actions' => $next,
                     'risk_level' => $riskLevel,
                     'created_at' => $createdAt,
+                    'memory_state' => trim((string)($memory['memory_state'] ?? '')),
+                    'persistence_quality' => trim((string)($ps['da_persistence_quality'] ?? '')),
+                    'review_required' => ($ps['da_review_required'] ?? false) === true,
+                    'original_outcome_label' => trim((string)($ps['da_original_outcome_status_label'] ?? '')),
+                    'verdict_label' => $verdictLabel,
+                    'contradictions' => $cx,
                 ]
             );
             if (!empty($sync['skipped_duplicate'])) {

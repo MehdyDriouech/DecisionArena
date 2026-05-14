@@ -1,5 +1,6 @@
 /* Renderer — manages DOM updates for sidebar and main content */
-import { normalizeUiMode } from './store.js';
+import { normalizeUiMode, canShowExperimentalFeatures } from './store.js';
+import { renderPendingConfirmation } from '../ui/components.js';
 
 function t(key) {
   return window.i18n?.t(key) ?? key;
@@ -7,6 +8,26 @@ function t(key) {
 
 function escHtml(s) {
   return window.DecisionArena.utils.escHtml(s);
+}
+
+function readAnalysesNavOpen(state) {
+  if (typeof state.analysesSidebarOpen === 'boolean') return state.analysesSidebarOpen;
+  try {
+    const saved = localStorage.getItem('da_nav_analyses_open');
+    if (saved === '0') return false;
+    if (saved === '1') return true;
+  } catch (_) {}
+  return true;
+}
+
+function readOpenSpaceNavOpen(state) {
+  if (typeof state.openSpaceSidebarOpen === 'boolean') return state.openSpaceSidebarOpen;
+  try {
+    const saved = localStorage.getItem('da_nav_openspace_open');
+    if (saved === '0') return false;
+    if (saved === '1') return true;
+  } catch (_) {}
+  return true;
 }
 
 function renderSidebar() {
@@ -17,13 +38,16 @@ function renderSidebar() {
     { id: 'launch-assistant', icon: '🚀', label: t('dashboard.launchAssistant') },
     { id: 'dashboard',        icon: '🏠', label: t('nav.dashboard') },
     { id: 'strategic-contexts', icon: '🧭', label: t('nav.contexts') },
-    { id: 'decision-memory',  icon: '🗂️', label: t('nav.decisionMemory') },
     { id: 'administration',   icon: '⚙️', label: t('nav.admin') },
   ];
 
-  const adminViews   = ['personas', 'persona-builder', 'persona-maker', 'providers', 'souls', 'templates', 'template-maker', 'scenario-packs', 'logs', 'retrospective'];
-  const featureViews = ['launch-assistant', 'session-comparisons', 'session-comparison', 'decision-memory', 'strategic-contexts'];
+  const adminViews   = ['personas', 'persona-builder', 'persona-maker', 'providers', 'souls', 'templates', 'template-maker', 'scenario-packs', 'logs', 'retrospective', 'learning', 'prompt-policies', 'cognitive-governance'];
   const isAdminSubView = adminViews.includes(state.view);
+  const analysesGroupActive = ['analyses', 'sessions', 'new-session', 'session-comparisons', 'session-comparison'].includes(state.view);
+  const analysesOpen = readAnalysesNavOpen(state);
+  const openSpaceGroupActive = ['openspace-orchestrator', 'openspace-kanban', 'openspace-agent-chat'].includes(state.view);
+  const openSpaceOpen = readOpenSpaceNavOpen(state);
+  const showOpenSpaceNav = canShowExperimentalFeatures(state);
 
   const sidebar = document.getElementById('sidebar');
   if (!sidebar) return;
@@ -35,17 +59,90 @@ function renderSidebar() {
       <div class="sidebar-logo-sub">${t('app.subtitle')}</div>
     </div>
     <nav class="sidebar-nav">
+      <button type="button" class="nav-item ${state.view === 'launch-assistant' ? 'active' : ''}" data-nav="launch-assistant" ${state.view === 'launch-assistant' ? 'aria-current="page"' : ''}>
+        <span class="nav-item-icon">🚀</span>
+        <span>${t('dashboard.launchAssistant')}</span>
+      </button>
+      <button type="button" class="nav-item ${state.view === 'dashboard' ? 'active' : ''}" data-nav="dashboard" ${state.view === 'dashboard' ? 'aria-current="page"' : ''}>
+        <span class="nav-item-icon">🏠</span>
+        <span>${t('nav.dashboard')}</span>
+      </button>
+      <div class="nav-group nav-group-analyses ${analysesOpen ? 'open' : 'closed'}">
+        <div class="nav-group-header">
+          <button type="button" class="nav-item nav-item-group-main ${analysesGroupActive ? 'active' : ''}" data-nav="analyses" ${analysesGroupActive ? 'aria-current="page"' : ''}>
+            <span class="nav-item-icon">🗂️</span>
+            <span>${t('nav.sessions')}</span>
+          </button>
+          <button
+            type="button"
+            class="nav-group-toggle"
+            data-action="toggle-analyses-submenu"
+            aria-expanded="${analysesOpen ? 'true' : 'false'}"
+            aria-label="${escHtml(t('nav.sessions'))}"
+            title="${escHtml(t('nav.sessions'))}"
+          >
+            <span class="nav-group-chevron">▾</span>
+          </button>
+        </div>
+        <div class="nav-submenu ${analysesOpen ? '' : 'is-collapsed'}">
+          <button type="button" class="nav-item nav-item-sub ${state.view === 'new-session' ? 'active' : ''}" data-nav="new-session" ${state.view === 'new-session' ? 'aria-current="page"' : ''}>
+            <span class="nav-item-icon">＋</span>
+            <span>${t('nav.newSession')}</span>
+          </button>
+          <button type="button" class="nav-item nav-item-sub ${(state.view === 'analyses' || state.view === 'sessions') ? 'active' : ''}" data-nav="analyses" ${(state.view === 'analyses' || state.view === 'sessions') ? 'aria-current="page"' : ''}>
+            <span class="nav-item-icon">🕘</span>
+            <span>${t('nav.analysisHistory')}</span>
+          </button>
+          <button type="button" class="nav-item nav-item-sub ${(state.view === 'session-comparisons' || state.view === 'session-comparison') ? 'active' : ''}" data-nav="session-comparisons" ${(state.view === 'session-comparisons' || state.view === 'session-comparison') ? 'aria-current="page"' : ''}>
+            <span class="nav-item-icon">⚖️</span>
+            <span>${t('dashboard.compareSessions')}</span>
+          </button>
+        </div>
+      </div>
+      ${showOpenSpaceNav ? `
+      <div class="nav-group nav-group-openspace ${openSpaceOpen ? 'open' : 'closed'}">
+        <div class="nav-group-header">
+          <button type="button" class="nav-item nav-item-group-main ${openSpaceGroupActive ? 'active' : ''}" data-nav="openspace-orchestrator" ${openSpaceGroupActive ? 'aria-current="page"' : ''}>
+            <span class="nav-item-icon">🛰️</span>
+            <span>${t('openspace.title')}</span>
+            <span class="badge badge-warning" style="margin-left:6px;font-size:10px;">${escHtml(t('openspace.alphaBadge'))}</span>
+          </button>
+          <button
+            type="button"
+            class="nav-group-toggle"
+            data-action="toggle-openspace-submenu"
+            aria-expanded="${openSpaceOpen ? 'true' : 'false'}"
+            aria-label="${escHtml(t('openspace.title'))}"
+            title="${escHtml(t('openspace.title'))}"
+          >
+            <span class="nav-group-chevron">▾</span>
+          </button>
+        </div>
+        <div class="nav-submenu ${openSpaceOpen ? '' : 'is-collapsed'}">
+          <button type="button" class="nav-item nav-item-sub ${state.view === 'openspace-orchestrator' ? 'active' : ''}" data-nav="openspace-orchestrator" ${state.view === 'openspace-orchestrator' ? 'aria-current="page"' : ''}>
+            <span class="nav-item-icon">🎯</span>
+            <span>${t('openspace.orchestrator')}</span>
+          </button>
+          <button type="button" class="nav-item nav-item-sub ${state.view === 'openspace-kanban' ? 'active' : ''}" data-nav="openspace-kanban" ${state.view === 'openspace-kanban' ? 'aria-current="page"' : ''}>
+            <span class="nav-item-icon">📌</span>
+            <span>${t('openspace.kanban')}</span>
+          </button>
+          <button type="button" class="nav-item nav-item-sub ${state.view === 'openspace-agent-chat' ? 'active' : ''}" data-nav="openspace-agent-chat" ${state.view === 'openspace-agent-chat' ? 'aria-current="page"' : ''}>
+            <span class="nav-item-icon">💬</span>
+            <span>${t('openspace.agentChat')}</span>
+          </button>
+        </div>
+      </div>
+      ` : ''}
       ${nav.map((item) => {
-        const isFeatureSubView = featureViews.includes(state.view);
+        if (item.id === 'launch-assistant' || item.id === 'dashboard') return '';
         const isActive = state.view === item.id
-          || (item.id === 'administration' && isAdminSubView)
-          || (item.id === 'dashboard' && isFeatureSubView)
-          || (item.id === 'dashboard' && state.view === 'new-session');
+          || (item.id === 'administration' && isAdminSubView);
         return `
-          <div class="nav-item ${isActive ? 'active' : ''}" data-nav="${escHtml(item.id)}">
+          <button type="button" class="nav-item ${isActive ? 'active' : ''}" data-nav="${escHtml(item.id)}" ${isActive ? 'aria-current="page"' : ''}>
             <span class="nav-item-icon">${item.icon}</span>
             <span>${item.label}</span>
-          </div>
+          </button>
         `;
       }).join('')}
     </nav>
@@ -59,6 +156,26 @@ function renderSidebar() {
     <div class="sidebar-lang">
       <button class="language-option ${lang === 'fr' ? 'active' : ''}" data-action="set-language" data-lang="fr">🇫🇷 FR</button>
       <button class="language-option ${lang === 'en' ? 'active' : ''}" data-action="set-language" data-lang="en">🇬🇧 EN</button>
+    </div>
+  `;
+}
+
+function renderAppFooter() {
+  const footer = document.getElementById('app-footer');
+  if (!footer) return;
+  const t = (key) => window.i18n?.t(key) ?? key;
+  footer.innerHTML = `
+    <div class="app-footer-inner">
+      <span class="app-footer-brand">
+        ${escHtml(t('footer.poweredByPrefix'))}<a
+          href="https://dawp-engineering.com/"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="app-footer-external-link"
+          aria-label="${escHtml(t('footer.externalAria'))}"
+        >${escHtml(t('footer.brandLinkLabel'))}</a>
+      </span>
+      <button type="button" class="app-footer-about" data-nav="about">${escHtml(t('footer.about'))}</button>
     </div>
   `;
 }
@@ -89,12 +206,28 @@ function renderMain() {
       <button data-action="clear-error">${t('error.clear')}</button>
     </div>
   ` : '';
+  const toastBanner = state.toast ? `
+    <div class="success-banner">
+      ✅ ${escHtml(String(state.toast))}
+      <button data-action="clear-toast">${t('error.clear')}</button>
+    </div>
+  ` : '';
+  const liveReloadBanner = state.liveRunReloadError ? `
+    <div class="error-banner" style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.45);">
+      ⚠️ ${escHtml(t('runProgress.toastCompletedReloadFailed'))}
+      <button type="button" data-action="reload-live-session-result" style="margin-left:12px;background:var(--surface-1,#fff);border:1px solid var(--border-color);border-radius:4px;padding:4px 10px;cursor:pointer;">${escHtml(t('runProgress.reloadResults'))}</button>
+    </div>
+  ` : '';
 
   const views  = window.DecisionArena.views || {};
   const viewFn = views[state.view] || views.dashboard;
+  const confirmationOverlay = renderPendingConfirmation(state.pendingConfirmation, {
+    modalOnly: true,
+    uiMode: state.uiMode,
+  });
 
   if (!viewFn) {
-    main.innerHTML = errorBanner + `<div class="view-container"><p>View "${escHtml(state.view)}" not found.</p></div>`;
+    main.innerHTML = errorBanner + toastBanner + liveReloadBanner + `<div class="view-container"><p>View "${escHtml(state.view)}" not found.</p></div>`;
     return;
   }
 
@@ -102,9 +235,9 @@ function renderMain() {
   const plainViews      = ['persona-builder', 'persona-maker', 'session-history', 'template-maker', 'launch-assistant', 'session-comparisons', 'session-comparison'];
 
   if (fullHeightViews.includes(state.view) || plainViews.includes(state.view)) {
-    main.innerHTML = errorBanner + viewFn();
+    main.innerHTML = errorBanner + toastBanner + liveReloadBanner + viewFn() + confirmationOverlay;
   } else {
-    main.innerHTML = `<div class="view-container">${errorBanner}${viewFn()}</div>`;
+    main.innerHTML = `<div class="view-container">${errorBanner}${toastBanner}${liveReloadBanner}${viewFn()}</div>${confirmationOverlay}`;
   }
 
   main.dataset.renderedView = state.view;
@@ -145,6 +278,7 @@ function applyComplexityVisibility(level) {
 function render() {
   renderSidebar();
   renderMain();
+  renderAppFooter();
   try {
     const mode = window.DecisionArena.store.state.uiMode || 'basic';
     applyUiModeVisibility(mode);

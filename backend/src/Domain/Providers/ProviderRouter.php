@@ -2,6 +2,7 @@
 namespace Domain\Providers;
 
 use Domain\Agents\Agent;
+use Domain\Orchestration\RunTimeoutPolicy;
 use Infrastructure\Persistence\ProviderRepository;
 use Infrastructure\Persistence\ProviderRoutingSettingsRepository;
 use Infrastructure\Logging\Logger;
@@ -26,11 +27,11 @@ class ProviderRouter {
     /**
      * Routes a chat call and returns provider/model metadata.
      *
-     * Provider resolution priority order:
-     * 1. $sessionAgentOverride (session_agent_providers table — per-session per-agent override)
-     * 2. $explicitProviderId (explicit call parameter)
-     * 3. Persona frontmatter default (agent->providerId)
-     * 4. Global routing settings (routing_mode, etc.)
+     * Product priority (conceptual — team assignment is expanded to per-agent rows in session_agent_providers at session creation):
+     * 1. session_agent_providers (session / analysis override per agent)
+     * 2. Team-derived overrides (confrontation only; same table after expansion — does not beat an explicit per-agent row in payload)
+     * 3. Persona frontmatter default_provider / default_model (fallback configuration)
+     * 4. Global routing settings (provider_routing_settings)
      *
      * @param array|null $sessionAgentOverride ['provider_id' => '...', 'model' => '...'] for the current agent
      * @return array{content:string, provider_id:string, provider_name:string, provider_type:string, model:string, routing_mode:string}
@@ -53,10 +54,14 @@ class ProviderRouter {
             unset($options['temperature']);
         }
 
+        $options = $this->mergeDefaultHttpTimeouts($options);
+
         // 1. Session-agent override (highest priority) — with graceful fallback to global routing
         $requestedProviderId = null;
         $requestedModel      = null;
         $fallbackReason      = null;
+        $personaProviderId = trim((string)($agent?->providerId ?? ''));
+        $personaProviderDisabled = $personaProviderId !== '' && $this->isProviderDisabled($personaProviderId);
 
         if ($sessionAgentOverride && !empty($sessionAgentOverride['provider_id'])) {
             $requestedProviderId = (string)$sessionAgentOverride['provider_id'];
@@ -67,7 +72,12 @@ class ProviderRouter {
                 if (!$providerData) {
                     throw new \RuntimeException('Override provider not eligible or not found: ' . $requestedProviderId);
                 }
-                $model = $this->resolveModel($requestedModel ?? $explicitModel, $agent, $providerData);
+                $model = $this->resolveModel(
+                    $requestedModel ?? $explicitModel,
+                    $agent,
+                    $providerData,
+                    false
+                );
                 $provider = ProviderFactory::create($providerData);
 
                 $start = (int)floor(microtime(true) * 1000);
@@ -89,7 +99,8 @@ class ProviderRouter {
                     ],
                 ]);
 
-                $content  = $provider->chat($messages, $model, $options);
+                $options = $this->enrichLlmTelemetryBeforeInvoke($options, 'session_override', (string)$providerData['id']);
+                $content  = $this->invokeProviderChat($provider, $messages, $model, $options, $agent);
                 $duration = (int)floor(microtime(true) * 1000) - $start;
 
                 $this->logger->logLlmResponse([
@@ -110,15 +121,29 @@ class ProviderRouter {
                     'provider_type'          => (string)($providerData['type'] ?? ''),
                     'model'                  => $model,
                     'routing_mode'           => 'session_agent_override',
+                    'routing_source'         => 'session_override',
                     'requested_provider_id'  => $requestedProviderId,
                     'requested_model'        => $requestedModel,
+                    'resolved_provider_id'   => (string)$providerData['id'],
+                    'resolved_provider_label'=> (string)($providerData['name'] ?? $providerData['id']),
+                    'resolved_model'         => $model,
+                    'requested_routing_source' => 'session_override',
+                    'session_override_present' => true,
+                    'persona_default_provider_ignored' => (
+                        trim((string)($agent?->providerId ?? '')) !== ''
+                        && trim((string)($agent?->providerId ?? '')) !== (string)$providerData['id']
+                    ),
                     'fallback_used'          => false,
                     'fallback_reason'        => null,
                 ];
 
             } catch (\Throwable $e) {
                 // Override failed — gracefully fall back to global routing
-                $fallbackReason = 'Override provider unavailable (' . $requestedProviderId . '): ' . $e->getMessage();
+                if ($this->isProviderDisabled($requestedProviderId)) {
+                    $fallbackReason = 'Provider disabled';
+                } else {
+                    $fallbackReason = 'Override provider unavailable (' . $requestedProviderId . '): ' . $e->getMessage();
+                }
                 $this->logger->logProviderError('session_agent_override_fallback', [
                     'agent_id'              => $agent?->id,
                     'requested_provider_id' => $requestedProviderId,
@@ -135,7 +160,7 @@ class ProviderRouter {
             if (!$providerData) {
                 throw new \RuntimeException('Selected provider is not enabled or does not exist.');
             }
-            $model = $this->resolveModel($explicitModel, $agent, $providerData);
+            $model = $this->resolveModel($explicitModel, $agent, $providerData, false);
             $provider = ProviderFactory::create($providerData);
 
             $start = (int)floor(microtime(true) * 1000);
@@ -161,7 +186,8 @@ class ProviderRouter {
                 ],
             ]);
 
-            $content = $provider->chat($messages, $model, $options);
+            $options = $this->enrichLlmTelemetryBeforeInvoke($options, 'explicit_call', (string)$providerData['id']);
+            $content = $this->invokeProviderChat($provider, $messages, $model, $options, $agent);
             $duration = (int)floor(microtime(true) * 1000) - $start;
 
             $this->logger->logLlmResponse([
@@ -188,8 +214,18 @@ class ProviderRouter {
                 'provider_type'         => (string)($providerData['type'] ?? ''),
                 'model'                 => $model,
                 'routing_mode'          => 'explicit',
+                'routing_source'        => 'explicit_call',
                 'requested_provider_id' => null,
                 'requested_model'       => null,
+                'resolved_provider_id'  => (string)$providerData['id'],
+                    'resolved_provider_label'=> (string)($providerData['name'] ?? $providerData['id']),
+                'resolved_model'        => $model,
+                    'requested_routing_source' => null,
+                'session_override_present' => $requestedProviderId !== null,
+                'persona_default_provider_ignored' => (
+                    trim((string)($agent?->providerId ?? '')) !== ''
+                    && trim((string)($agent?->providerId ?? '')) !== (string)$providerData['id']
+                ),
                 'fallback_used'         => false,
                 'fallback_reason'       => null,
             ];
@@ -207,7 +243,8 @@ class ProviderRouter {
             $start = (int)floor(microtime(true) * 1000);
             $model = '';
             try {
-                $model = $this->resolveModel($explicitModel, $agent, $providerData);
+                $preferAgentModel = ($routingMode === 'agent-default');
+                $model = $this->resolveModel($explicitModel, $agent, $providerData, $preferAgentModel);
                 $provider = ProviderFactory::create($providerData);
 
                 $this->logger->logLlmRequest([
@@ -232,7 +269,13 @@ class ProviderRouter {
                     ],
                 ]);
 
-                $content = $provider->chat($messages, $model, $options);
+                $routingSource = (
+                    $personaProviderId !== '' && !$personaProviderDisabled
+                        ? 'persona_default'
+                        : 'global_routing'
+                );
+                $options = $this->enrichLlmTelemetryBeforeInvoke($options, $routingSource, (string)($providerData['id'] ?? ''));
+                $content = $this->invokeProviderChat($provider, $messages, $model, $options, $agent);
                 $duration = (int)floor(microtime(true) * 1000) - $start;
 
                 $this->logger->logLlmResponse([
@@ -253,6 +296,11 @@ class ProviderRouter {
                     ],
                 ]);
                 return [
+                    'routing_source'         => (
+                        $personaProviderId !== '' && !$personaProviderDisabled
+                            ? 'persona_default'
+                            : 'global_routing'
+                    ),
                     'content'               => $content,
                     'provider_id'           => (string)$providerData['id'],
                     'provider_name'         => (string)($providerData['name'] ?? $providerData['id']),
@@ -261,8 +309,19 @@ class ProviderRouter {
                     'routing_mode'          => $fallbackReason ? 'fallback_from_override' : $routingMode,
                     'requested_provider_id' => $requestedProviderId,
                     'requested_model'       => $requestedModel,
-                    'fallback_used'         => $fallbackReason !== null,
-                    'fallback_reason'       => $fallbackReason,
+                    'resolved_provider_id'  => (string)$providerData['id'],
+                    'resolved_provider_label'=> (string)($providerData['name'] ?? $providerData['id']),
+                    'resolved_model'        => $model,
+                    'requested_routing_source' => $requestedProviderId !== null ? 'session_override' : null,
+                    'session_override_present' => $requestedProviderId !== null,
+                    'persona_default_provider_ignored' => (
+                        $personaProviderId !== ''
+                        && ($personaProviderDisabled || $personaProviderId !== (string)$providerData['id'])
+                    ),
+                    'fallback_used'         => ($fallbackReason !== null) || $personaProviderDisabled,
+                    'fallback_reason'       => $fallbackReason ?? ($personaProviderDisabled ? 'Provider disabled' : null),
+                    'fallback_from_provider_id' => $fallbackReason !== null ? $requestedProviderId : null,
+                    'fallback_from_model'   => $fallbackReason !== null ? $requestedModel : null,
                 ];
             } catch (\Throwable $e) {
                 $lastErr = $e;
@@ -284,6 +343,163 @@ class ProviderRouter {
         throw new \RuntimeException($lastErr ? $lastErr->getMessage() : 'All providers failed.');
     }
 
+    /**
+     * @param array<string,mixed> $options
+     * @return array<string,mixed>
+     */
+    private function mergeDefaultHttpTimeouts(array $options): array
+    {
+        $runMode = (string)($options['run_mode'] ?? '');
+        if (!isset($options['http_timeout_seconds'])) {
+            $options['http_timeout_seconds'] = RunTimeoutPolicy::llmHttpTimeoutSecondsForMode($runMode);
+        }
+        if (!isset($options['connect_timeout_seconds'])) {
+            $options['connect_timeout_seconds'] = RunTimeoutPolicy::connectTimeoutSeconds();
+        }
+        return $options;
+    }
+
+    /**
+     * @param array<string,mixed> $options
+     * @return array<string,mixed>
+     */
+    private function enrichLlmTelemetryBeforeInvoke(array $options, string $routingSource, string $resolvedProviderId): array
+    {
+        if (!isset($options['llm_telemetry']) || !is_array($options['llm_telemetry'])) {
+            return $options;
+        }
+        $options['llm_telemetry']['routing_source'] = $routingSource;
+        if ($resolvedProviderId !== '') {
+            $options['llm_telemetry']['resolved_provider_id'] = $resolvedProviderId;
+        }
+        return $options;
+    }
+
+    /**
+     * @param array<string,mixed> $routerOptions
+     * @return array<string,mixed>
+     */
+    private function providerFacingCurlOptions(array $routerOptions): array
+    {
+        $keys = ['temperature', 'http_timeout_seconds', 'connect_timeout_seconds'];
+        $out = [];
+        foreach ($keys as $k) {
+            if (array_key_exists($k, $routerOptions)) {
+                $out[$k] = $routerOptions[$k];
+            }
+        }
+        return $out;
+    }
+
+    private function isProbablyCurlTimeout(\Throwable $e): bool
+    {
+        $m = strtolower($e->getMessage());
+        return str_contains($m, 'timed out')
+            || str_contains($m, 'timeout')
+            || str_contains($m, 'curl error 28')
+            || str_contains($m, 'operation timed out');
+    }
+
+    /**
+     * @param array<string,mixed> $routerOptions
+     */
+    private function emitLlmTelemetryEvent(
+        \Infrastructure\Persistence\RunStatusRepository $repo,
+        string $sessionId,
+        string $eventPhase,
+        array $routerOptions,
+        ?Agent $agent,
+        string $model,
+        ?int $durationMs,
+        ?string $errorKind = null
+    ): void {
+        $tel = $routerOptions['llm_telemetry'] ?? [];
+        if (!is_array($tel)) {
+            return;
+        }
+        $agentId = $tel['agent_id'] ?? $agent?->id;
+        $orchPhase = $tel['phase'] ?? null;
+        $label = match ($eventPhase) {
+            'llm_call_started' => 'Appel LLM demarre',
+            'llm_call_completed' => 'Appel LLM termine',
+            'llm_call_failed' => 'Appel LLM en echec',
+            'llm_call_timeout' => 'Appel LLM timeout',
+            default => $eventPhase,
+        };
+        $event = [
+            'level' => ($eventPhase === 'llm_call_failed' || $eventPhase === 'llm_call_timeout') ? 'warning' : 'info',
+            'phase' => $eventPhase,
+            'round' => isset($tel['round']) ? (int)$tel['round'] : null,
+            'team' => $tel['team'] ?? null,
+            'agent_id' => $agentId,
+            'label' => $label,
+            'provider_id' => $tel['resolved_provider_id'] ?? $tel['requested_provider_id'] ?? null,
+            'model' => $model !== '' ? $model : null,
+            'routing_source' => $tel['routing_source'] ?? null,
+            'duration_ms' => $durationMs,
+            'orchestration_phase' => is_string($orchPhase) ? $orchPhase : null,
+        ];
+        if ($errorKind !== null && $errorKind !== '') {
+            $event['error_kind'] = $errorKind;
+        }
+        try {
+            $repo->appendEvent($sessionId, $event, [], 'running', null);
+        } catch (\Throwable) {
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $routerOptions
+     */
+    private function invokeProviderChat(
+        LlmProviderInterface $provider,
+        array $messages,
+        string $model,
+        array $routerOptions,
+        ?Agent $agent
+    ): string {
+        $tel = $routerOptions['llm_telemetry'] ?? null;
+        $repo = null;
+        $sessionId = '';
+        if (is_array($tel) && !empty($tel['session_id'])) {
+            $sessionId = (string)$tel['session_id'];
+            try {
+                $repo = new \Infrastructure\Persistence\RunStatusRepository();
+            } catch (\Throwable) {
+                $repo = null;
+            }
+        }
+        $provOpts = $this->providerFacingCurlOptions($routerOptions);
+        $t0 = microtime(true);
+        if ($repo !== null && $sessionId !== '') {
+            $this->emitLlmTelemetryEvent($repo, $sessionId, 'llm_call_started', $routerOptions, $agent, $model, null, null);
+        }
+        try {
+            $content = $provider->chat($messages, $model, $provOpts);
+            $durMs = (int)round((microtime(true) - $t0) * 1000);
+            if ($repo !== null && $sessionId !== '') {
+                $this->emitLlmTelemetryEvent($repo, $sessionId, 'llm_call_completed', $routerOptions, $agent, $model, $durMs, null);
+            }
+            return $content;
+        } catch (\Throwable $e) {
+            $durMs = (int)round((microtime(true) - $t0) * 1000);
+            if ($repo !== null && $sessionId !== '') {
+                $isT = $this->isProbablyCurlTimeout($e);
+                $this->emitLlmTelemetryEvent(
+                    $repo,
+                    $sessionId,
+                    $isT ? 'llm_call_timeout' : 'llm_call_failed',
+                    $routerOptions,
+                    $agent,
+                    $model,
+                    $durMs,
+                    $isT ? 'timeout' : 'provider_error'
+                );
+            }
+            throw $e;
+        }
+    }
+
     private function countChars(array $messages): int {
         $sum = 0;
         foreach ($messages as $m) {
@@ -294,8 +510,13 @@ class ProviderRouter {
         return $sum;
     }
 
-    private function resolveModel(?string $explicitModel, ?Agent $agent, array $providerData): string {
-        $model = $explicitModel ?: ($agent?->model ?: (string)($providerData['default_model'] ?? ''));
+    private function resolveModel(?string $explicitModel, ?Agent $agent, array $providerData, bool $preferAgentModel = true): string {
+        $providerDefault = (string)($providerData['default_model'] ?? '');
+        $agentModel = (string)($agent?->model ?? '');
+        $model = $explicitModel
+            ?: ($preferAgentModel
+                ? ($agentModel ?: $providerDefault)
+                : ($providerDefault ?: $agentModel));
         $model = trim((string)$model);
         if ($model === '') {
             throw new \RuntimeException('No model configured for this call.');
@@ -332,6 +553,19 @@ class ProviderRouter {
             }
         }
         return null;
+    }
+
+    private function isProviderDisabled(?string $id): bool
+    {
+        $pid = trim((string)$id);
+        if ($pid === '') {
+            return false;
+        }
+        $row = $this->providerRepo->findById($pid);
+        if (!$row) {
+            return false;
+        }
+        return (int)($row['enabled'] ?? 0) !== 1;
     }
 
     /**
@@ -380,6 +614,11 @@ class ProviderRouter {
 
         $primary   = ($primaryId !== '' && isset($byId[$primaryId])) ? $byId[$primaryId] : null;
         $preferred = ($preferredId !== '' && isset($byId[$preferredId])) ? $byId[$preferredId] : null;
+        $agentPreferred = null;
+        $agentProviderId = trim((string)($agent?->providerId ?? ''));
+        if ($agentProviderId !== '') {
+            $agentPreferred = $this->resolveProviderRow($agentProviderId);
+        }
 
         $unique = function (array $items): array {
             $seen = [];
@@ -402,12 +641,8 @@ class ProviderRouter {
         $firstEnabled = $enabled[0];
 
         if ($routingMode === 'agent-default') {
-            $agentProviderId = $agent?->providerId ? trim((string)$agent->providerId) : '';
-            if ($agentProviderId !== '') {
-                $resolved = $this->resolveProviderRow($agentProviderId);
-                if ($resolved) {
-                    return [$resolved];
-                }
+            if ($agentPreferred) {
+                return [$agentPreferred];
             }
             // Missing agent default -> fallback to primary behavior
             $routingMode = 'single-primary';
@@ -420,7 +655,7 @@ class ProviderRouter {
                 'provider_id' => (string)($chosen['id'] ?? ''),
                 'metadata' => ['routing_mode' => 'single-primary'],
             ]);
-            return [$chosen];
+            return $agentPreferred ? $unique([$agentPreferred, $chosen]) : [$chosen];
         }
 
         if ($routingMode === 'preferred-with-fallback') {
@@ -436,7 +671,8 @@ class ProviderRouter {
                     'fallback_provider_ids' => array_map(fn($p) => (string)($p['id'] ?? ''), $tail),
                 ],
             ]);
-            return $unique(array_merge([$head], $tail));
+            $base = $unique(array_merge([$head], $tail));
+            return $agentPreferred ? $unique(array_merge([$agentPreferred], $base)) : $base;
         }
 
         if ($routingMode === 'load-balance') {
@@ -465,11 +701,12 @@ class ProviderRouter {
                     'candidates' => array_map(fn($p) => (string)($p['id'] ?? ''), $ordered),
                 ],
             ]);
-            return $unique($ordered);
+            return $agentPreferred ? $unique(array_merge([$agentPreferred], $ordered)) : $unique($ordered);
         }
 
         // Default fallback
-        return [$primary ?: $firstEnabled];
+        $fallback = $primary ?: $firstEnabled;
+        return $agentPreferred ? $unique([$agentPreferred, $fallback]) : [$fallback];
     }
 }
 

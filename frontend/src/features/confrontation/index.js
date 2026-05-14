@@ -14,6 +14,9 @@ import { renderGraphViewPanel } from '../graphView/index.js';
 import { renderArgumentHeatmapPanel } from '../argumentHeatmap/index.js';
 import { renderDebateReplayPanel } from '../debateReplay/index.js';
 import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
+import { renderLlmRoutingCompact } from '../../utils/llmRoutingUi.js';
+import { renderRunProgressPanel } from '../../ui/runProgressPanel.js';
+import { ensureLiveRunSessionHydratedIfMismatch } from '../../utils/liveRunCompletion.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -47,6 +50,7 @@ function renderConfrontationAgentCard(msg, isSynthesis, messageKey = '') {
   const contentHtml = isLong && collapsed
     ? `<div class="agent-content md-content"><p>${preview}…</p></div>`
     : `<div class="agent-content md-content">${renderMarkdown(msg.content)}</div>`;
+  const llmMeta = renderLlmRoutingCompact(msg, { escHtml, t, expert: state.uiMode === 'expert' });
   const chBtn = window.DecisionArena?.utils?.canChallengeMessage?.(msg)
     ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;font-size:11px;" data-action="challenge-claim" data-message-id="${escHtml(String(msg.id))}">${escHtml(t('hitl.challenge'))}</button>`
     : '';
@@ -66,8 +70,7 @@ function renderConfrontationAgentCard(msg, isSynthesis, messageKey = '') {
       ${isLong ? `<button class="btn btn-secondary btn-sm" data-action="toggle-agent-message" data-message-id="${escHtml(messageId)}">${collapsed ? 'Voir' : 'Masquer'}</button>` : ''}
       ${chBtn}
       <div class="agent-card-footer">
-        ${msg.provider_id ? `<span>${escHtml(msg.provider_id)}</span>` : ''}
-        ${msg.model ? `<span>${escHtml(msg.model)}</span>` : ''}
+        ${llmMeta}
         ${msg.created_at ? `<span style="margin-left:auto;font-size:11px;color:var(--text-muted);">${formatDate(msg.created_at)}</span>` : ''}
       </div>
     </div>
@@ -432,7 +435,7 @@ function renderSessionContextDocPanel(session) {
   const open  = state.ctxDocPanelOpen;
   const isLarge = doc && doc.character_count > 30000;
   const renderInlineContextDocEditor = (sid) => (window.DecisionArena.views.shared.renderInlineContextDocEditor || (() => ''))(sid);
-  return `<div class="card ctx-doc-history-panel" style="margin-bottom:24px;padding:0;"><div class="ctx-doc-history-header" data-action="toggle-ctx-doc-panel" style="padding:16px 20px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;"><span style="font-weight:600;font-size:13px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.05em;">${t('contextDoc.sectionTitle')} ${doc ? `<span class="badge badge-success" style="margin-left:8px;font-size:11px;text-transform:none;">${t('contextDoc.attachedBadge')}</span>` : `<span class="badge" style="margin-left:8px;font-size:11px;text-transform:none;background:var(--bg-tertiary);color:var(--text-muted);">${t('contextDoc.noneBadge')}</span>`}</span><span style="font-size:12px;color:var(--text-muted);">${open ? '▲' : '▼'}</span></div>${open ? `<div style="padding:0 20px 20px 20px;border-top:1px solid var(--border);">${doc ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:14px;margin-bottom:10px;">${doc.title ? `<strong style="font-size:14px;">${escHtml(doc.title)}</strong>` : ''}<span class="badge" style="background:var(--bg-secondary);color:var(--text-secondary);">${escHtml(doc.source_type)}</span>${doc.original_filename ? `<span class="badge" style="background:var(--bg-secondary);color:var(--text-muted);">📎 ${escHtml(doc.original_filename)}</span>` : ''}<span class="badge" style="background:var(--bg-secondary);color:var(--text-muted);">${doc.character_count.toLocaleString()} car.</span>${isLarge ? `<span class="badge badge-warning">⚠️ ${t('contextDoc.largeWarning')}</span>` : ''}</div><div class="ctx-doc-panel-content" style="margin-bottom:14px;">${escHtml(doc.content)}</div><div style="display:flex;gap:8px;"><button class="btn btn-secondary btn-sm" data-action="open-ctx-doc-editor" data-session-id="${escHtml(session.id)}">${t('contextDoc.replace')}</button><button class="btn btn-danger btn-sm" data-action="delete-ctx-doc" data-session-id="${escHtml(session.id)}">${t('contextDoc.delete')}</button></div>` : `<div style="padding-top:14px;"><div style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">${t('contextDoc.noneAttached')}</div></div>`}${renderInlineContextDocEditor(session.id)}<span id="ctx-doc-hist-status" style="font-size:12px;color:var(--accent);margin-top:8px;display:block;"></span></div>` : ''}</div>`;
+  return `<div class="card ctx-doc-history-panel" style="margin-bottom:24px;padding:0;"><div class="ctx-doc-history-header" data-action="toggle-ctx-doc-panel" style="padding:16px 20px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;"><span style="font-weight:600;font-size:13px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.05em;">${t('contextDoc.sectionTitle')} ${doc ? `<span class="badge badge-success" style="margin-left:8px;font-size:11px;text-transform:none;">${t('contextDoc.attachedBadge')}</span>` : `<span class="badge" style="margin-left:8px;font-size:11px;text-transform:none;background:var(--bg-tertiary);color:var(--text-muted);">${t('contextDoc.noneBadge')}</span>`}</span><span style="font-size:12px;color:var(--text-muted);">${open ? '▲' : '▼'}</span></div>${open ? `<div style="padding:0 20px 20px 20px;border-top:1px solid var(--border);">${doc ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:14px;margin-bottom:10px;">${doc.title ? `<strong style="font-size:14px;">${escHtml(doc.title)}</strong>` : ''}<span class="badge" style="background:var(--bg-secondary);color:var(--text-secondary);">${escHtml(doc.source_type)}</span>${doc.original_filename ? `<span class="badge" style="background:var(--bg-secondary);color:var(--text-muted);">📎 ${escHtml(doc.original_filename)}</span>` : ''}<span class="badge" style="background:var(--bg-secondary);color:var(--text-muted);">${doc.character_count.toLocaleString()} car.</span>${isLarge ? `<span class="badge badge-warning">⚠️ ${t('contextDoc.largeWarning')}</span>` : ''}</div><div class="ctx-doc-panel-content" style="margin-bottom:14px;">${escHtml(doc.content)}</div><div style="display:flex;gap:8px;"><button class="btn btn-secondary btn-sm" data-action="open-ctx-doc-editor" data-session-id="${escHtml(session.id)}">${t('contextDoc.replace')}</button><button class="btn btn-danger btn-sm" data-ui="expert-only" data-action="delete-ctx-doc" data-session-id="${escHtml(session.id)}">${t('contextDoc.delete')}</button></div>` : `<div style="padding-top:14px;"><div style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">${t('contextDoc.noneAttached')}</div></div>`}${renderInlineContextDocEditor(session.id)}<span id="ctx-doc-hist-status" style="font-size:12px;color:var(--accent);margin-top:8px;display:block;"></span></div>` : ''}</div>`;
 }
 
 /* ── Main confrontation view ── */
@@ -451,7 +454,15 @@ function renderConfrontationResults(results) {
     uiMode: state.uiMode,
     tradeoffUid: sid,
   });
-  const outcomeHtml = renderDecisionOutcomeCard(results.decision_outcome || results.decision_brief?.decision_outcome || null, { uiMode: state.uiMode });
+  const rp = sid ? (state.runProgressBySessionId?.[sid]?.data || state.runProgress) : null;
+  const terminalRunCompleted = String(rp?.status || '').toLowerCase() === 'completed';
+  const outcomeHtml = renderDecisionOutcomeCard(results.decision_outcome || results.decision_brief?.decision_outcome || null, {
+    uiMode: state.uiMode,
+    sessionId: sid,
+    verdict: results.verdict || null,
+    sessionCompleted: String(state.currentSession?.status || '').toLowerCase() === 'completed',
+    terminalRunCompleted,
+  });
   if (results.rounds && Object.keys(results.rounds).length > 0) {
     const roundNums = Object.keys(results.rounds).map(Number).sort((a, b) => a - b);
     const total     = results.total_rounds || roundNums.length;
@@ -509,10 +520,22 @@ function renderConfrontationView() {
   const { state, escHtml, t } = getCtx();
   const session = state.currentSession;
   if (!session) return `<div class="view-container"><p>${t('chat.noSession')}</p></div>`;
+  const arena = window.DecisionArena;
+  queueMicrotask(() => {
+    ensureLiveRunSessionHydratedIfMismatch({
+      state: arena.store.state,
+      sessionId: session.id,
+      mode: 'confrontation',
+      SessionService: arena.services.SessionService,
+      render: () => arena.render?.(),
+    });
+  });
   const results = state.confrontationResults;
   const blueTeam = session._blueTeam || ['pm', 'architect', 'po', 'ux-expert'];
   const redTeam  = session._redTeam || ['analyst', 'critic'];
   const includeSynthesis = session._includeSynthesis !== false;
+  const runProgressEntry = session?.id ? state.runProgressBySessionId?.[session.id] : null;
+  const liveRunProgress = runProgressEntry?.data || state.runProgress;
   return `
     <div class="full-height-view confrontation-view">
       <div class="dr-header">
@@ -528,12 +551,19 @@ function renderConfrontationView() {
           <div class="session-result-actions">
             ${!state.confrontationRunning ? `<button class="btn btn-primary" data-action="run-confrontation">${t('confrontation.run')}</button>` : ''}
             <div class="export-actions">${renderExportButtons(session.id)}</div>
-            <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
+            <button class="btn btn-secondary btn-sm" data-nav="analyses">${t('nav.back')}</button>
           </div>
         </div>
       </div>
       ${renderContextDocPanel()}
       <div class="dr-content">
+        ${state.confrontationRunning ? renderRunProgressPanel(liveRunProgress, {
+    t,
+    escHtml,
+    uiMode: state.uiMode,
+    mode: 'confrontation',
+    polling: state.runProgressPolling || null,
+  }) : ''}
         ${state.confrontationRunning ? `<div class="loading-state"><span class="spinner spinner-lg"></span> ${t('confrontation.running')}</div>` : ''}
         ${!results && !state.confrontationRunning ? `
           <div class="confrontation-setup">

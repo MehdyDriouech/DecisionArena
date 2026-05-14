@@ -1,4 +1,6 @@
-# Decision Arena
+# Decision Arena — README Express
+
+> **README Express** : version courte et partageable du produit. (L’ancien fichier « README marketing » a été retiré ; ce document en tient lieu.)
 
 > *Most AI tools give you an answer. Decision Arena gives you a structured disagreement.*  
 > *(FR) La plupart des outils IA vous donnent une réponse. Decision Arena vous donne une contradiction structurée.*
@@ -67,6 +69,17 @@ Remplacez par vos visuels sous `docs/screenshots/` :
 
 ---
 
+## Updates recentes (Phase 2)
+
+- **Analyses workspace** comme point d'entree principal pour les sessions passees et le lifecycle.
+- **Menu "Historique d'analyses"** ajoute dans la navigation pour acceder rapidement aux analyses.
+- **Lifecycle clarifie**: statuts persistes (`draft`, `running`, `completed`, `archived`) + signaux derives (`blocked`, `fragile`, `rerun`, `forked`).
+- **Contextes strategiques ameliorees**: bouton `Voir memory.md` fiable, colonne de gauche sticky (desktop), bouton `Activer l'espace` sur chaque card.
+- **Suppression des contextes stabilisee**: correction backend des erreurs 500 lors de `Supprimer selection`.
+- **Observabilite UI**: erreurs critiques harmonisees (i18n) et warnings frontend mieux traces.
+
+---
+
 ## Decision Memory (recherche déterministe + découverte optionnelle)
 
 Le flux principal reste la navigation:
@@ -87,6 +100,11 @@ Option de découverte uniquement (jamais source de vérité):
 - **Feature flag**: `SEMANTIC_MEMORY_ENABLED=false` par défaut
 - **Warnings**: “Similarity does not imply correctness.” + “These are prior decision records, not verified facts.”
 - **Interdits**: aucune injection automatique dans les prompts, aucun auto-link, aucune “AI memory”.
+
+### Mode expert : nettoyage / suppression
+
+- **Suppression unitaire ou multiple** de décisions (Decision Memory) via sélection + confirmation (expert-only).
+- **Suppression multiple** de contextes stratégiques via sélection + confirmation (expert-only).
 
 ---
 

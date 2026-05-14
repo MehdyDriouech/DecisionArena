@@ -15,8 +15,10 @@ use Domain\Providers\ProviderRouter;
 use Domain\Verdict\VerdictParser;
 use Domain\Vote\VoteAggregator;
 use Domain\Vote\VoteParser;
+use Infrastructure\Logging\Logger;
 use Infrastructure\Persistence\DebateRepository;
 use Infrastructure\Persistence\MessageRepository;
+use Infrastructure\Persistence\RunStatusRepository;
 use Infrastructure\Persistence\VerdictRepository;
 use Infrastructure\Persistence\VoteRepository;
 
@@ -41,6 +43,8 @@ class ConfrontationRunner {
     private \Domain\DecisionReliability\DecisionQualityScoreService $qualityScoreService;
     private DecisionSummaryService $summaryService;
     private PlaybookRuntime $playbookRuntime;
+    private Logger $logger;
+    private RunStatusRepository $runStatusRepo;
 
     public function __construct() {
         $this->assembler     = new AgentAssembler();
@@ -63,6 +67,8 @@ class ConfrontationRunner {
         $this->qualityScoreService = new \Domain\DecisionReliability\DecisionQualityScoreService();
         $this->summaryService = new DecisionSummaryService();
         $this->playbookRuntime = new PlaybookRuntime();
+        $this->logger = new Logger();
+        $this->runStatusRepo = new RunStatusRepository();
     }
 
     /**
@@ -83,7 +89,10 @@ class ConfrontationRunner {
         float  $devilAdvocateThreshold = 0.65,
         array  $agentProviders         = [],
         float  $decisionThreshold      = ReliabilityConfig::DEFAULT_DECISION_THRESHOLD,
-        ?string $decisionDynamicsPreset = null
+        ?string $decisionDynamicsPreset = null,
+        ?string $strategicContextId = null,
+        array $blueTeamAgents = [],
+        array $redTeamAgents = []
     ): array {
         $rounds = min(max($rounds, 1), 15);
         $decisionThreshold = ReliabilityConfig::normalizeThreshold($decisionThreshold);
@@ -118,6 +127,25 @@ class ConfrontationRunner {
         $forceStrongNext = false;
 
         for ($round = 1; $round <= $rounds; $round++) {
+            $this->runStatusRepo->appendEvent(
+                $sessionId,
+                [
+                    'level' => 'info',
+                    'phase' => 'round_started',
+                    'round' => $round,
+                    'label' => 'Tour ' . $round . ' demarre',
+                ],
+                [
+                    'current_round' => $round,
+                    'total_rounds' => $rounds,
+                    'current_phase' => 'round_started',
+                    'current_phase_label' => 'Tour demarre',
+                    'current_step' => 'round_start',
+                    'percent' => RunnerProgressPercent::confrontationRunPercent($round, $rounds, 0.05),
+                    'estimated' => true,
+                ],
+                'running'
+            );
             $memoryContext = $this->debateMemory->buildPromptContext($state);
             $roundMessages = $this->runRound(
                 $sessionId, $objective, $activeAgents,
@@ -126,7 +154,10 @@ class ConfrontationRunner {
                 $agentProviders,
                 $contextQuality,
                 $dynamicsPreset,
-                $forceStrongNext
+                $strategicContextId,
+                $forceStrongNext,
+                $blueTeamAgents,
+                $redTeamAgents
             );
 
             // Devil's Advocate: inject after all agents have spoken in this round
@@ -172,7 +203,51 @@ class ConfrontationRunner {
                         ['role' => 'user', 'content' => $daUser],
                     ];
                     try {
-                        $daRouted  = $this->providerRouter->chat($daMessages, null, null, null);
+                        $governedDa = CognitiveRuntimeGovernance::tracePromptPayload(
+                            $daMessages,
+                            [
+                                'session_id' => $sessionId,
+                                'strategic_context_id' => $strategicContextId,
+                                'round' => $round,
+                                'agent_id' => 'devil_advocate',
+                                'mode' => 'confrontation',
+                            ],
+                            'confrontation_user_payload',
+                            'orchestration',
+                            'confrontation_devil_advocate_payload'
+                        );
+                        $daMessages = $governedDa['messages'];
+                        $daMetaJson = $governedDa['meta_json'];
+                        $this->runStatusRepo->appendEvent(
+                            $sessionId,
+                            [
+                                'level' => 'info',
+                                'phase' => 'devil-advocate',
+                                'round' => $round,
+                                'agent_id' => 'devil_advocate',
+                                'label' => 'Devil advocate · appel LLM demarre',
+                            ],
+                            [
+                                'current_round' => $round,
+                                'total_rounds' => $rounds,
+                                'current_phase' => 'devil-advocate',
+                                'current_phase_label' => $this->phaseHumanLabel('devil-advocate'),
+                                'current_team' => null,
+                                'current_agent_id' => 'devil_advocate',
+                                'current_step' => 'llm_call',
+                                'percent' => RunnerProgressPercent::confrontationRunPercent($round, $rounds, 0.35),
+                                'estimated' => true,
+                            ],
+                            'running'
+                        );
+                        $daRouted  = $this->providerRouter->chat(
+                            $daMessages,
+                            null,
+                            null,
+                            null,
+                            null,
+                            RunTimeoutPolicy::routerOptionsForTelemetry($sessionId, 'confrontation', 'devil-advocate', 'devil_advocate', $round, null)
+                        );
                         $daContent = $daRouted['content'];
                         $daMsg     = $this->messageRepo->create([
                             'id'                       => $this->uuid(),
@@ -182,18 +257,49 @@ class ConfrontationRunner {
                             'provider_id'              => $daRouted['provider_id'] ?? null,
                             'provider_name'            => $daRouted['provider_name'] ?? null,
                             'model'                    => $daRouted['model'] ?? null,
-                            'requested_provider_id'    => null,
-                            'requested_model'          => null,
-                            'provider_fallback_used'   => 0,
-                            'provider_fallback_reason' => null,
+                            'requested_provider_id'    => $daRouted['requested_provider_id'] ?? null,
+                            'requested_model'          => $daRouted['requested_model'] ?? null,
+                            'provider_fallback_used'   => ($daRouted['fallback_used'] ?? false) ? 1 : 0,
+                            'provider_fallback_reason' => $daRouted['fallback_reason'] ?? null,
+                            'routing_source'           => $daRouted['routing_source'] ?? null,
+                            'resolved_provider_id'     => $daRouted['resolved_provider_id'] ?? null,
+                            'resolved_provider_label'  => $daRouted['resolved_provider_label'] ?? null,
+                            'resolved_model'           => $daRouted['resolved_model'] ?? null,
+                            'session_override_present' => $daRouted['session_override_present'] ?? null,
+                            'persona_default_provider_ignored' => $daRouted['persona_default_provider_ignored'] ?? null,
+                            'fallback_from_provider_id' => $daRouted['fallback_from_provider_id'] ?? null,
+                            'fallback_from_model'      => $daRouted['fallback_from_model'] ?? null,
                             'round'                    => $round,
                             'phase'                    => 'devil-advocate',
                             'mode_context'             => 'confrontation',
                             'message_type'             => 'devil_advocate',
+                            'meta_json'                => $daMetaJson,
                             'content'                  => $daContent,
                             'created_at'               => date('c'),
                         ]);
                         $roundMessages[] = $daMsg;
+                        $this->runStatusRepo->appendEvent(
+                            $sessionId,
+                            [
+                                'level' => 'info',
+                                'phase' => 'devil-advocate',
+                                'round' => $round,
+                                'agent_id' => 'devil_advocate',
+                                'label' => 'Devil advocate · reponse recue',
+                            ],
+                            [
+                                'current_round' => $round,
+                                'total_rounds' => $rounds,
+                                'current_phase' => 'devil-advocate',
+                                'current_phase_label' => $this->phaseHumanLabel('devil-advocate'),
+                                'current_team' => null,
+                                'current_agent_id' => 'devil_advocate',
+                                'current_step' => 'response_received',
+                                'percent' => RunnerProgressPercent::confrontationRunPercent($round, $rounds, 0.45),
+                                'estimated' => true,
+                            ],
+                            'running'
+                        );
                     } catch (\Throwable $e) {
                         error_log('[ConfrontationRunner] Devil advocate failed: ' . $e->getMessage());
                     }
@@ -210,6 +316,27 @@ class ConfrontationRunner {
         $synthesis = [];
         $verdict   = null;
         if ($includeSynthesis) {
+            $this->runStatusRepo->appendEvent(
+                $sessionId,
+                [
+                    'level' => 'info',
+                    'phase' => 'synthesis_started',
+                    'round' => $rounds + 1,
+                    'label' => 'Synthese demarree',
+                ],
+                [
+                    'current_round' => $rounds,
+                    'total_rounds' => $rounds,
+                    'current_phase' => 'synthesis',
+                    'current_phase_label' => 'Synthèse',
+                    'current_team' => null,
+                    'current_agent_id' => 'synthesizer',
+                    'current_step' => 'llm_call',
+                    'percent' => RunnerProgressPercent::confrontationRunPercent($rounds, $rounds, 0.85),
+                    'estimated' => true,
+                ],
+                'running'
+            );
             $allMessages = array_merge(...array_values($allRounds));
             $memoryContext = $this->debateMemory->buildPromptContext($state);
 
@@ -271,6 +398,27 @@ class ConfrontationRunner {
                 $dynamicsPreset
             );
             if (!empty($synthesis[0]['content'])) {
+                $this->runStatusRepo->appendEvent(
+                    $sessionId,
+                    [
+                        'level' => 'info',
+                        'phase' => 'synthesis_completed',
+                        'round' => $rounds + 1,
+                        'label' => 'Synthese terminee',
+                    ],
+                    [
+                        'current_round' => $rounds,
+                        'total_rounds' => $rounds,
+                        'current_phase' => 'synthesis_completed',
+                        'current_phase_label' => 'Synthese terminee',
+                        'current_team' => null,
+                        'current_agent_id' => 'synthesizer',
+                        'current_step' => 'persisted',
+                        'percent' => RunnerProgressPercent::confrontationRunPercent($rounds, $rounds, 0.92),
+                        'estimated' => true,
+                    ],
+                    'running'
+                );
                 $this->debateMemory->processMessage(
                     $sessionId,
                     $rounds + 1,
@@ -392,6 +540,10 @@ class ConfrontationRunner {
             'playbook_runtime' => $playbookDiagnostics,
             'risk_profile' => $riskProfile,
             'guardrails' => $guardrails,
+            'decision_label' => $reliability['adjusted_decision']['decision_label'] ?? null,
+            'decision_status' => $reliability['adjusted_decision']['decision_status'] ?? null,
+            'outcome' => $reliability['adjusted_decision']['final_outcome'] ?? null,
+            'next_steps' => $reliability['decision_reliability_summary']['recommended_action'] ?? null,
         ]);
 
         // Heuristic fallback: confrontation synthesis formatting can vary; ensure the brief has "why" content
@@ -437,7 +589,12 @@ class ConfrontationRunner {
             ])
         );
 
-        return StructuredRunResult::augment([
+        $runtimeTraces = CognitiveRuntimeGovernance::collectTracesFromMessageBuckets(array_merge(
+            array_values($allRounds),
+            [$synthesis]
+        ));
+
+        return StructuredRunResult::augment(array_merge([
             'rounds'            => $allRounds,
             'synthesis'         => $synthesis,
             'verdict'           => $verdict,
@@ -471,7 +628,7 @@ class ConfrontationRunner {
             'canonical_synthesis' => $canonicalSynthesis,
             'decision_outcome' => $decisionOutcome,
             'playbook_runtime' => $playbookDiagnostics,
-        ]);
+        ], CognitiveRuntimeGovernance::summarizeTraces($runtimeTraces, 'confrontation')));
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -493,7 +650,10 @@ class ConfrontationRunner {
         array  $agentProviders,
         array  $contextQuality,
         ?string $dynamicsPreset,
-        bool   &$forceStrongNextFlag
+        ?string $strategicContextIdForAgentMemory,
+        bool   &$forceStrongNextFlag,
+        array  $blueTeamAgents = [],
+        array  $redTeamAgents = []
     ): array {
         $roundMessages = [];
         $respondingAgents = $this->selectRespondingAgents($agents, $prevMessages, $currentRound, $interactionStyle, $replyPolicy);
@@ -501,6 +661,31 @@ class ConfrontationRunner {
         foreach ($respondingAgents as $agentId) {
             $agent = $this->assembler->assemble($agentId, null, null, $dynamicsPreset);
             if (!$agent) continue;
+            $team = $this->resolveTeam($agentId, $blueTeamAgents, $redTeamAgents);
+            $phase = $this->resolvePhaseLabel($currentRound, $team);
+            $this->runStatusRepo->appendEvent(
+                $sessionId,
+                [
+                    'level' => 'info',
+                    'phase' => $phase,
+                    'round' => $currentRound,
+                    'team' => $team,
+                    'agent_id' => (string)$agentId,
+                    'label' => $this->eventLabel($phase, $team, (string)$agentId, true),
+                ],
+                [
+                    'current_round' => $currentRound,
+                    'total_rounds' => $totalRounds,
+                    'current_phase' => $phase,
+                    'current_phase_label' => $this->phaseHumanLabel($phase),
+                    'current_team' => $team,
+                    'current_agent_id' => (string)$agentId,
+                    'current_step' => 'llm_call',
+                    'percent' => RunnerProgressPercent::confrontationRunPercent($currentRound, $totalRounds, 0.2),
+                    'estimated' => true,
+                ],
+                'running'
+            );
 
             $assignedTarget = ($currentRound > 1 && $agentId !== 'synthesizer')
                 ? $this->computeAssignedTarget($agents, $agentId, $currentRound)
@@ -510,7 +695,13 @@ class ConfrontationRunner {
             $maj          = SocialDynamicsService::summarizeMajority($votesSnap, $state['positions'] ?? []);
             $socialBlock  = null;
             if ($currentRound > 1 && $totalRounds > 1) {
-                $socialBlock = $this->socialPrompt->buildUserBlock($sessionId, $agentId, $maj);
+                $socialBlock = $this->socialPrompt->buildUserBlock(
+                    $sessionId,
+                    $agentId,
+                    $maj,
+                    $strategicContextIdForAgentMemory,
+                    false
+                );
             }
 
             try {
@@ -522,10 +713,50 @@ class ConfrontationRunner {
                     $socialBlock,
                     $forceStrongNextFlag,
                     $sessionId,
-                    null
+                    null,
+                    $strategicContextIdForAgentMemory
                 );
+                $governed = CognitiveRuntimeGovernance::tracePromptPayload(
+                    $messages,
+                    [
+                        'session_id' => $sessionId,
+                        'strategic_context_id' => $strategicContextIdForAgentMemory,
+                        'round' => $currentRound,
+                        'agent_id' => $agentId,
+                        'mode' => 'confrontation',
+                    ],
+                    'confrontation_user_payload',
+                    'orchestration',
+                    'confrontation_runtime_user_payload',
+                    ['interaction_style' => $interactionStyle]
+                );
+                $messages = $governed['messages'];
+                $promptMetaJson = $governed['meta_json'];
+                $this->logger->logPromptBuild('prompt_built_confrontation', [
+                    'agent_id' => $agent->id,
+                    'metadata' => [
+                        'mode' => 'confrontation',
+                        'round' => $currentRound,
+                        'total_rounds' => $totalRounds,
+                        'interaction_style' => $interactionStyle,
+                        'message_count' => count($messages),
+                        'character_count' => $this->countMessageChars($messages),
+                        'context_doc_injected' => !empty($contextDoc['content']),
+                        'memory_injected' => !empty(($memoryContext['argument_memory_summary'] ?? null)),
+                        'force_disagreement' => (bool)$forceDisagreement,
+                        'playbook_id' => 'confrontation',
+                        'session_id' => $sessionId,
+                    ],
+                ]);
 
-                $routed        = $this->providerRouter->chat($messages, $agent, null, null, $agentProviders[$agentId] ?? null);
+                $routed        = $this->providerRouter->chat(
+                    $messages,
+                    $agent,
+                    null,
+                    null,
+                    $this->resolveAgentOverride($agentProviders, (string)$agentId),
+                    RunTimeoutPolicy::routerOptionsForTelemetry($sessionId, 'confrontation', $phase, (string)$agentId, $currentRound, $team)
+                );
                 $content       = $routed['content'];
                 $targetResolution = ($currentRound > 1)
                     ? $this->resolveTargetAgent($content, $prevMessages, $agentId, $assignedTarget)
@@ -546,15 +777,52 @@ class ConfrontationRunner {
                     'requested_model'          => $routed['requested_model'] ?? null,
                     'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
                     'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                    'routing_source'           => $routed['routing_source'] ?? null,
+                    'resolved_provider_id'     => $routed['resolved_provider_id'] ?? null,
+                    'resolved_provider_label'  => $routed['resolved_provider_label'] ?? null,
+                    'resolved_model'           => $routed['resolved_model'] ?? null,
+                    'session_override_present' => $routed['session_override_present'] ?? null,
+                    'persona_default_provider_ignored' => $routed['persona_default_provider_ignored'] ?? null,
+                    'fallback_from_provider_id' => $routed['fallback_from_provider_id'] ?? null,
+                    'fallback_from_model'      => $routed['fallback_from_model'] ?? null,
                     'round'                    => $currentRound,
                     'phase'                    => 'round-' . $currentRound,
                     'target_agent_id'          => $targetAgentId,
                     'mode_context'             => 'confrontation',
                     'message_type'             => $msgType,
+                    'meta_json'                => $promptMetaJson,
                     'content'                  => $content,
                     'created_at'               => date('c'),
                 ]);
                 $roundMessages[] = $msg;
+                $this->runStatusRepo->appendEvent(
+                    $sessionId,
+                    [
+                        'level' => 'info',
+                        'phase' => $phase,
+                        'round' => $currentRound,
+                        'team' => $team,
+                        'agent_id' => (string)$agentId,
+                        'label' => $this->eventLabel($phase, $team, (string)$agentId, false),
+                        'metadata' => [
+                            'provider' => $routed['provider_name'] ?? ($routed['provider_id'] ?? null),
+                            'model' => $routed['model'] ?? null,
+                        ],
+                    ],
+                    [
+                        'current_round' => $currentRound,
+                        'total_rounds' => $totalRounds,
+                        'current_phase' => $phase,
+                        'current_phase_label' => $this->phaseHumanLabel($phase),
+                        'current_team' => $team,
+                        'current_agent_id' => (string)$agentId,
+                        'current_agent_name' => (string)($agent->persona->name ?? $agentId),
+                        'current_step' => 'persisted',
+                        'percent' => RunnerProgressPercent::confrontationRunPercent($currentRound, $totalRounds, 0.45),
+                        'estimated' => true,
+                    ],
+                    'running'
+                );
                 $this->debateMemory->processMessage(
                     $sessionId,
                     $currentRound,
@@ -572,7 +840,8 @@ class ConfrontationRunner {
                     $targetAgentId,
                     $agents,
                     $this->voteRepo->findVotesBySession($sessionId),
-                    $state['positions'] ?? []
+                    $state['positions'] ?? [],
+                    $strategicContextIdForAgentMemory
                 );
                 if ($currentRound === $totalRounds) {
                     $parsedVote = $this->voteParser->parse($content);
@@ -618,6 +887,30 @@ class ConfrontationRunner {
                     'created_at'               => date('c'),
                 ]);
                 $roundMessages[] = $msg;
+                $this->runStatusRepo->appendEvent(
+                    $sessionId,
+                    [
+                        'level' => 'error',
+                        'phase' => $phase,
+                        'round' => $currentRound,
+                        'team' => $team,
+                        'agent_id' => (string)$agentId,
+                        'label' => $this->eventLabel($phase, $team, (string)$agentId, false),
+                    ],
+                    [
+                        'current_round' => $currentRound,
+                        'total_rounds' => $totalRounds,
+                        'current_phase' => $phase,
+                        'current_phase_label' => $this->phaseHumanLabel($phase),
+                        'current_team' => $team,
+                        'current_agent_id' => (string)$agentId,
+                        'current_step' => 'failed',
+                        'percent' => RunnerProgressPercent::confrontationRunPercent($currentRound, $totalRounds, 0.45),
+                        'estimated' => true,
+                    ],
+                    'running',
+                    (string)$e->getMessage()
+                );
             }
         }
 
@@ -657,6 +950,20 @@ class ConfrontationRunner {
                 $sessionId,
                 null
             );
+            $this->logger->logPromptBuild('prompt_built_confrontation_synthesis', [
+                'agent_id' => $agent->id,
+                'metadata' => [
+                    'mode' => 'confrontation',
+                    'synthesis' => true,
+                    'message_count' => count($messages),
+                    'character_count' => $this->countMessageChars($messages),
+                    'context_doc_injected' => !empty($contextDoc['content']),
+                    'memory_injected' => !empty(($memoryContext['weighted_analysis'] ?? null)),
+                    'force_disagreement' => (bool)$forceDisagreement,
+                    'playbook_id' => 'confrontation',
+                    'session_id' => $sessionId,
+                ],
+            ]);
 
             if ($extraUserContent !== null) {
                 foreach ($messages as &$msg) {
@@ -667,8 +974,30 @@ class ConfrontationRunner {
                 }
                 unset($msg);
             }
+            $governed = CognitiveRuntimeGovernance::tracePromptPayload(
+                $messages,
+                [
+                    'session_id' => $sessionId,
+                    'strategic_context_id' => null,
+                    'round' => $synthRound,
+                    'agent_id' => 'synthesizer',
+                    'mode' => 'confrontation',
+                ],
+                'confrontation_synthesis_payload',
+                'orchestration',
+                'confrontation_runtime_synthesis_payload'
+            );
+            $messages = $governed['messages'];
+            $promptMetaJson = $governed['meta_json'];
 
-            $routed  = $this->providerRouter->chat($messages, $agent);
+            $routed  = $this->providerRouter->chat(
+                $messages,
+                $agent,
+                null,
+                null,
+                null,
+                RunTimeoutPolicy::routerOptionsForTelemetry($sessionId, 'confrontation', 'synthesis', 'synthesizer', $synthRound, null)
+            );
             $content = $routed['content'];
 
             $msg = $this->messageRepo->create([
@@ -683,10 +1012,19 @@ class ConfrontationRunner {
                 'requested_model'          => $routed['requested_model'] ?? null,
                 'provider_fallback_used'   => ($routed['fallback_used'] ?? false) ? 1 : 0,
                 'provider_fallback_reason' => $routed['fallback_reason'] ?? null,
+                'routing_source'           => $routed['routing_source'] ?? null,
+                'resolved_provider_id'     => $routed['resolved_provider_id'] ?? null,
+                'resolved_provider_label'  => $routed['resolved_provider_label'] ?? null,
+                'resolved_model'           => $routed['resolved_model'] ?? null,
+                'session_override_present' => $routed['session_override_present'] ?? null,
+                'persona_default_provider_ignored' => $routed['persona_default_provider_ignored'] ?? null,
+                'fallback_from_provider_id' => $routed['fallback_from_provider_id'] ?? null,
+                'fallback_from_model'      => $routed['fallback_from_model'] ?? null,
                 'round'                    => $synthRound,
                 'phase'                    => 'synthesis',
                 'mode_context'             => 'confrontation',
                 'message_type'             => 'synthesis',
+                'meta_json'                => $promptMetaJson,
                 'content'                  => $content,
                 'created_at'               => date('c'),
             ]);
@@ -819,6 +1157,78 @@ class ConfrontationRunner {
         $nonSynth = array_values(array_filter($allAgentIds, fn($id) => $id !== 'synthesizer'));
         $agentIdx = (int)(array_search($agentId, $nonSynth) ?: 0);
         return $others[($agentIdx + $round) % count($others)];
+    }
+
+    private function resolveAgentOverride(array $agentOverrides, string $agentId): ?array
+    {
+        $exact = trim($agentId);
+        if ($exact !== '' && isset($agentOverrides[$exact]) && is_array($agentOverrides[$exact])) {
+            return $agentOverrides[$exact];
+        }
+        $lower = strtolower($exact);
+        if ($lower === '') {
+            return null;
+        }
+        foreach ($agentOverrides as $key => $row) {
+            if (strtolower(trim((string)$key)) === $lower && is_array($row)) {
+                return $row;
+            }
+        }
+        return null;
+    }
+
+    private function countMessageChars(array $messages): int
+    {
+        $chars = 0;
+        foreach ($messages as $message) {
+            $chars += mb_strlen((string)($message['content'] ?? ''), 'UTF-8');
+        }
+        return $chars;
+    }
+
+    private function resolveTeam(string $agentId, array $blueTeamAgents, array $redTeamAgents): ?string
+    {
+        if (in_array($agentId, $blueTeamAgents, true)) {
+            return 'blue';
+        }
+        if (in_array($agentId, $redTeamAgents, true)) {
+            return 'red';
+        }
+        return null;
+    }
+
+    private function resolvePhaseLabel(int $round, ?string $team): string
+    {
+        if ($team === 'red') {
+            return 'red_attack';
+        }
+        if ($team === 'blue' && $round <= 1) {
+            return 'blue_opening';
+        }
+        if ($team === 'blue') {
+            return 'blue_rebuttal';
+        }
+        return 'debate_round';
+    }
+
+    private function phaseHumanLabel(string $phase): string
+    {
+        return match ($phase) {
+            'blue_opening' => 'Blue Team ouverture',
+            'red_attack' => 'Red Team attaque',
+            'blue_rebuttal' => 'Blue Team riposte',
+            'devil-advocate' => 'Devil advocate',
+            'synthesis' => 'Synthèse',
+            default => 'Confrontation',
+        };
+    }
+
+    private function eventLabel(string $phase, ?string $team, string $agentId, bool $started): string
+    {
+        $teamLabel = $team === 'blue' ? 'Blue Team' : ($team === 'red' ? 'Red Team' : 'Equipe');
+        $stepLabel = $started ? 'appel LLM demarre' : 'reponse recue';
+        $phaseLabel = $this->phaseHumanLabel($phase);
+        return $phaseLabel . ' · ' . $teamLabel . ' · ' . $agentId . ' · ' . $stepLabel;
     }
 
     private function uuid(): string {

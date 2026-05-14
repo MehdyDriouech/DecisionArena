@@ -1,6 +1,8 @@
 <?php
 namespace Infrastructure\Persistence;
 
+use Domain\Orchestration\RunTimeoutPolicy;
+
 class RunStatusRepository
 {
     private \PDO $pdo;
@@ -143,5 +145,69 @@ class RunStatusRepository
             return 0;
         }
         return (int)($endTs - $startTs);
+    }
+
+    /**
+     * Mur d’orchestration : si le run dépasse le délai depuis started_at, marquer blocked + événement.
+     */
+    public function applyOrchestrationWallTimeoutIfNeeded(string $sessionId, array $sessionRow): void
+    {
+        $raw = $this->load($sessionId);
+        if (!$raw || strtolower((string)($raw['status'] ?? '')) !== 'running') {
+            return;
+        }
+        if (strtolower((string)($sessionRow['status'] ?? '')) !== 'running') {
+            return;
+        }
+        $mode = (string)($sessionRow['mode'] ?? ($raw['mode'] ?? 'chat'));
+        $wall = RunTimeoutPolicy::hardRunWallSecondsForMode($mode);
+        $startIso = (string)($raw['started_at'] ?? '');
+        $startTs = strtotime($startIso);
+        if ($startTs === false) {
+            return;
+        }
+        if ((time() - (int)$startTs) < $wall) {
+            return;
+        }
+        $events = isset($raw['events']) && is_array($raw['events']) ? $raw['events'] : [];
+        foreach ($events as $e) {
+            if (($e['phase'] ?? '') === 'orchestration_wall_timeout') {
+                return;
+            }
+        }
+        $now = date('c');
+        $events[] = [
+            'ts' => $now,
+            'level' => 'warning',
+            'phase' => 'orchestration_wall_timeout',
+            'label' => 'Timeout mur orchestration (' . $wall . 's)',
+        ];
+        if (count($events) > 120) {
+            $events = array_slice($events, -120);
+        }
+        $progress = isset($raw['progress']) && is_array($raw['progress']) ? $raw['progress'] : [];
+        $progress['current_step'] = 'orchestration_wall_timeout';
+        $diag = array_merge(
+            is_array($raw['run_diagnostics'] ?? null) ? $raw['run_diagnostics'] : [],
+            [
+                'orchestration_wall_timeout' => true,
+                'timeout_seconds' => $wall,
+                'provider_id' => $progress['current_agent_id'] ?? null,
+                'model' => null,
+                'agent_id' => $progress['current_agent_id'] ?? null,
+                'phase' => $progress['current_phase'] ?? null,
+            ]
+        );
+        $payload = array_merge($raw, [
+            'session_id' => $sessionId,
+            'status' => 'blocked',
+            'updated_at' => $now,
+            'completed_at' => $now,
+            'last_error' => 'Timeout orchestration (' . $wall . 's). Relancez le run ou ouvrez les diagnostics.',
+            'events' => $events,
+            'progress' => $progress,
+            'run_diagnostics' => $diag,
+        ]);
+        $this->save($sessionId, $payload);
     }
 }

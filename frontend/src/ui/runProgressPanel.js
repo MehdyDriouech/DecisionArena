@@ -81,29 +81,84 @@ function renderRunProgressPanel(payloadOrRunStatus, rawOpts = {}) {
   } = opts;
 
   const progress = runStatus.progress || {};
+  const statusLower = String(runStatus.status || '').toLowerCase();
   const mode = String(runStatus.mode || opts.mode || '');
   const events = Array.isArray(runStatus.events) ? runStatus.events : [];
   const lastEvent = events.length ? events[events.length - 1] : null;
+  const staleness = runStatus.staleness && typeof runStatus.staleness === 'object' ? runStatus.staleness : {};
+  const lastEventTs = staleness.last_event_at || lastEvent?.ts || runStatus.updated_at || null;
+  const noEventSinceSec = relativeSecondsSince(lastEventTs);
+  const secSinceEvt = staleness.seconds_since_last_event != null
+    ? Number(staleness.seconds_since_last_event)
+    : (noEventSinceSec != null ? noEventSinceSec : 0);
+  const stalenessLevel = String(staleness.level || 'normal');
+  const stalenessMsg = (staleness.message && statusLower === 'running') ? String(staleness.message) : '';
+  const stalenessLlmMsg = (staleness.llm_message && statusLower === 'running') ? String(staleness.llm_message) : '';
+  const currentLlm = runStatus.current_llm_call && typeof runStatus.current_llm_call === 'object'
+    ? runStatus.current_llm_call
+    : { active: false };
+  const fin = runStatus.run_finalization && typeof runStatus.run_finalization === 'object'
+    ? runStatus.run_finalization
+    : { lines: [] };
+  const finLines = Array.isArray(fin.lines) ? fin.lines : [];
+  const diag = runStatus.run_timeout_diagnostics && typeof runStatus.run_timeout_diagnostics === 'object'
+    ? runStatus.run_timeout_diagnostics
+    : null;
+  const wallElapsed = Number(runStatus.elapsed_wall_seconds ?? runStatus.elapsed_seconds ?? 0);
+  const pollSec = polling?.lastUpdateAt != null
+    ? Math.max(0, Math.floor((Date.now() - Number(polling.lastUpdateAt)) / 1000))
+    : null;
+
+  const panelTitle = statusLower === 'completed'
+    ? t('runProgress.titleCompleted')
+    : (statusLower === 'failed' || statusLower === 'blocked')
+      ? t('runProgress.titleTerminalIssue')
+      : t('runProgress.running');
   const currentRound = Number(progress.current_round || 0);
   const totalRounds = Number(progress.total_rounds || 0);
   const phaseHuman = progress.current_phase_label || progress.current_phase || t('runProgress.unknownPhase');
   const currentAgent = progress.current_agent_name || progress.current_agent_id || '—';
   const currentTeam = progress.current_team || null;
-  const elapsed = formatElapsed(runStatus.elapsed_seconds || 0);
+  const elapsedWallDisplay = formatElapsed(wallElapsed);
   const estimatedPercent = computeEstimatedPercent(String(runStatus.status || '').toLowerCase(), progress);
-  const lastEventTs = lastEvent?.ts || runStatus.updated_at || null;
-  const noEventSinceSec = relativeSecondsSince(lastEventTs);
   const modeLine = [
     modeLabel(mode, t),
     totalRounds > 0 ? `${t('runProgress.round')} ${currentRound}/${totalRounds}` : '',
     String(phaseHuman || ''),
   ].filter(Boolean).join(' · ');
   const basicLastEvent = lastEvent?.label || lastEvent?.phase || t('runProgress.noEventsYet');
-  const basicSlowProvider = noEventSinceSec != null && noEventSinceSec > 60
-    ? `<div class="run-progress-info">⏳ ${t('runProgress.providerSlow')}</div>`
+  const stalenessClass = (() => {
+    switch (stalenessLevel) {
+      case 'quiet': return 'run-progress-stale-quiet';
+      case 'long': return 'run-progress-stale-long';
+      case 'possibly_stuck': return 'run-progress-stale-stuck';
+      case 'timeout': return 'run-progress-stale-timeout';
+      default: return '';
+    }
+  })();
+  const stalenessHtml = [
+    stalenessMsg ? `<div class="run-progress-stale-msg ${stalenessClass}">${escHtml(stalenessMsg)}</div>` : '',
+    stalenessLlmMsg ? `<div class="run-progress-info">${escHtml(stalenessLlmMsg)}</div>` : '',
+  ].filter(Boolean).join('');
+  const finBlock = finLines.length && statusLower === 'running'
+    ? `<div class="run-progress-finalization">${finLines.map((ln) => `<div class="run-progress-info">${escHtml(ln)}</div>`).join('')}</div>`
     : '';
-  const expertStaleWarning = noEventSinceSec != null && noEventSinceSec > 180
-    ? `<div class="run-progress-warning">⚠️ ${t('runProgress.stale180')}</div>`
+  const llmActiveLine = currentLlm.active
+    ? `<div>${t('runProgress.activeLlm')}: <strong>${formatElapsed(Number(currentLlm.seconds_active || 0))}</strong></div>`
+    : '';
+  const journalLine = `<div>${t('runProgress.lastJournalAgo')}: <strong>${secSinceEvt}s</strong></div>`;
+  const pollLine = `<div>${t('runProgress.lastPollOk')}: <strong>${pollSec != null ? `${pollSec}s` : '—'}</strong></div>`;
+  const expertDiag = (diag && uiMode === 'expert')
+    ? `
+          <div class="run-progress-row">
+            <span>${t('runProgress.expertProvider')}: <strong>${escHtml(diag.provider_id || '—')}</strong></span>
+            <span>${t('runProgress.expertModel')}: <strong>${escHtml(diag.model || '—')}</strong></span>
+          </div>
+          <div class="run-progress-row">
+            <span>${t('runProgress.expertWall')}: <strong>${Number(diag.wall_seconds || 0)}s</strong></span>
+            <span>${t('runProgress.expertRemaining')}: <strong>${formatElapsed(Number(diag.remaining_wall_seconds || 0))}</strong></span>
+          </div>
+        `
     : '';
 
   const expertSection = uiMode === 'expert'
@@ -126,8 +181,8 @@ function renderRunProgressPanel(payloadOrRunStatus, rawOpts = {}) {
             <span>${t('runProgress.currentAgent')}: <strong>${escHtml(String(currentAgent))}</strong></span>
             <span>${t('runProgress.lastMessageAt')}: <strong>${escHtml(runStatus.last_message_at || '—')}</strong></span>
           </div>
+          ${expertDiag}
           ${runStatus.last_error ? `<div class="run-progress-warning">⚠️ ${escHtml(String(runStatus.last_error))}</div>` : ''}
-          ${expertStaleWarning}
           <div class="run-progress-log">
             ${(events.map((evt) => `
               <div class="run-progress-log-line">
@@ -143,19 +198,23 @@ function renderRunProgressPanel(payloadOrRunStatus, rawOpts = {}) {
 
   return `
     <div class="run-progress-panel">
-      <div class="run-progress-title">${t('runProgress.running')}</div>
+      <div class="run-progress-title">${escHtml(panelTitle)}</div>
       <div class="run-progress-subtitle">${escHtml(modeLine || t('runProgress.running'))}</div>
       <div class="run-progress-kpis">
         <div>${t('runProgress.currentAgent')}: <strong>${escHtml(String(currentAgent))}</strong></div>
         ${mode === 'confrontation' ? `<div>${t('runProgress.currentTeam')}: <strong>${escHtml(teamLabel(currentTeam, t))}</strong></div>` : ''}
-        <div>${t('runProgress.elapsed')}: <strong>${elapsed}</strong></div>
+        <div>${t('runProgress.elapsedWall')}: <strong>${elapsedWallDisplay}</strong></div>
+        ${journalLine}
+        ${pollLine}
+        ${llmActiveLine}
       </div>
       <div class="run-progress-bar-wrap">
         <div class="run-progress-bar" style="width:${estimatedPercent}%;"></div>
       </div>
       <div class="run-progress-percent">${t('runProgress.estimatedProgress')}: ${estimatedPercent}%</div>
       <div class="run-progress-last-event">${t('runProgress.lastEvent')}: ${escHtml(String(basicLastEvent))}</div>
-      ${basicSlowProvider}
+      ${stalenessHtml}
+      ${finBlock}
       ${runStatus.last_error ? `<div class="run-progress-warning">⚠️ ${escHtml(String(runStatus.last_error))}</div>` : ''}
       ${expertSection}
     </div>

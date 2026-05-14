@@ -1,4 +1,5 @@
 import { registerAction } from '../../core/events.js';
+import { confirmationPayload, isConfirmationConfirmed, requestConfirmation, uiCopy } from '../../utils/confirmationUi.js';
 
 async function loadRoomsForExplorer(state, contextId) {
   state.decisionMemoryNav = state.decisionMemoryNav || {};
@@ -25,6 +26,9 @@ async function refreshDecisionMemoryExplorerNav(state) {
   try {
     const data = await window.DecisionArena.services.StrategicContextService.list({}, 120);
     state.decisionMemoryNav.contexts = Array.isArray(data.contexts) ? data.contexts : [];
+    const active = data.active_context ?? null;
+    state.activeStrategicContext = active;
+    state.activeStrategicContextId = active?.context_id ? String(active.context_id) : null;
     state.decisionMemoryNav.contextsError = null;
     const cid = state.decisionMemoryUi?.navStrategicContextId;
     if (cid) {
@@ -43,7 +47,10 @@ function registerDecisionMemoryHandlers() {
     state.decisionMemory = { loading: true, error: null, memories: state.decisionMemory?.memories ?? null };
     window.DecisionArena.render?.();
     try {
-      const data = await window.DecisionArena.services.DecisionMemoryService.list(250, state.uiMode === 'expert' ? { include_archived: '1' } : {});
+      const [data] = await Promise.all([
+        window.DecisionArena.services.DecisionMemoryService.list(250, state.uiMode === 'expert' ? { include_archived: '1' } : {}),
+        window.DecisionArena.services.LoaderService.loadSessions().catch(() => {}),
+      ]);
       state.decisionMemory = { loading: false, error: null, memories: data.memories || [], links: data.links || [] };
       await refreshDecisionMemoryExplorerNav(state);
     } catch (err) {
@@ -79,7 +86,7 @@ function registerDecisionMemoryHandlers() {
         decision_status: filters.decision_status || '',
         confidence: filters.confidence || '',
         memory_state: filters.memory_state || '',
-        include_stale: expert && ui.includeStale ? '1' : (ui.includeStale ? '1' : '0'),
+        include_stale: expert && ui.includeStale ? '1' : '0',
         expert_override: expert && ui.expertOverride ? '1' : '0',
         limit: 80,
         offset: 0,
@@ -208,8 +215,12 @@ function registerDecisionMemoryHandlers() {
     state.decisionMemoryUi.roomMemoryMdError = '';
     window.DecisionArena.render?.();
     try {
+      const perspective = window.DecisionArena.services.MemorySnapshotService.normalizePerspective(
+        state.decisionMemoryUi.roomMemoryMdPerspective || 'default'
+      );
       const md = await window.DecisionArena.services.MemorySnapshotService.getRoomMarkdown(roomId, {
         expert: state.uiMode === 'expert' ? '1' : '',
+        perspective,
       });
       state.decisionMemoryUi.roomMemoryMdContent = md;
     } catch (err) {
@@ -227,10 +238,51 @@ function registerDecisionMemoryHandlers() {
     state.decisionMemoryUi = state.decisionMemoryUi || {};
     state.decisionMemoryUi.roomMemoryMdOpen = !state.decisionMemoryUi.roomMemoryMdOpen;
     state.decisionMemoryUi.roomMemoryMdError = '';
+    state.decisionMemoryUi.roomMemoryMdRoomId = roomId;
     if (state.decisionMemoryUi.roomMemoryMdOpen && !state.decisionMemoryUi.roomMemoryMdContent) {
       await loadRoomMemoryMd(state, roomId);
     }
     window.DecisionArena.render?.();
+  });
+
+  registerAction('set-room-memory-perspective', async ({ element }) => {
+    const state = window.DecisionArena.store.state;
+    state.decisionMemoryUi = state.decisionMemoryUi || {};
+    const requested = String(
+      element?.dataset?.perspective
+        ?? element?.value
+        ?? ''
+    ).trim();
+    const perspective = window.DecisionArena.services.MemorySnapshotService.normalizePerspective(requested) || 'default';
+    if (state.decisionMemoryUi.roomMemoryMdPerspective === perspective) return;
+
+    let preservedScroll = 0;
+    try {
+      const sc = document.querySelector('[data-snapshot-scroll="decision-room"]');
+      if (sc) preservedScroll = sc.scrollTop || 0;
+    } catch (_) { preservedScroll = 0; }
+
+    state.decisionMemoryUi.roomMemoryMdPerspective = perspective;
+    state.decisionMemoryUi.roomMemoryMdContent = '';
+    state.decisionMemoryUi.roomMemoryMdError = '';
+    if (state.decisionMemoryUi.roomMemoryMdOpen) {
+      const roomId = String(
+        state.decisionMemoryUi.roomMemoryMdRoomId
+        || state.decisionMemoryUi.navDecisionChainId
+        || ''
+      );
+      if (roomId) await loadRoomMemoryMd(state, roomId);
+    }
+    window.DecisionArena.render?.();
+
+    if (preservedScroll > 0) {
+      try {
+        requestAnimationFrame(() => {
+          const sc2 = document.querySelector('[data-snapshot-scroll="decision-room"]');
+          if (sc2) sc2.scrollTop = preservedScroll;
+        });
+      } catch (_) { /* noop */ }
+    }
   });
 
   registerAction('close-room-memory-md', () => {
@@ -255,7 +307,7 @@ function registerDecisionMemoryHandlers() {
       document.execCommand('copy');
       document.body.removeChild(ta);
     }
-    state.toast = 'Copié: room memory.md';
+    state.toast = 'Copied: memory.md';
     setTimeout(() => { try { state.toast = null; window.DecisionArena.render?.(); } catch (_) {} }, 2000);
     window.DecisionArena.render?.();
   });
@@ -341,6 +393,20 @@ function registerDecisionMemoryHandlers() {
     window.DecisionArena.render?.();
   });
 
+  registerAction('select-all-visible-memories', () => {
+    const state = window.DecisionArena.store.state;
+    if (state.uiMode !== 'expert') {
+      state.error = 'Expert mode required.';
+      window.DecisionArena.render?.();
+      return;
+    }
+    // Select exactly what is currently rendered in the DOM (view-truth).
+    const nodes = Array.from(document.querySelectorAll('input[type="checkbox"][data-action="toggle-memory-selection"][data-memory-id]'));
+    const ids = nodes.map((n) => String(n.dataset.memoryId || '')).filter(Boolean);
+    state.selectedMemoryIds = Array.from(new Set(ids));
+    window.DecisionArena.render?.();
+  });
+
   registerAction('clear-selected-memories', () => {
     const state = window.DecisionArena.store.state;
     state.selectedMemoryIds = [];
@@ -370,6 +436,114 @@ function registerDecisionMemoryHandlers() {
     window.DecisionArena.render?.();
   });
 
+  registerAction('request-delete-decision-memory', (ctx = {}) => {
+    const { element } = ctx;
+    const memoryId = element?.dataset?.memoryId;
+    if (!memoryId) return;
+    const state = window.DecisionArena.store.state;
+    if (state.uiMode !== 'expert') {
+      state.error = 'Expert mode required.';
+      window.DecisionArena.render?.();
+      return;
+    }
+    requestConfirmation(state, {
+      id: `delete-decision-memory:${memoryId}`,
+      mode: 'modal',
+      tone: 'danger',
+      title: uiCopy('Supprimer cette décision ?', 'Delete this decision memory?'),
+      body: uiCopy('Cette action supprime définitivement la décision et ses liens (contextes/chaînes).', 'This permanently deletes the memory and its links (contexts/chains).'),
+      expertBody: uiCopy(`memory_id: ${String(memoryId).slice(0, 12)}…`, `memory_id: ${String(memoryId).slice(0, 12)}…`),
+      confirmLabel: uiCopy('Supprimer', 'Delete'),
+      action: 'confirm-delete-decision-memory',
+      payload: { memoryId },
+    });
+    window.DecisionArena.render?.();
+  });
+
+  registerAction('confirm-delete-decision-memory', async (ctx = {}) => {
+    const payload = confirmationPayload(ctx, ctx.element);
+    const memoryId = payload.memoryId;
+    if (!memoryId) return;
+    const state = window.DecisionArena.store.state;
+    if (state.uiMode !== 'expert') {
+      state.error = 'Expert mode required.';
+      window.DecisionArena.render?.();
+      return;
+    }
+    if (!isConfirmationConfirmed(ctx)) return;
+    try {
+      await window.DecisionArena.services.DecisionMemoryService.delete(memoryId);
+      const data = await window.DecisionArena.services.DecisionMemoryService.list(250, { include_archived: '1' });
+      state.decisionMemory = { loading: false, error: null, memories: data.memories || [], links: data.links || [] };
+      await refreshDecisionMemoryExplorerNav(state);
+      state.selectedMemoryIds = Array.isArray(state.selectedMemoryIds) ? state.selectedMemoryIds.filter((x) => String(x) !== String(memoryId)) : [];
+      state.toast = 'Décision supprimée.';
+    } catch (err) {
+      state.error = String(err?.message || err);
+    }
+    window.DecisionArena.render?.();
+  });
+
+  registerAction('request-delete-selected-memories', (ctx = {}) => {
+    const state = window.DecisionArena.store.state;
+    if (state.uiMode !== 'expert') {
+      state.error = 'Expert mode required.';
+      window.DecisionArena.render?.();
+      return;
+    }
+    const ids = Array.isArray(state.selectedMemoryIds) ? state.selectedMemoryIds.map(String).filter(Boolean) : [];
+    if (!ids.length) return;
+    requestConfirmation(state, {
+      id: `delete-selected-decision-memories:${ids.length}`,
+      mode: 'modal',
+      tone: 'danger',
+      title: uiCopy('Supprimer plusieurs décisions ?', 'Delete multiple decision memories?'),
+      body: uiCopy(`Cette action supprime définitivement ${ids.length} décision(s) et leurs liens.`, `This permanently deletes ${ids.length} memory record(s) and their links.`),
+      expertBody: uiCopy(ids.slice(0, 8).join(', ') + (ids.length > 8 ? '…' : ''), ids.slice(0, 8).join(', ') + (ids.length > 8 ? '…' : '')),
+      confirmLabel: uiCopy('Supprimer la sélection', 'Delete selected'),
+      action: 'confirm-delete-selected-memories',
+      payload: { ids },
+    });
+    window.DecisionArena.render?.();
+  });
+
+  registerAction('confirm-delete-selected-memories', async (ctx = {}) => {
+    const payload = confirmationPayload(ctx, ctx.element);
+    const ids = Array.isArray(payload.ids) ? payload.ids.map(String).filter(Boolean) : [];
+    if (!ids.length) return;
+    const state = window.DecisionArena.store.state;
+    if (state.uiMode !== 'expert') {
+      state.error = 'Expert mode required.';
+      window.DecisionArena.render?.();
+      return;
+    }
+    if (!isConfirmationConfirmed(ctx)) return;
+
+    const failures = [];
+    for (const id of ids) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await window.DecisionArena.services.DecisionMemoryService.delete(id);
+      } catch (err) {
+        failures.push({ id, err: String(err?.message || err) });
+      }
+    }
+
+    try {
+      const data = await window.DecisionArena.services.DecisionMemoryService.list(250, { include_archived: '1' });
+      state.decisionMemory = { loading: false, error: null, memories: data.memories || [], links: data.links || [] };
+      await refreshDecisionMemoryExplorerNav(state);
+    } catch (_) {}
+
+    if (failures.length) {
+      state.error = `Suppression partielle: ${failures.length} échec(s).`;
+    } else {
+      state.toast = 'Décisions supprimées.';
+      state.selectedMemoryIds = [];
+    }
+    window.DecisionArena.render?.();
+  });
+
   registerAction('confirm-decision-memory', async ({ element }) => {
     const sessionId = element?.dataset?.sessionId;
     if (!sessionId) return;
@@ -377,14 +551,26 @@ function registerDecisionMemoryHandlers() {
     state.memoryConfirmingSessionId = sessionId;
     window.DecisionArena.render?.();
     try {
-      await window.DecisionArena.services.DecisionMemoryService.confirmForSession(sessionId);
+      const confirmRes = await window.DecisionArena.services.DecisionMemoryService.confirmForSession(sessionId);
       // Refresh memory list if loaded
       if (state.decisionMemory?.memories) {
         const data = await window.DecisionArena.services.DecisionMemoryService.list(250);
         state.decisionMemory = { loading: false, error: null, memories: data.memories || [], links: data.links || [] };
         await refreshDecisionMemoryExplorerNav(state);
       }
-      state.toast = 'Mémoire confirmée et persistée.';
+      const mem = confirmRes?.memory && typeof confirmRes.memory === 'object' ? confirmRes.memory : null;
+      const mid = String(mem?.memory_id || '').trim();
+      if (mid) {
+        state.postPersistDecisionMemoryBySession = state.postPersistDecisionMemoryBySession || {};
+        state.postPersistDecisionMemoryBySession[sessionId] = {
+          memory_id: mid,
+          strategic_context_linked: !!confirmRes.strategic_context_linked,
+          context_memory_linked: !!confirmRes.context_memory_linked,
+          agent_memory_sync: confirmRes.agent_memory_sync || null,
+        };
+      }
+      state.agentMemoryPropagationPreview = null;
+      state.toast = window.i18n?.t('decisionMemory.persistSuccessToast') || 'Mémoire confirmée et persistée.';
     } catch (err) {
       state.error = String(err.message || err);
     } finally {
@@ -393,44 +579,219 @@ function registerDecisionMemoryHandlers() {
     }
   });
 
+  registerAction('preview-agent-memory-propagation', async ({ element }) => {
+    const sessionId = String(element?.dataset?.sessionId || '').trim();
+    const memoryId = String(element?.dataset?.memoryId || '').trim();
+    if (!sessionId || !memoryId) return;
+    const state = window.DecisionArena.store.state;
+    state.agentMemoryPropagationBusy = true;
+    state.error = null;
+    window.DecisionArena.render?.();
+    try {
+      const data = await window.DecisionArena.services.DecisionMemoryService.agentMemoryPreview(sessionId, memoryId);
+      state.agentMemoryPropagationPreview = { sessionId, memoryId, data };
+      state.toast = window.i18n?.t('decisionMemory.agentPropagation.previewDone') || 'Aperçu prêt.';
+    } catch (err) {
+      state.error = String(err?.message || err);
+    } finally {
+      state.agentMemoryPropagationBusy = false;
+      window.DecisionArena.render?.();
+    }
+  });
+
+  registerAction('propagate-agent-memory-confirmed', async ({ element }) => {
+    const sessionId = String(element?.dataset?.sessionId || '').trim();
+    const memoryId = String(element?.dataset?.memoryId || '').trim();
+    if (!sessionId || !memoryId) return;
+    const msg = window.i18n?.t('decisionMemory.agentPropagation.confirmPrompt') || 'Confirmer ?';
+    if (!window.confirm(msg)) return;
+    const state = window.DecisionArena.store.state;
+    state.agentMemoryPropagationBusy = true;
+    state.error = null;
+    window.DecisionArena.render?.();
+    try {
+      await window.DecisionArena.services.DecisionMemoryService.propagateToAgentMemories(sessionId, {
+        memory_id: memoryId,
+        agent_ids: [],
+        confirm: true,
+        expert_override: false,
+      });
+      state.toast = window.i18n?.t('decisionMemory.agentPropagation.done') || 'Propagation terminée.';
+      state.agentMemoryPropagationPreview = null;
+    } catch (err) {
+      state.error = String(err?.message || err);
+    } finally {
+      state.agentMemoryPropagationBusy = false;
+      window.DecisionArena.render?.();
+    }
+  });
+
+  registerAction('attach-session-result-to-active-context', async ({ element }) => {
+    const sessionId = String(element?.dataset?.sessionId || '').trim();
+    if (!sessionId) return;
+    const state = window.DecisionArena.store.state;
+    state.error = null;
+    let contextId = String(state.activeStrategicContextId || state.activeStrategicContext?.context_id || '').trim();
+    if (!contextId) {
+      try {
+        const activeRes = await window.DecisionArena.services.StrategicContextService.getActive();
+        const active = activeRes?.active_context || null;
+        if (active?.context_id) {
+          contextId = String(active.context_id);
+          state.activeStrategicContext = active;
+          state.activeStrategicContextId = contextId;
+        }
+      } catch (_) {}
+    }
+    if (!contextId) {
+      state.error = window.i18n?.t('decisionMemory.attachToContextNoActive') || 'Aucun contexte actif.';
+      window.DecisionArena.render?.();
+      return;
+    }
+    try {
+      await window.DecisionArena.services.StrategicContextService.linkSession(contextId, sessionId);
+      state.toast = window.i18n?.t('decisionMemory.attachToContextSuccess') || 'Résultat attaché au contexte actif.';
+      setTimeout(() => {
+        try {
+          if (state.toast) state.toast = null;
+          window.DecisionArena.render?.();
+        } catch (_) {}
+      }, 2500);
+    } catch (err) {
+      state.error = String(err?.message || err);
+    }
+    window.DecisionArena.render?.();
+  });
+
   registerAction('create-decision-memory-link', async ({ element }) => {
     const fromId = element?.dataset?.fromMemoryId;
     if (!fromId) return;
-    const toId = prompt('ID mémoire cible (memory_id):', '');
-    if (!toId) return;
-    const linkType = prompt('Type de lien: continuation | pivot | experiment_followup | related', 'related') || 'related';
     const state = window.DecisionArena.store.state;
+    const toId = String(element?.dataset?.toMemoryId || '').trim();
+    const linkType = String(element?.dataset?.linkType || 'related').trim() || 'related';
+    if (!toId) {
+      state.error = 'Target memory_id is required to create a link.';
+      window.DecisionArena.render?.();
+      return;
+    }
     try {
       await window.DecisionArena.services.DecisionMemoryService.link(fromId, toId, linkType);
       const data = await window.DecisionArena.services.DecisionMemoryService.list(250);
       state.decisionMemory = { loading: false, error: null, memories: data.memories || [], links: data.links || [] };
-      state.toast = 'Lien créé.';
+      state.toast = 'Lien cree.';
     } catch (err) {
       state.error = String(err.message || err);
     }
     window.DecisionArena.render?.();
   });
 
-  registerAction('decision-memory-lifecycle', async ({ element }) => {
-    const memoryId = element?.dataset?.memoryId;
-    const action = element?.dataset?.lifecycleAction;
+  registerAction('decision-memory-lifecycle', async (ctx = {}) => {
+    const { element } = ctx;
+    const payload = confirmationPayload(ctx, element);
+    const memoryId = payload.memoryId;
+    const action = payload.lifecycleAction;
     if (!memoryId || !action) return;
     const state = window.DecisionArena.store.state;
+    if (!isConfirmationConfirmed(ctx)) {
+      const labels = {
+        review: {
+          title: uiCopy('Marquer cette mémoire comme revue ?', 'Mark this memory as reviewed?'),
+          body: uiCopy('Cela ajoute une trace de revue dans l’historique de cette mémoire.', 'This adds a review trace to this memory history.'),
+          confirmLabel: uiCopy('Marquer comme revue', 'Mark reviewed'),
+        },
+        archive: {
+          title: uiCopy('Archiver cette mémoire ?', 'Archive this memory?'),
+          body: uiCopy('Elle sera retirée des suggestions de réutilisation par défaut.', 'It will be removed from reuse suggestions by default.'),
+          confirmLabel: uiCopy('Archiver', 'Archive'),
+        },
+        restore: {
+          title: uiCopy('Restaurer cette mémoire ?', 'Restore this memory?'),
+          body: uiCopy('Elle pourra de nouveau apparaître dans les vues actives.', 'It may appear again in active views.'),
+          confirmLabel: uiCopy('Restaurer', 'Restore'),
+        },
+        supersede: {
+          title: uiCopy('Remplacer cette mémoire par une autre ?', 'Supersede this memory with another?'),
+          body: uiCopy('La mémoire restera auditée mais ne sera plus réutilisée par défaut.', 'The memory remains audited but is no longer reused by default.'),
+          confirmLabel: uiCopy('Remplacer', 'Supersede'),
+        },
+        invalidate: {
+          title: uiCopy('Invalider cette mémoire ?', 'Invalidate this memory?'),
+          body: uiCopy('Elle sera bloquée par défaut pour éviter une réutilisation trompeuse.', 'It will be blocked by default to avoid misleading reuse.'),
+          confirmLabel: uiCopy('Invalider', 'Invalidate'),
+        },
+      };
+      const fields = [];
+      if (action === 'invalidate') {
+        fields.push({
+          name: 'reason',
+          type: 'textarea',
+          required: true,
+          label: uiCopy('Motif', 'Reason'),
+          placeholder: uiCopy('Pourquoi cette mémoire ne doit plus être utilisée ?', 'Why should this memory no longer be used?'),
+        });
+      } else if (action === 'supersede') {
+        fields.push({
+          name: 'toMemoryId',
+          required: true,
+          label: uiCopy('Mémoire de remplacement', 'Replacement memory'),
+          placeholder: 'memory_id',
+        });
+        fields.push({
+          name: 'reason',
+          type: 'textarea',
+          label: uiCopy('Note optionnelle', 'Optional note'),
+          placeholder: uiCopy('Pourquoi ce remplacement ?', 'Why this replacement?'),
+        });
+      } else if (action === 'archive') {
+        fields.push({
+          name: 'reason',
+          type: 'textarea',
+          label: uiCopy('Note optionnelle', 'Optional note'),
+          placeholder: uiCopy('Pourquoi archiver cette mémoire ?', 'Why archive this memory?'),
+        });
+      }
+      const copy = labels[action] || labels.review;
+      requestConfirmation(state, {
+        id: `decision-memory-lifecycle:${memoryId}:${action}`,
+        mode: 'modal',
+        tone: action === 'invalidate' ? 'danger' : 'warning',
+        title: copy.title,
+        body: copy.body,
+        expertBody: uiCopy('Impact lifecycle: la décision reste en SQLite et l’action est journalisée.', 'Lifecycle impact: the decision stays in SQLite and the action is audited.'),
+        confirmLabel: copy.confirmLabel,
+        action: 'decision-memory-lifecycle',
+        payload: { memoryId, lifecycleAction: action },
+        fields,
+        anchor: { kind: 'decision-memory', id: memoryId },
+      });
+      window.DecisionArena.render?.();
+      return;
+    }
     try {
       if (action === 'invalidate') {
-        const reason = prompt('Raison invalidation (obligatoire):', '') || '';
+        const reason = String(payload.reason || '').trim();
+        if (!reason) {
+          state.error = 'Invalidation reason is required.';
+          window.DecisionArena.render?.();
+          return;
+        }
         await window.DecisionArena.services.DecisionMemoryService.lifecycle(memoryId, 'invalidate', { reason });
       } else if (action === 'archive') {
-        const reason = prompt('Raison archive (optionnel):', '') || '';
+        const reason = String(payload.reason || '').trim();
         await window.DecisionArena.services.DecisionMemoryService.lifecycle(memoryId, 'archive', { reason });
       } else if (action === 'restore') {
-        const reason = prompt('Raison restore (optionnel):', '') || '';
+        const reason = String(payload.reason || '').trim();
         await window.DecisionArena.services.DecisionMemoryService.lifecycle(memoryId, 'restore', { reason });
       } else if (action === 'review') {
         await window.DecisionArena.services.DecisionMemoryService.lifecycle(memoryId, 'review', {});
       } else if (action === 'supersede') {
-        const toId = prompt('Supersedé par (memory_id):', '') || '';
-        const reason = prompt('Raison (optionnel):', '') || '';
+        const toId = String(payload.toMemoryId || payload.to_memory_id || '').trim();
+        const reason = String(payload.reason || '').trim();
+        if (!toId) {
+          state.error = 'Replacement memory_id is required to supersede a memory.';
+          window.DecisionArena.render?.();
+          return;
+        }
         await window.DecisionArena.services.DecisionMemoryService.lifecycle(memoryId, 'supersede', { to_memory_id: toId, reason });
       } else {
         return;
@@ -438,9 +799,47 @@ function registerDecisionMemoryHandlers() {
       const data = await window.DecisionArena.services.DecisionMemoryService.list(250, { include_archived: '1' });
       state.decisionMemory = { loading: false, error: null, memories: data.memories || [], links: data.links || [] };
       await refreshDecisionMemoryExplorerNav(state);
-      state.toast = 'Mise à jour mémoire effectuée.';
+      state.toast = 'Mise a jour memoire effectuee.';
     } catch (err) {
       state.error = String(err.message || err);
+    }
+    window.DecisionArena.render?.();
+  });
+
+  registerAction('create-decision-room-chain', async ({ element }) => {
+    const state = window.DecisionArena.store.state;
+    if (state.uiMode !== 'expert') return;
+    let cid = String(element?.dataset?.contextId || '').trim();
+    if (!cid) {
+      const ui = state.decisionMemoryUi || {};
+      cid = String(
+        ui.navStrategicContextId
+        || state.activeStrategicContextId
+        || state.activeStrategicContext?.context_id
+        || '',
+      ).trim();
+    }
+    const tFn = window.i18n?.t?.bind(window.i18n) || ((k) => k);
+    if (!cid) {
+      state.error = tFn('decisionMemory.nav.newChainNeedContext');
+      window.DecisionArena.render?.();
+      return;
+    }
+    const title = window.prompt(tFn('decisionMemory.nav.newChainPrompt'), '');
+    if (!title || !String(title).trim()) return;
+    try {
+      await window.DecisionArena.services.StrategicContextService.createRoom(cid, {
+        title: String(title).trim(),
+        description: '',
+        status: 'active',
+      });
+      state.decisionMemoryUi = state.decisionMemoryUi || {};
+      state.decisionMemoryUi.navStrategicContextId = cid;
+      state.decisionMemoryUi.navDecisionChainId = null;
+      await loadRoomsForExplorer(state, cid);
+      state.toast = tFn('decisionMemory.nav.newChainDone');
+    } catch (err) {
+      state.error = String(err?.message || err);
     }
     window.DecisionArena.render?.();
   });
@@ -448,18 +847,29 @@ function registerDecisionMemoryHandlers() {
   registerAction('link-memory-to-strategic-context', async ({ element }) => {
     const memoryId = element?.dataset?.memoryId;
     if (!memoryId) return;
-    const ctxId = prompt('context_id:', '') || '';
-    if (!ctxId.trim()) return;
     const state = window.DecisionArena.store.state;
+    const ctxId = String(
+      state.activeStrategicContextId
+      || state.decisionMemoryUi?.navStrategicContextId
+      || state.strategicContextUi?.selectedContextId
+      || '',
+    ).trim();
+    if (!ctxId) {
+      state.error = 'Select a strategic context before linking a memory.';
+      window.DecisionArena.render?.();
+      return;
+    }
     try {
-      await window.DecisionArena.services.StrategicContextService.linkMemory(ctxId.trim(), memoryId);
-      // refresh contexts snapshot (best effort)
+      await window.DecisionArena.services.StrategicContextService.linkMemory(ctxId, memoryId);
       try {
         const data = await window.DecisionArena.services.StrategicContextService.list({ status: state.strategicContextUi?.statusFilter || 'active' }, 120);
         state.strategicContexts = { loading: false, error: null, items: data.contexts || [] };
+        const active = data.active_context ?? null;
+        state.activeStrategicContext = active;
+        state.activeStrategicContextId = active?.context_id ? String(active.context_id) : null;
         await refreshDecisionMemoryExplorerNav(state);
       } catch (_) {}
-      state.toast = 'Mémoire liée au contexte.';
+      state.toast = 'Memoire liee au contexte.';
     } catch (err) {
       state.error = String(err.message || err);
     }

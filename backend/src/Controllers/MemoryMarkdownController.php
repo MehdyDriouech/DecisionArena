@@ -35,18 +35,23 @@ final class MemoryMarkdownController
         return $this->negotiate($md, ['room_id' => $roomId]);
     }
 
-    /** @return array{include_stale:bool, include_archived:bool, include_expert_metadata:bool, max_memories:int} */
+    /** @return array{include_stale:bool, include_archived:bool, include_expert_metadata:bool, max_memories:int, perspective:string} */
     private function optionsFromQuery(Request $req): array
     {
         $includeStale = (string)($req->query('include_stale') ?? '');
         $includeArchived = (string)($req->query('include_archived') ?? '');
         $expert = (string)($req->query('expert') ?? '');
         $max = (int)($req->query('max_memories') ?? 20);
+        // perspective is optional. Invalid values are silently coerced to
+        // "default" by the snapshot generator, so existing callers that omit
+        // the param keep the legacy memory.md output unchanged.
+        $perspective = (string)($req->query('perspective') ?? '');
         return [
             'include_stale' => ($includeStale === '1' || $includeStale === 'true'),
             'include_archived' => ($includeArchived === '1' || $includeArchived === 'true'),
             'include_expert_metadata' => ($expert === '1' || $expert === 'true'),
             'max_memories' => $max,
+            'perspective' => $perspective,
         ];
     }
 

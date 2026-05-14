@@ -46,6 +46,7 @@ class VoteRepository {
             ':rationale' => $vote['rationale'] ?? '',
             ':created_at' => $vote['created_at'],
         ]);
+        ParticipantMemorySyncTrigger::onSessionLikelyParticipantChange((string)$vote['session_id']);
         return $vote;
     }
 

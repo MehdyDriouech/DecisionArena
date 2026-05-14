@@ -320,6 +320,69 @@ fsm_assert($countCtx('strategic_context_narratives', $cid) === $n0, 'no narrativ
 fsm_assert($countCtx('strategic_context_memory_compilations', $cid) === $c0, 'no compilations inserted');
 fsm_assert($countCtx('strategic_context_snapshots', $cid) === $s0, 'no snapshots inserted');
 
+$ctxShell = $ctxRepo->create('FSM shell catalogue', 'x', 'active');
+$cidShell = (string)($ctxShell['context_id'] ?? '');
+fsm_assert($cidShell !== '', 'shell context id');
+$sidShell = fsm_uuid();
+$sessions->create([
+    'id' => $sidShell,
+    'title' => 'shell pm',
+    'mode' => 'chat',
+    'initial_prompt' => 'x',
+    'selected_agents' => ['pm'],
+    'rounds' => 1,
+    'language' => 'en',
+    'status' => 'completed',
+    'cf_rounds' => 1,
+    'cf_interaction_style' => 'sequential',
+    'cf_reply_policy' => 'all-agents-reply',
+    'is_favorite' => 0,
+    'is_reference' => 0,
+    'force_disagreement' => 0,
+    'decision_threshold' => ReliabilityConfig::DEFAULT_DECISION_THRESHOLD,
+    'strategic_context_id' => $cidShell,
+    'created_at' => $now,
+    'updated_at' => $now,
+]);
+$pdo->prepare('INSERT INTO messages (id, session_id, role, agent_id, content, created_at) VALUES (?,?,?,?,?,?)')
+    ->execute(['msg-shell-' . $sidShell, $sidShell, 'assistant', 'pm', 'hi', $now]);
+$pdo->prepare('INSERT OR IGNORE INTO strategic_context_sessions (context_id, session_id, created_at) VALUES (?,?,?)')
+    ->execute([$cidShell, $sidShell, $now]);
+$shellRoot = dirname(__DIR__) . '/storage/strategic-contexts/' . strtolower($cidShell) . '/agents';
+$shellPath = $shellRoot . '/pm/memory.md';
+if (is_file($shellPath)) {
+    @unlink($shellPath);
+}
+@mkdir(dirname($shellPath), 0755, true);
+file_put_contents(
+    $shellPath,
+    "# Agent Context Memory\n\n## Stable Beliefs\n\n## Recent Notes\n\n"
+);
+$pmShell = null;
+foreach ($catalog->buildForContext($cidShell) as $row) {
+    if (strtolower((string)($row['agent_id'] ?? '')) === 'pm') {
+        $pmShell = $row;
+        break;
+    }
+}
+fsm_assert($pmShell !== null && !empty($pmShell['participated']), 'shell pm participated');
+fsm_assert(!empty($pmShell['memory_md_exists']) && !empty($pmShell['needs_memory_sync']), 'shell pm needs_memory_sync before');
+fsm_assert(!empty($pmShell['memory_md_empty_or_template_only']), 'shell pm template_only flag');
+$sync->syncContextAgentMemories($cidShell, ['dry_run' => false]);
+$shellMd = is_file($shellPath) ? (string)file_get_contents($shellPath) : '';
+fsm_assert($shellMd !== '' && str_contains($shellMd, 'participant_context_sync:'), 'shell pm marker after sync');
+$pmShell2 = null;
+foreach ($catalog->buildForContext($cidShell) as $row) {
+    if (strtolower((string)($row['agent_id'] ?? '')) === 'pm') {
+        $pmShell2 = $row;
+        break;
+    }
+}
+fsm_assert(
+    $pmShell2 !== null && empty($pmShell2['needs_memory_sync']) && !empty($pmShell2['participation_memory_synced']),
+    'shell pm catalog after sync'
+);
+
 $archRow = null;
 foreach ($catalog->buildForContext($cid) as $row) {
     if (strtolower((string)($row['agent_id'] ?? '')) === 'architect') {
@@ -327,6 +390,12 @@ foreach ($catalog->buildForContext($cid) as $row) {
         break;
     }
 }
-fsm_assert($archRow !== null && !empty($archRow['memory_md_exists']), 'catalog architect memory_md_exists');
+fsm_assert(
+    $archRow !== null
+    && !empty($archRow['memory_md_exists'])
+    && empty($archRow['needs_memory_sync'])
+    && !empty($archRow['participation_memory_synced']),
+    'catalog architect memory flags'
+);
 
 echo "PASS: all force sync checks\n";

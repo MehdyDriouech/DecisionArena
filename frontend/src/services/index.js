@@ -17,3 +17,5 @@ export { RiskProfileService } from './riskProfileService.js';
 export { DecisionMemoryService } from './decisionMemoryService.js';
 export { StrategicContextService } from './strategicContextService.js';
 export { MemorySnapshotService } from './memorySnapshotService.js';
+export { DashboardService } from './dashboardService.js';
+export { OpenSpaceService } from './openSpaceService.js';

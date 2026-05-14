@@ -11,7 +11,10 @@ class Request {
 
     public function uri(): string {
         $uri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
-        $basePath = rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? ''), '/');
+        $scriptName = $_SERVER['SCRIPT_NAME'] ?? '';
+        $basePath = str_ends_with($scriptName, '/index.php')
+            ? rtrim(dirname($scriptName), '/')
+            : '';
         if ($basePath && str_starts_with($uri, $basePath)) {
             $uri = substr($uri, strlen($basePath));
         }

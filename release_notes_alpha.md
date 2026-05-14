@@ -1,75 +1,160 @@
-# Release notes — Decision Arena (alpha locale)
+# Release notes — Decision Arena (catalogue beta consolidé)
 
-**Période / version :** stabilisation alpha locale (workflows principaux validés).  
-**Audience :** contributeurs, utilisateurs techniques, early adopters locaux.
+**Contenu :** ce fichier est la **source unique** des notes beta : il reprend intégralement le périmètre et la structure de l’ancienne *release note beta* du **2026-05-11** (application complète : frontend, backend, persistance SQLite), désormais **fusionnés ici** ; le fichier `release-note-beta.md` a été retiré du dépôt.  
+**Dernière mise à jour :** 2026-05-14 (fusion + enrichissements post–2026-05-11, dont sync mémoires agents 2026-05-13).
 
-Voir aussi : [README.md](README.md), [README_marketing.md](README_marketing.md).
-
----
-
-## Vue d’ensemble alpha
-
-Cette release consolide Decision Arena autour d’un positionnement clair : **Decision Intelligence** avec débat multi-agent, synthèse traçable et garde-fous explicites — **local-first**, sans framework lourd, orienté auditabilité.
-
-**Stable à des fins de démo et d’usage exploratoire** : Founder Sprint, CEO Challenge, Quick Decision, Stress Test, Jury, Confrontation.  
-**Expérimental ou perfectible** : parsing dépendant du format des modèles, certains panneaux analytics, edge cases UI.
+**Audience :** contributeurs, utilisateurs techniques, early adopters locaux.  
+Voir aussi : [README.md](README.md), [README_Express.md](README_Express.md) (README Express), [context-llm.md](context-llm.md).
 
 ---
 
-## Nouveautés majeures
+## Positionnement beta
 
-- **Founder Sprint** — Preset produit : personas dédiés, clarification *Founder Interrogation*, réduction de scope et challenge explicite dans le prompt.
-- **CEO Challenge** — Preset stratégique (moat, distribution, *what not to build*) avec la même mécanique runner existante.
-- **Validation Logic** — Bloc produit pour signaux de succès et **kill criteria** mesurables (anti-vanity).
-- **Decision Brief** — Brief décisionnel persisté, mieux relié aux résultats du run ; parcours Founder/CEO conservés.
-- **Tableau de bord** — Accès simplifié (simple / expert), raccourcis vers les modes sans redondance majeure.
-- **Nettoyage UX P2** — Cohérence *Quick Decision* (`rounds`), sortie propre des presets Founder lors d’un changement de mode manuel, injection **Question / Context** dans `initial_prompt` (mode simple), propagation `session_variant` pour le template **Pre-Mortem**.
+Decision Arena est en phase **beta fonctionnelle** sur un noyau **Decision Intelligence local-first** : orchestration multi-agents, cycles de décision auditables, mémoire décisionnelle gouvernée, contextes stratégiques persistants, et outillage expert d’analyse.
 
 ---
 
-## Améliorations UX
+## Fonctionnalités présentes (catalogue beta)
 
-- Formulaire nouvelle session : modes, presets et starters plus cohérents entre eux.
-- Quick Decision : alignement affichage / payload sur une analyse **un tour** côté usage courant.
-- Réouverture de sessions Quick Decision terminées avec réhydratation des résultats.
-- Verdict : meilleure séparation texte / compromis lorsque le modèle mélange JSON et prose.
+### 1) Moteur d’analyse multi-modes
+
+- Chat multi-agent (libre + réactif)
+- Decision Room (délibération structurée multi-rounds)
+- Confrontation (Blue Team vs Red Team)
+- Quick Decision (arbitrage court)
+- Stress Test (robustesse / failure modes)
+- Jury (vote collectif + seuil)
+- Rerun / Fork / Pré-mortem (avec garde-fous lifecycle)
+
+### 2) Workspace Analyses
+
+- Vue `analyses` unifiée (alias legacy `sessions`)
+- Filtres : query, mode, statut, contexte, date, verdict
+- Lifecycle harmonisé :
+  - persisté : `draft`, `running`, `completed`, `archived`
+  - overlays dérivés : `blocked`, `fragile`, `rerun`, `forked`
+- Actions : ouvrir, rejouer, créer variante, exporter, comparer, archiver/restaurer, supprimer
+- Sélection multiple + actions bulk (archive, delete, compare)
+- Entrée sidebar dédiée : **Historique d’analyses**
+
+### 3) Session History / Relecture
+
+- Historique détaillé d’une analyse avec panneaux progressifs
+- Panneaux : replay, graph, heatmap, reliability, evidence, risk, bias, social dynamics, persona scores, timeline, LLM used, decision memory
+- Lazy rendering des sections lourdes pour limiter le coût de rendu
+- Modal rerun enrichi (variations, mode/langue cible, conservation contexte doc)
+
+### 4) Strategic Contexts (couche d’organisation)
+
+- CRUD contextes + activation workspace global
+- Liste + détail + comparaison contextes (lecture seule)
+- Timeline workspace contextuelle (+ mode legacy en expert)
+- Strategic Narrative (load + recompute)
+- Beliefs Engine (expert) : croyances, états, relations, timeline
+- Memory Compiler (expert) : compilations dérivées stratégiques/social/risk/etc.
+- Context Snapshots (expert) : capture, visualisation, diff, longitudinal
+- Agent Context Memory (expert) : édition, append, consolidation, maintenance
+- **Synchronisation forcée des `memory.md` agents (expert, 2026-05-13)** : `POST /api/strategic-contexts/{id}/agent-memories/sync` — reconstruction / complétion idempotente depuis les sessions **completed** liées au contexte et les Decision Memories liées (`strategic_context_memories`) ; prévisualisation `dry_run` ; marqueurs factuels `participant_context_sync:{session_id}` et `da-decision-memory-sync:{memory_id}` ; participants filtrés **roster ∪ voteurs** (exclut les agents uniquement présents dans des messages hors sélection) ; `synthesizer` / `devil_advocate` exclus par défaut.
+- Situated Agent Chat (expert) : chat scopé contexte + mémoire + signaux sociaux
+- Memory Governance panel (expert)
+- Boutons cartes contexte : comparer + activer l’espace
+- Panneau `memory.md` contextuel (ouverture robuste + copy)
+
+### 5) Decision Memory
+
+- Decision Memory repository persisté
+- Recherche déterministe (FTS5 si dispo, fallback LIKE)
+- Reuse UI Basic/Expert orientée réutilisation d’analyses
+- Preview d’injection (explicite injecté/non injecté)
+- Scope cognitive (contexte courant / all / archives)
+- Similarité sémantique expérimentale (discovery only)
+
+### 6) Gouvernance, fiabilité, observabilité
+
+- Guardrails décisionnels
+- Détection faux consensus
+- Score qualité décision
+- Runtime cognitive QA modes (dev/qa/expert)
+- Prompt injection trace & politiques
+- Logs frontend/backend
+- Erreurs UI normalisées sur plusieurs flux critiques
+
+### 7) Administration & configuration
+
+- Providers (Ollama, LM Studio, OpenAI-compatible)
+- Routing provider (primary/fallback/load-balance)
+- Personas + souls + persona maker
+- Templates + template maker
+- Scenario packs
+- Prompt policies
+- Learning / calibration
+- Cognitive governance hub
+- Logs / export
+
+### 8) Export, comparaison, audit
+
+- Export session (Markdown + JSON expert)
+- Session comparisons (création + ouverture + export)
+- Debate Audit
+- Debate Replay
+- Graph des interactions
+- Heatmap argumentaire
 
 ---
 
-## Fiabilité & garde-fous
+## Points forts (beta)
 
-- Avertissements **multi-runner** : qualité du contexte, faux consensus, seuils, retry automatique lorsque activé (Decision Room / presets rapides).
-- **Reliability engine** : scores, guardrails, enrichissement des exports et de l’historique de session selon les modes.
-
----
-
-## Corrections de bugs (non exhaustif)
-
-- Noms de modèle invalides ou provider mal configuré : messages d’erreur et parcours admin clarifiés dans la pratique courante.
-- **Jury** : correctifs runtime / persistance des rapports adversariaux côté exports.
-- **Confrontation** : robustesse parsing JSON / résultats lorsque le modèle dévie du format attendu.
-- **Decision Brief** : fallbacks lorsque le brief est partiel ou absent après run.
-- **Founder Interrogation** : persistance dans le prompt initial lorsque les champs sont renseignés.
+- **Architecture sobre et maîtrisable** : PHP 8 + Vanilla JS + SQLite, sans framework lourd.
+- **Traçabilité élevée** : sessions, votes, graph, replay, evidence, risk, logs.
+- **Governance-native** : runtime QA, provenance, guardrails, prompt policy.
+- **UX analyses convergente** : navigation unifiée, lifecycle lisible, CTA harmonisés.
+- **Contextes stratégiques puissants** : narrative, beliefs, snapshots, compilations, chat situé, sync explicite des mémoires agents.
+- **Compatibilité legacy préservée** : alias routes/vues et transitions non destructives.
+- **Local-first réel** : fonctionnement autonome sans dépendance SaaS obligatoire.
 
 ---
 
-## Limites connues
+## Points faibles / limites actuelles
 
-- **Alpha** : régressions possibles, comportements non couverts par des tests E2E systématiques.
-- **Qualité des modèles** : résultats très variables selon le LLM (locaux plus petits vs modèles frontier).
-- **Contrat de format** : synthèses, votes et blocs JSON dépendent encore du respect du format par le modèle.
-- **Interface** : grande surface d’écran ; le mode *simple* réduit la charge mais n’élimine pas toute complexité.
-- **Rôle** : outil d’aide à la réflexion — **ne remplace pas** une équipe, un juriste, ou une validation terrain.
+- **Dette UX résiduelle** : certaines zones restent expertes et denses pour des profils non techniques.
+- **i18n incomplète** : il reste des libellés hardcodés dans des sous-panneaux secondaires.
+- **Complexité de surface** : forte richesse fonctionnelle, risque de surcharge cognitive sans onboarding.
+- **Robustesse backend hétérogène** : certains flux historiques ont demandé des correctifs FK/transaction.
+- **Couverture e2e non uniforme** : plusieurs parcours critiques sont testés manuellement plus qu’automatiquement.
+- **Lisibilité produit** : la frontière entre « analyse », « session », « contexte », « memory » peut encore être clarifiée.
 
 ---
 
-## Suite plausible (hors engagement)
+## Risques beta à surveiller
 
-- Fiabilité et calibration plus poussées par mode.
-- Replay / comparaison de sessions plus fluides.
-- Analytics d’usage locales (agrégations légères).
-- RAG / contexte documentaire plus guidé (sans sur-engineering).
-- Evidence system : intégration plus systématique dans le cycle décisionnel.
+- Régressions cross-modules sur les actions bulk (delete/archive/compare)
+- Divergence UX Basic vs Expert sur des actions transverses
+- Perf sur gros historiques contextes/sessions sans pagination forte
+- Erreurs API 500 masquées en frontend si payload d’erreur insuffisant
+
+---
+
+## Recommandations phase suivante
+
+- Finaliser l’i18n systématique des vues expertes restantes
+- Standardiser le contrat d’erreurs API (codes + messages + metadata)
+- Renforcer les tests intégration sur flux bulk contextes/analyses
+- Ajouter onboarding/copywriting orienté « raisonnement » pour réduire la charge cognitive
+- Consolider métriques runtime/perf sur panels lourds (history + contexts expert)
+
+---
+
+## Résumé exécutif
+
+La beta est **riche, utilisable et techniquement cohérente** pour des usages réels de décision assistée multi-agents.  
+Les priorités restantes portent surtout sur la **polish UX**, la **normalisation des erreurs**, et la **stabilisation e2e** des parcours experts.
+
+---
+
+## Outils expert : suppression & hygiène des données
+
+- **Contextes stratégiques** : sélection multiple + « Supprimer sélection » (expert-only).
+- **Decision Memory** : suppression d’une décision ou d’une sélection (expert-only), avec endpoint `DELETE /api/decision-memories/{id}`.
 
 ---
 
@@ -81,6 +166,5 @@ Cette release consolide Decision Arena autour d’un positionnement clair : **De
 | API & contrôleurs | `backend/src/Controllers/` |
 | Runners | `backend/src/Domain/Orchestration/` |
 | Personas | `backend/storage/personas/` |
-| Presets Founder / CEO (UI) | `frontend/src/features/newSession/` |
-
-Merci aux personnes ayant retesté les flux critiques et signalé les incohérences UX.
+| Sync mémoires agents contexte | `backend/src/Domain/StrategicContext/AgentContextMemorySyncService.php` |
+| Script QA sync forcée | `backend/tools/test_agent_context_memory_force_sync.php` |

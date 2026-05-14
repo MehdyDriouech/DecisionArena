@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 namespace Infrastructure\Persistence;
 
+use Domain\DecisionMemory\DecisionMemoryAgentMemoryAutoSyncService;
+use Domain\DecisionMemory\DecisionMemoryPersistenceClassifier;
 use Domain\Orchestration\RuntimeContracts;
 
 final class DecisionMemoryRepository
@@ -11,7 +13,7 @@ final class DecisionMemoryRepository
 
     private const DEFAULT_AGING_DAYS = 30;
     private const DEFAULT_STALE_DAYS = 90;
-    private const VALID_STATES = ['active', 'superseded', 'stale', 'invalidated', 'archived'];
+    private const VALID_STATES = ['active', 'confirmed', 'needs_review', 'superseded', 'stale', 'invalidated', 'archived'];
 
     public function __construct()
     {
@@ -56,6 +58,97 @@ final class DecisionMemoryRepository
     }
 
     /**
+     * Mémoires Decision Memory liées au contexte stratégique (join strategic_context_memories), les plus récentes d’abord.
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function findLinkedMemoriesForStrategicContext(string $contextId, int $limit = 12): array
+    {
+        $contextId = trim($contextId);
+        if ($contextId === '') {
+            return [];
+        }
+        $limit = max(1, min(30, $limit));
+        $stmt = $this->pdo->prepare(
+            'SELECT m.* FROM decision_memories m
+             INNER JOIN strategic_context_memories scm ON scm.memory_id = m.memory_id AND scm.context_id = ?
+             WHERE m.user_confirmed = 1
+               AND (m.memory_state IS NULL OR m.memory_state NOT IN (\'invalidated\',\'archived\',\'stale\'))
+             ORDER BY m.created_at DESC, m.memory_id DESC
+             LIMIT ' . $limit
+        );
+        $stmt->execute([$contextId]);
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC) ?: [];
+        return array_map([$this, 'hydrateRow'], $rows);
+    }
+
+    /**
+     * Mémoires Decision Memory liées au contexte (pour sync forcée agent memory.md).
+     * Même filtre que {@see findLinkedMemoriesForStrategicContext} avec une limite plus large.
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function findLinkedMemoriesForAgentMemorySync(string $contextId, int $limit = 500): array
+    {
+        $contextId = trim($contextId);
+        if ($contextId === '') {
+            return [];
+        }
+        $limit = max(1, min(500, $limit));
+        $stmt = $this->pdo->prepare(
+            'SELECT m.* FROM decision_memories m
+             INNER JOIN strategic_context_memories scm ON scm.memory_id = m.memory_id AND scm.context_id = ?
+             WHERE m.user_confirmed = 1
+               AND (m.memory_state IS NULL OR m.memory_state NOT IN (\'invalidated\',\'archived\',\'stale\'))
+             ORDER BY m.created_at DESC, m.memory_id DESC
+             LIMIT ' . $limit
+        );
+        $stmt->execute([$contextId]);
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC) ?: [];
+
+        return array_map([$this, 'hydrateRow'], $rows);
+    }
+
+    /**
+     * Toutes les Decision Memories liées au contexte (strategic_context_memories), pour export markdown.
+     * Inclut user_confirmed = 0 (étiquetées côté générateur). Exclut uniquement invalidated.
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function findLinkedMemoriesForStrategicContextMarkdownExport(string $contextId, int $limit = 80): array
+    {
+        $contextId = trim($contextId);
+        if ($contextId === '') {
+            return [];
+        }
+        $limit = max(1, min(200, $limit));
+        $stmt = $this->pdo->prepare(
+            'SELECT m.* FROM decision_memories m
+             INNER JOIN strategic_context_memories scm ON scm.memory_id = m.memory_id AND scm.context_id = ?
+             WHERE (m.memory_state IS NULL OR m.memory_state NOT IN (\'invalidated\'))
+             ORDER BY m.created_at DESC, m.memory_id DESC
+             LIMIT ' . $limit
+        );
+        $stmt->execute([$contextId]);
+        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC) ?: [];
+        return array_map([$this, 'hydrateRow'], $rows);
+    }
+
+    public function isMemoryLinkedToStrategicContext(string $memoryId, string $contextId): bool
+    {
+        $memoryId = trim($memoryId);
+        $contextId = trim($contextId);
+        if ($memoryId === '' || $contextId === '') {
+            return false;
+        }
+        $stmt = $this->pdo->prepare(
+            'SELECT 1 FROM strategic_context_memories WHERE memory_id = ? AND context_id = ? LIMIT 1'
+        );
+        $stmt->execute([$memoryId, $contextId]);
+        return (bool)$stmt->fetchColumn();
+    }
+
+    /**
      * Persist automatically only when outcome is memory-safe.
      * Returns created memory row when persisted; null otherwise.
      *
@@ -65,6 +158,12 @@ final class DecisionMemoryRepository
     {
         $existing = $this->findBySession($sessionId);
         if ($existing) {
+            $linkMeta = $this->linkMemoryToSessionContext($sessionId, (string)($existing['memory_id'] ?? ''));
+            $existing['strategic_context_linked'] = $linkMeta['linked'];
+            $existing['strategic_context_id'] = $linkMeta['context_id'];
+            if ($linkMeta['warning'] !== null) {
+                $existing['warning'] = $linkMeta['warning'];
+            }
             return $existing;
         }
 
@@ -81,7 +180,7 @@ final class DecisionMemoryRepository
             return null;
         }
 
-        return $this->createFromContracts($sessionId, $canonical, $outcome, $ps, true);
+        return $this->createFromContracts($sessionId, $canonical, $outcome, $ps, true, 'confirmed');
     }
 
     /**
@@ -89,12 +188,20 @@ final class DecisionMemoryRepository
      *
      * @param array<string,mixed> $runResult Must include decision_outcome + canonical_synthesis.
      */
-    public function persistAfterConfirmation(array $runResult, string $sessionId): ?array
+    public function persistAfterConfirmation(array $runResult, string $sessionId, ?array $sessionRow = null): ?array
     {
         $existing = $this->findBySession($sessionId);
         if ($existing) {
             // If already persisted but not confirmed, promote confirmation.
             if (!empty($existing['user_confirmed'])) {
+                $linkMeta = $this->linkMemoryToSessionContext($sessionId, (string)($existing['memory_id'] ?? ''));
+                $existing['strategic_context_linked'] = $linkMeta['linked'];
+                $existing['strategic_context_id'] = $linkMeta['context_id'];
+                if ($linkMeta['warning'] !== null) {
+                    $existing['warning'] = $linkMeta['warning'];
+                }
+                $existing['agent_memory_sync'] = $this->applyAgentMemoryAutoSync($existing, $sessionId);
+
                 return $existing;
             }
             $stmt = $this->pdo->prepare('UPDATE decision_memories SET user_confirmed = 1 WHERE session_id = ?');
@@ -102,7 +209,15 @@ final class DecisionMemoryRepository
             $updated = $this->findBySession($sessionId);
             if ($updated && isset($updated['memory_id'])) {
                 $this->refreshFtsForMemoryId((string)$updated['memory_id']);
+                $linkMeta = $this->linkMemoryToSessionContext($sessionId, (string)$updated['memory_id']);
+                $updated['strategic_context_linked'] = $linkMeta['linked'];
+                $updated['strategic_context_id'] = $linkMeta['context_id'];
+                if ($linkMeta['warning'] !== null) {
+                    $updated['warning'] = $linkMeta['warning'];
+                }
+                $updated['agent_memory_sync'] = $this->applyAgentMemoryAutoSync($updated, $sessionId);
             }
+
             return $updated;
         }
 
@@ -112,20 +227,19 @@ final class DecisionMemoryRepository
             return null;
         }
 
-        $ps = is_array($outcome['persistence_safety'] ?? null) ? $outcome['persistence_safety'] : [];
-        $safe = ($ps['safe_to_persist'] ?? false) === true;
-        $needs = ($ps['requires_user_confirmation'] ?? false) === true;
-        $missingCritical = is_array($ps['missing_critical_fields'] ?? null) ? $ps['missing_critical_fields'] : [];
-
-        // Never persist if missing critical fields, even with confirmation.
-        if ($missingCritical !== []) {
-            return null;
-        }
-        if (!$safe && !$needs) {
+        $session = $sessionRow ?? (new SessionRepository())->findById($sessionId);
+        $session = is_array($session) ? $session : [];
+        $prep = DecisionMemoryPersistenceClassifier::prepareForManualPersistence($runResult, $session);
+        if (($prep['persistable'] ?? false) !== true) {
             return null;
         }
 
-        return $this->createFromContracts($sessionId, $canonical, $outcome, $ps, true);
+        /** @var array<string,mixed> $patched */
+        $patched = $prep['patched_outcome'];
+        $ps = is_array($patched['persistence_safety'] ?? null) ? $patched['persistence_safety'] : [];
+        $memoryState = (string)($prep['memory_state'] ?? 'needs_review');
+
+        return $this->createFromContracts($sessionId, $canonical, $patched, $ps, true, $memoryState);
     }
 
     public function createLink(string $fromMemoryId, string $toMemoryId, string $linkType): bool
@@ -256,6 +370,41 @@ final class DecisionMemoryRepository
         ');
         $stmt->execute([':id' => $memoryId]);
         return $stmt->fetchAll(\PDO::FETCH_ASSOC) ?: [];
+    }
+
+    /**
+     * Hard delete a decision memory and its dependent rows.
+     * Used sparingly (expert tooling). Prefer lifecycle states for normal use.
+     */
+    public function deleteHard(string $memoryId): bool
+    {
+        $memoryId = trim($memoryId);
+        if ($memoryId === '') return false;
+        if (!$this->findById($memoryId)) return false;
+    
+        $this->pdo->beginTransaction();
+    
+        try {
+            $this->pdo->prepare('DELETE FROM strategic_context_memories WHERE memory_id = ?')->execute([$memoryId]);
+            $this->pdo->prepare('DELETE FROM decision_room_memories WHERE memory_id = ?')->execute([$memoryId]);
+    
+            $this->pdo->prepare('DELETE FROM decision_memory_links WHERE from_memory_id = ? OR to_memory_id = ?')->execute([$memoryId, $memoryId]);
+            $this->pdo->prepare('DELETE FROM decision_memory_audit_events WHERE memory_id = ?')->execute([$memoryId]);
+            $this->pdo->prepare('DELETE FROM decision_memory_embeddings WHERE memory_id = ?')->execute([$memoryId]);
+    
+            $this->pdo->prepare('UPDATE decision_memories SET superseded_by = NULL WHERE superseded_by = ?')->execute([$memoryId]);
+    
+            // Supprimer explicitement l’index FTS.
+            $this->pdo->prepare('DELETE FROM decision_memory_fts WHERE memory_id = ?')->execute([$memoryId]);
+    
+            $this->pdo->prepare('DELETE FROM decision_memories WHERE memory_id = ?')->execute([$memoryId]);
+    
+            $this->pdo->commit();
+            return true;
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
     }
 
     /**
@@ -465,8 +614,19 @@ final class DecisionMemoryRepository
         return ['allowed' => $allowed, 'blocked' => $blocked];
     }
 
-    /** @param array<string,mixed> $canonical @param array<string,mixed> $outcome @param array<string,mixed> $ps */
-    private function createFromContracts(string $sessionId, array $canonical, array $outcome, array $ps, bool $userConfirmed): ?array
+    /**
+     * @param array<string,mixed> $canonical
+     * @param array<string,mixed> $outcome
+     * @param array<string,mixed> $ps
+     */
+    private function createFromContracts(
+        string $sessionId,
+        array $canonical,
+        array $outcome,
+        array $ps,
+        bool $userConfirmed,
+        string $memoryState = 'active'
+    ): ?array
     {
         $memoryId = $this->uuid();
         $now = date('c');
@@ -533,13 +693,63 @@ final class DecisionMemoryRepository
                 :user_confirmed, :created_at, :memory_state
             )
         ');
-        $payload[':memory_state'] = 'active';
+        $ms = strtolower(trim($memoryState));
+        if (!in_array($ms, self::VALID_STATES, true)) {
+            $ms = 'needs_review';
+        }
+        $payload[':memory_state'] = $ms;
         $stmt->execute($payload);
         $created = $this->findById($memoryId);
         if ($created) {
             $this->refreshFtsForMemoryId($memoryId);
+            $linkMeta = $this->linkMemoryToSessionContext($sessionId, $memoryId);
+            $created['strategic_context_linked'] = $linkMeta['linked'];
+            $created['strategic_context_id'] = $linkMeta['context_id'];
+            if ($linkMeta['warning'] !== null) {
+                $created['warning'] = $linkMeta['warning'];
+            }
+            $created['agent_memory_sync'] = $this->applyAgentMemoryAutoSync($created, $sessionId);
         }
         return $created;
+    }
+
+    /**
+     * @param array<string,mixed> $memory
+     * @return array<string,mixed>
+     */
+    private function applyAgentMemoryAutoSync(array $memory, string $sessionId): array
+    {
+        $sessions = new SessionRepository();
+        $session = $sessions->findById($sessionId) ?: [];
+
+        return (new DecisionMemoryAgentMemoryAutoSyncService(null, $sessions))->syncAfterPersist($memory, $session);
+    }
+
+    /**
+     * @return array{linked:bool,context_id:?string,warning:?string}
+     */
+    private function linkMemoryToSessionContext(string $sessionId, string $memoryId): array
+    {
+        $sessionId = trim($sessionId);
+        $memoryId = trim($memoryId);
+        if ($sessionId === '' || $memoryId === '') {
+            return ['linked' => false, 'context_id' => null, 'warning' => 'no_strategic_context_linked'];
+        }
+
+        $stmt = $this->pdo->prepare('SELECT strategic_context_id FROM sessions WHERE id = ? LIMIT 1');
+        $stmt->execute([$sessionId]);
+        $contextId = trim((string)($stmt->fetchColumn() ?: ''));
+        if ($contextId === '') {
+            return ['linked' => false, 'context_id' => null, 'warning' => 'no_strategic_context_linked'];
+        }
+
+        $linked = false;
+        try {
+            $linked = (new StrategicContextRepository())->linkMemory($contextId, $memoryId);
+        } catch (\Throwable) {
+            $linked = false;
+        }
+        return ['linked' => $linked, 'context_id' => $contextId, 'warning' => $linked ? null : 'no_strategic_context_linked'];
     }
 
     /** Returns whether the optional FTS index exists and is usable. */
@@ -607,9 +817,9 @@ final class DecisionMemoryRepository
     }
 
     /**
-     * Upsert one row into decision_memory_fts, enforcing "strictly safe" index rules:
-     * - user_confirmed = 1
-     * - never index invalidated or archived
+     * Upsert one row into decision_memory_fts.
+     * The FTS table is a retrieval accelerator: only confirmed memories are indexed,
+     * and lifecycle safety is enforced at query time.
      */
     private function upsertFtsRow(array $m): bool
     {
@@ -1073,4 +1283,3 @@ final class DecisionMemoryRepository
         );
     }
 }
-

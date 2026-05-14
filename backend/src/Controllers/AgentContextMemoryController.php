@@ -38,11 +38,21 @@ final class AgentContextMemoryController
         }
         $this->memory->ensureFile($cid, $aid);
         $content = $this->memory->read($cid, $aid);
+        $linked = $this->contextRepo->linkedMemoryIds($cid);
+        $summary = $this->memory->summarizeMemoryMdForAgentContext($cid, $aid, $linked);
+
         return [
             'context_id' => $cid,
             'agent_id' => $aid,
             'content' => $content,
             'path' => $this->memory->relativePath($cid, $aid),
+            'memory_md_state' => $summary['state'],
+            'memory_md_flags' => [
+                'template_only' => $summary['template_only'],
+                'participation_sync' => $summary['participation_sync'],
+                'decision_memory_sync' => $summary['decision_memory_sync'],
+                'file_exists' => $summary['file_exists'],
+            ],
         ];
     }
 

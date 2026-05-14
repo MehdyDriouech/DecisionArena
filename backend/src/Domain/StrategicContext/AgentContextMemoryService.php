@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace Domain\StrategicContext;
 
+use Domain\DecisionMemory\DecisionMemoryPersistenceClassifier;
 use Domain\CognitiveGovernance\RuntimeFilesystemGuard;
 use Domain\Sessions\SessionAgentResolver;
 
@@ -14,7 +15,7 @@ final class AgentContextMemoryService
 {
     public const MAX_PROMPT_INJECT_CHARS = 3500;
 
-    /** Sections ajoutées en fin de fichier si absentes (normalisation douce, sans supprimer l’existant). */
+    /** Ordre canonique produit (sections manquantes ajoutées en fin de fichier si besoin). */
     private const CANONICAL_SECTIONS_TO_ENSURE = [
         '## Stable Beliefs',
         '## Strategic Assumptions',
@@ -26,6 +27,7 @@ final class AgentContextMemoryService
         '## Recent Notes',
         '## Contradictions To Review',
         '## Deprecated / Forgotten',
+        '## Current Position',
         '## Pending Consolidation Notes',
     ];
 
@@ -36,23 +38,51 @@ final class AgentContextMemoryService
 
 ## Stable Beliefs
 
+No stable belief extracted yet.
+
 ## Strategic Assumptions
+
+No strategic assumption extracted yet.
 
 ## Decisions Remembered
 
+No confirmed decision memory synced yet.
+
 ## Failed Predictions
+
+No failed prediction recorded yet.
 
 ## Relationships
 
+No relationship signal extracted yet.
+
 ## User Preferences
+
+No explicit user preference extracted yet.
 
 ## Open Questions
 
+No open question extracted yet.
+
 ## Recent Notes
+
+
 
 ## Contradictions To Review
 
+No contradiction recorded yet.
+
 ## Deprecated / Forgotten
+
+No deprecated memory recorded yet.
+
+## Current Position
+
+No current position extracted yet.
+
+## Pending Consolidation Notes
+
+No pending consolidation note.
 
 MD;
 
@@ -175,6 +205,84 @@ MD;
         }
         $c = @file_get_contents($real);
         return ['exists' => true, 'content' => is_string($c) ? $c : ''];
+    }
+
+    /**
+     * Résumé d’état memory.md pour l’UI OpenSpace / diagnostics (lecture seule sur disque).
+     *
+     * @param list<string> $linkedMemoryIds
+     * @return array{state:string,template_only:bool,participation_sync:bool,decision_memory_sync:bool,file_exists:bool}
+     */
+    public function summarizeMemoryMdForAgentContext(string $contextUuid, string $agentId, array $linkedMemoryIds): array
+    {
+        $ex = $this->readIfExistsNoSideEffects($contextUuid, $agentId);
+        $exists = $ex['exists'] === true;
+        $content = $exists ? str_replace("\r\n", "\n", (string)($ex['content'] ?? '')) : '';
+        if (!$exists) {
+            return [
+                'state' => 'missing',
+                'template_only' => false,
+                'participation_sync' => false,
+                'decision_memory_sync' => false,
+                'file_exists' => false,
+            ];
+        }
+        $participationSync = $content !== '' && str_contains($content, 'participant_context_sync:');
+        $decisionSync = false;
+        if ($content !== '' && $linkedMemoryIds !== []) {
+            foreach ($linkedMemoryIds as $mid) {
+                $mid = trim((string)$mid);
+                if ($mid === '') {
+                    continue;
+                }
+                if (str_contains($content, 'da-decision-memory-sync:' . $mid)
+                    || str_contains($content, 'da-propagated-decision:' . $mid)) {
+                    $decisionSync = true;
+                    break;
+                }
+            }
+        }
+        $templateOnly = $this->isTemplateOnlyMemoryBody($content);
+        $state = 'loaded';
+        if ($participationSync) {
+            $state = 'participation_sync';
+        } elseif ($decisionSync) {
+            $state = 'decision_memory_sync';
+        } elseif ($templateOnly) {
+            $state = 'template_only';
+        }
+
+        return [
+            'state' => $state,
+            'template_only' => $templateOnly,
+            'participation_sync' => $participationSync,
+            'decision_memory_sync' => $decisionSync,
+            'file_exists' => true,
+        ];
+    }
+
+    private function isTemplateOnlyMemoryBody(string $content): bool
+    {
+        $content = str_replace("\r\n", "\n", $content);
+        foreach (explode("\n", $content) as $ln) {
+            $t = trim($ln);
+            if ($t === '') {
+                continue;
+            }
+            if (preg_match('/^#+\s/', $t)) {
+                continue;
+            }
+            if (preg_match('/^<!--.*-->$/', $t)) {
+                continue;
+            }
+            if (preg_match('/^<!--/', $t)) {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -415,10 +523,7 @@ MD;
             $warnings[] = 'Added missing section: Decisions Remembered';
         }
         $block = "- {$marker}\n" . $markdownBlock;
-        $newBody = $this->insertBlockAfterHeadingLine($body, $heading, $block);
-        if ($newBody === null) {
-            return ['ok' => false, 'changed' => false, 'sections_touched' => [], 'warnings' => $warnings, 'message' => 'append_failed'];
-        }
+        $newBody = $this->insertBlockAfterHeadingRobust($body, $heading, $block, []);
         $w = $this->write($contextUuid, $agentId, $newBody);
         if (!$w['ok']) {
             return ['ok' => false, 'changed' => false, 'sections_touched' => [], 'warnings' => $warnings, 'message' => $w['message'] ?? 'write_failed'];
@@ -494,32 +599,50 @@ MD;
         $next = is_array($payload['required_next_actions'] ?? null)
             ? array_values(array_filter(array_map('strval', $payload['required_next_actions'])))
             : [];
+        $memState = trim((string)($payload['memory_state'] ?? ''));
+        $pQual = trim((string)($payload['persistence_quality'] ?? ''));
+        $revReq = ($payload['review_required'] ?? false) === true;
+        $origOutcome = trim((string)($payload['original_outcome_label'] ?? ''));
+        $verdictL = trim((string)($payload['verdict_label'] ?? ''));
+        $cx = is_array($payload['contradictions'] ?? null)
+            ? array_values(array_filter(array_map('strval', $payload['contradictions'])))
+            : [];
 
         $lines = [];
-        $lines[] = '- [' . $date . '] Participated in decision memory `' . $memoryId . '` ' . $markerMain;
+        $lines[] = '- [' . $date . '] Decision Memory `' . $memoryId . '` ' . $markerMain;
         $lines[] = '  - Session: `' . $sessionId . '`';
         $lines[] = '  - Mode: `' . ($mode !== '' ? $mode : '—') . '`';
         $lines[] = '  - Playbook: `' . ($playbook !== '' ? $playbook : '—') . '`';
-        $lines[] = '  - Status: `' . ($status !== '' ? $status : '—') . '`';
+        $lines[] = '  - Status (normalized): `' . ($status !== '' ? $status : '—') . '`';
+        $lines[] = '  - Original outcome: `' . ($origOutcome !== '' ? str_replace('`', "'", $origOutcome) : '—') . '`';
+        if ($verdictL !== '') {
+            $lines[] = '  - Verdict signal: `' . $verdictL . '`';
+        }
+        $lines[] = '  - Memory state: `' . ($memState !== '' ? $memState : '—') . '`';
+        $lines[] = '  - Persistence quality: `' . ($pQual !== '' ? $pQual : '—') . '`';
+        $lines[] = '  - Review required: `' . ($revReq ? 'yes' : 'no') . '`';
         $lines[] = '  - Summary: ' . str_replace(["\r", "\n"], ' ', $this->truncatePlain($summary, 400));
         if ($risk !== '') {
             $lines[] = '  - Risk level: `' . $risk . '`';
         }
+        if ($cx !== []) {
+            $lines[] = '  - Contradictions:';
+            foreach (array_slice($cx, 0, 8) as $c) {
+                $lines[] = '    - ' . str_replace(["\r", "\n"], ' ', $this->truncatePlain((string)$c, 400));
+            }
+        }
+        $lines[] = '  - Required next actions:';
         if ($next !== []) {
-            $lines[] = '  - Next actions:';
             foreach (array_slice($next, 0, 12) as $n) {
                 $lines[] = '    - ' . str_replace(["\r", "\n"], ' ', $this->truncatePlain((string)$n, 240));
             }
         } else {
-            $lines[] = '  - Next actions: —';
+            $lines[] = '    - none extracted';
         }
         $lines[] = '  - Source: decision_memory_auto_sync';
 
         $block = implode("\n", $lines);
-        $newBody = $this->insertBlockAfterHeadingLine($body, $headingDr, $block);
-        if ($newBody === null) {
-            return ['ok' => false, 'changed' => false, 'sections_touched' => [], 'warnings' => $warnings, 'message' => 'append_decisions_failed'];
-        }
+        $newBody = $this->insertBlockAfterHeadingRobust($body, $headingDr, $block, []);
         $sectionsTouched = ['Decisions Remembered'];
 
         if (!str_contains($newBody, $markerRecent)) {
@@ -601,7 +724,55 @@ MD;
         $agentIds = $resolver->filterParticipantsForMemorySync($sessionId, $session, $agentIds);
         $marker = '<!-- participant_context_sync:' . $sidNorm . ' -->';
         $date = gmdate('Y-m-d');
-        $block = "- [{$date}] Participated in session `{$sidNorm}` in context `{$ctxEsc}`.\n  {$marker}\n  Source: participant_context_sync";
+
+        $runResult = null;
+        if (!empty($session['result']) && is_string($session['result'])) {
+            $decoded = json_decode($session['result'], true);
+            $runResult = is_array($decoded) ? $decoded : null;
+        }
+        $diag = is_array($runResult)
+            ? DecisionMemoryPersistenceClassifier::participationDiagnosticNotes($runResult)
+            : [
+                'outcome_status_norm' => 'unknown',
+                'verdict_label' => '',
+                'reliability' => '',
+                'blocking_unknowns' => [],
+                'contradictions' => [],
+            ];
+        $modeEsc = str_replace(["\r", "\n", '`'], [' ', ' ', "'"], trim((string)($session['mode'] ?? '')));
+        $titleEsc = str_replace(["\r", "\n", '`'], [' ', ' ', "'"], trim((string)($session['title'] ?? '')));
+        $outcomeSig = str_replace(["\r", "\n", '`'], [' ', ' ', "'"], (string)$diag['outcome_status_norm']);
+        $verdictDisp = ($diag['verdict_label'] ?? '') !== ''
+            ? str_replace(["\r", "\n", '`'], [' ', ' ', "'"], (string)$diag['verdict_label'])
+            : 'unknown';
+        $relDisp = ($diag['reliability'] ?? '') !== ''
+            ? str_replace(["\r", "\n", '`'], [' ', ' ', "'"], (string)$diag['reliability'])
+            : 'unknown';
+        $cx = is_array($diag['contradictions'] ?? null) ? $diag['contradictions'] : [];
+        $mainTension = $cx[0] ?? 'none';
+        $mainTension = str_replace(["\r", "\n", '`'], [' ', ' ', "'"], (string)$mainTension);
+
+        $lines = [];
+        $lines[] = "- [{$date}] Participated in session `{$sidNorm}` in context `{$ctxEsc}`.";
+        $lines[] = "  - Mode: `{$modeEsc}`";
+        $lines[] = "  - Topic: `{$titleEsc}`";
+        $lines[] = "  - Session outcome signal: `{$outcomeSig}`";
+        $lines[] = "  - Verdict signal: `{$verdictDisp}`";
+        $lines[] = "  - Reliability: `{$relDisp}`";
+        $lines[] = "  - Main tension: `{$this->truncatePlain($mainTension, 360)}`";
+        $lines[] = '  - Participation role: participant agent';
+        $lines[] = "  {$marker}";
+        $lines[] = '  Source: participant_context_sync';
+        $block = implode("\n", $lines);
+
+        $psFb = false;
+        if (is_array($runResult)) {
+            $do = $runResult['decision_outcome'] ?? null;
+            if (is_array($do) && is_array($do['persistence_safety'] ?? null)) {
+                $psFb = ($do['persistence_safety']['derived_from_fallback'] ?? false) === true;
+            }
+        }
+        $needsPending = $cx !== [] || $psFb || ($verdictDisp === 'go' && str_contains(strtolower($relDisp), 'weak'));
 
         $agentsOut = [];
         foreach ($agentIds as $agentId) {
@@ -618,28 +789,23 @@ MD;
             $this->ensureFile($contextId, $agentId);
             $body = str_replace("\r\n", "\n", $this->read($contextId, $agentId));
             if (str_contains($body, $marker)) {
-                $agentsOut[] = ['agent_id' => $agentId, 'ok' => true, 'changed' => false, 'skipped_duplicate' => true];
-                continue;
+                $stripped = $this->stripLegacyParticipantBlockIfNeeded($body, $marker);
+                if ($stripped === $body) {
+                    $agentsOut[] = ['agent_id' => $agentId, 'ok' => true, 'changed' => false, 'skipped_duplicate' => true];
+                    continue;
+                }
+                $body = $stripped;
             }
             $merge = $this->softMergeMissingSections($body);
             $body = $merge['body'];
+            $body = $this->applyParticipationAuxiliarySections($body, $diag, $sidNorm, $needsPending);
             $headingPrimary = '## Recent Notes';
-            $headingFb = '## Recent Learnings';
-            $headingRn = str_contains($body, $headingPrimary) || !str_contains($body, $headingFb)
-                ? $headingPrimary
-                : $headingFb;
-            if (!str_contains($body, $headingRn)) {
-                $body = rtrim($body) . "\n\n" . $headingPrimary . "\n\n";
-                $headingRn = $headingPrimary;
-            }
-            $newBody = $this->insertBlockAfterHeadingLine($body, $headingRn, $block);
-            if ($newBody === null) {
-                $newBody = $this->insertBlockAfterHeadingLine($body, $headingPrimary, $block);
-            }
-            if ($newBody === null) {
-                $agentsOut[] = ['agent_id' => $agentId, 'ok' => false, 'message' => 'append_failed'];
-                continue;
-            }
+            $newBody = $this->insertBlockAfterHeadingRobust(
+                $body,
+                $headingPrimary,
+                $block,
+                ['## Recent Learnings']
+            );
             $w = $this->write($contextId, $agentId, $newBody);
             $agentsOut[] = [
                 'agent_id' => $agentId,
@@ -682,6 +848,98 @@ MD;
         );
     }
 
+    private function stripLegacyParticipantBlockIfNeeded(string $body, string $marker): string
+    {
+        if (!str_contains($body, $marker)) {
+            return $body;
+        }
+        $pos = strpos($body, $marker);
+        if ($pos !== false) {
+            $window = substr($body, max(0, $pos - 500), 900);
+            if (str_contains($window, 'Session outcome signal:')) {
+                return $body;
+            }
+        }
+        $pattern = '/(^|\R)- \[[^\]]+\] Participated in session[^\n]*\R(?:  [^\n]*\R)*?  '
+            . preg_quote($marker, '/') . '\R?/u';
+        $new = preg_replace($pattern, "\n", $body, 1);
+
+        return is_string($new) ? $new : $body;
+    }
+
+    /**
+     * @param array{
+     *   outcome_status_norm?:string,
+     *   verdict_label?:string,
+     *   reliability?:string,
+     *   blocking_unknowns?:list<string>,
+     *   contradictions?:list<string>
+     * } $diag
+     */
+    private function applyParticipationAuxiliarySections(string $body, array $diag, string $sidNorm, bool $needsPending): string
+    {
+        $unknowns = is_array($diag['blocking_unknowns'] ?? null)
+            ? array_values(array_filter(array_map('strval', $diag['blocking_unknowns'])))
+            : [];
+        if ($unknowns !== []) {
+            $oq = '## Open Questions';
+            $pos = strpos($body, $oq);
+            if ($pos !== false) {
+                $next = strpos($body, "\n## ", $pos + strlen($oq));
+                $end = $next !== false ? $next : strlen($body);
+                $section = substr($body, $pos, $end - $pos);
+                if (str_contains($section, 'No open question extracted yet.')) {
+                    $bullets = '';
+                    foreach (array_slice($unknowns, 0, 12) as $uq) {
+                        $uq = $this->truncatePlain(str_replace(["\r", "\n"], ' ', trim($uq)), 400);
+                        if ($uq === '') {
+                            continue;
+                        }
+                        $bullets .= '- ' . $uq . "\n  Source: session `" . $sidNorm . "`\n";
+                    }
+                    if ($bullets !== '') {
+                        $newSection = $oq . "\n\n" . rtrim($bullets) . "\n";
+                        $body = substr($body, 0, $pos) . $newSection . substr($body, $end);
+                    }
+                }
+            }
+        }
+
+        $cx = is_array($diag['contradictions'] ?? null)
+            ? array_values(array_filter(array_map('strval', $diag['contradictions'])))
+            : [];
+        $ctrMarker = '<!-- contradiction_session:' . strtolower($sidNorm) . ' -->';
+        if ($cx !== [] && !str_contains($body, $ctrMarker)) {
+            $h = '## Contradictions To Review';
+            $block = '- Contradiction detected in session `' . $sidNorm . '`:' . "\n";
+            foreach ($cx as $c) {
+                $block .= '  - ' . $this->truncatePlain(str_replace(["\r", "\n"], ' ', $c), 500) . "\n";
+            }
+            $block .= "  {$ctrMarker}\n  Source: participant_context_sync\n";
+            $body = $this->insertBlockAfterHeadingRobust($body, $h, rtrim($block), []);
+        }
+
+        $pendMarker = '<!-- pending_consolidation:' . strtolower($sidNorm) . ' -->';
+        if ($needsPending && !str_contains($body, $pendMarker)) {
+            $h = '## Pending Consolidation Notes';
+            $block = '- Session `' . $sidNorm
+                . '` should be reviewed before promoting any signal to Stable Beliefs or Strategic Assumptions.' . "\n"
+                . "  {$pendMarker}\n  Source: participant_context_sync\n";
+            $body = $this->insertBlockAfterHeadingRobust($body, $h, rtrim($block), []);
+        }
+
+        $posMarker = '<!-- current_position_last_participation:' . strtolower($sidNorm) . ' -->';
+        if (!str_contains($body, $posMarker)) {
+            $h = '## Current Position';
+            $block = '- No current position extracted yet.' . "\n"
+                . '- Last participation: `' . $sidNorm . '`' . "\n"
+                . "  {$posMarker}\n  Source: participant_context_sync\n";
+            $body = $this->insertBlockAfterHeadingRobust($body, $h, rtrim($block), []);
+        }
+
+        return $body;
+    }
+
     private function truncatePlain(string $s, int $max): string
     {
         $x = preg_replace('/\s+/', ' ', $s);
@@ -694,6 +952,53 @@ MD;
         }
 
         return $x;
+    }
+
+    /**
+     * Insère un bloc après un titre de section. Ne retourne jamais null : append la section canonique + bloc en fin si aucune cible.
+     *
+     * @param list<string> $alternateHeadings variantes exactes à essayer (ex. ## Recent Learnings)
+     */
+    private function insertBlockAfterHeadingRobust(
+        string $body,
+        string $canonicalHeading,
+        string $block,
+        array $alternateHeadings
+    ): string {
+        $body = str_replace("\r\n", "\n", $body);
+        $try = array_values(array_unique(array_merge([$canonicalHeading], $alternateHeadings)));
+        foreach ($try as $h) {
+            $nb = $this->insertBlockAfterHeadingLine($body, $h, $block);
+            if ($nb !== null) {
+                return $nb;
+            }
+        }
+        foreach (explode("\n", $body) as $line) {
+            $trim = rtrim($line);
+            if ($canonicalHeading === '## Recent Notes') {
+                if (preg_match('/^##\s+Recent\s+Notes\s*$/iu', $trim)) {
+                    $nb = $this->insertBlockAfterHeadingLine($body, $trim, $block);
+                    if ($nb !== null) {
+                        return $nb;
+                    }
+                }
+                if (preg_match('/^##\s+Recent\s+Learnings\s*$/iu', $trim)) {
+                    $nb = $this->insertBlockAfterHeadingLine($body, $trim, $block);
+                    if ($nb !== null) {
+                        return $nb;
+                    }
+                }
+            } elseif ($canonicalHeading === '## Decisions Remembered') {
+                if (preg_match('/^##\s+Decisions\s+Remembered\s*$/iu', $trim)) {
+                    $nb = $this->insertBlockAfterHeadingLine($body, $trim, $block);
+                    if ($nb !== null) {
+                        return $nb;
+                    }
+                }
+            }
+        }
+
+        return rtrim($body) . "\n\n" . $canonicalHeading . "\n\n" . $block . "\n";
     }
 
     private function insertBlockAfterHeadingLine(string $body, string $heading, string $block): ?string

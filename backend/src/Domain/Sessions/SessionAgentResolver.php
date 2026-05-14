@@ -247,6 +247,9 @@ final class SessionAgentResolver
         if (!$hadRosterDefinition && !$hadVotes) {
             return null;
         }
+        if ($allow === []) {
+            return null;
+        }
 
         return $allow;
     }

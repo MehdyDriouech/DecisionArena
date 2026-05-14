@@ -1,5 +1,8 @@
 /* Session History feature — action handlers (rerun modal + action plan + memory) */
 import { registerAction } from '../../core/events.js';
+import { isConfirmationConfirmed, requestConfirmation, uiCopy } from '../../utils/confirmationUi.js';
+import { strategicContextPayloadForRerun } from '../../utils/strategicContextPayload.js';
+import { mapAnalysisLifecycle } from '../../core/store.js';
 
 function getCtx() {
   const a = window.DecisionArena;
@@ -14,13 +17,26 @@ function getCtx() {
   };
 }
 
+function setUiError(state, message, metadata = {}) {
+  state.error = message;
+  try {
+    window.DecisionArena.services?.LogService?.logFrontendEvent?.('warning', 'frontend', {
+      action: 'ui_error',
+      metadata,
+      error_message: message,
+    });
+  } catch (_) {}
+}
+
 function renderRerunModal() {
   const { state, escHtml, t } = getCtx();
   const rm  = state.rerunModal;
   if (!rm?.open) return '';
 
-  const session = state.sessions.find((s) => s.id === rm.sessionId) || {};
-  const modes   = ['decision-room', 'confrontation', 'quick-decision', 'stress-test', 'chat'];
+    const session = state.sessions.find((s) => s.id === rm.sessionId) || {};
+    const hasActiveWorkspace = !!(String(state.activeStrategicContextId || state.activeStrategicContext?.context_id || '').trim());
+    const showLegacyRerun = state.uiMode === 'expert' && !hasActiveWorkspace;
+    const modes   = ['decision-room', 'confrontation', 'quick-decision', 'stress-test', 'chat'];
   const variationOptions = [
     { id: 'more-disagreement',    label: t('rerun.moreDisagreement') },
     { id: 'more-critical-agents', label: t('rerun.moreCritical') },
@@ -65,6 +81,11 @@ function renderRerunModal() {
           <input type="checkbox" id="rerun-keep-context" ${rm.keepContext ? 'checked' : ''} style="accent-color:var(--accent);">
           ${t('rerun.keepContextDoc')}
         </label>
+        ${showLegacyRerun ? `
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:16px;cursor:pointer;font-size:13px;" data-ui="expert-only">
+          <input type="checkbox" id="rerun-confirm-legacy-no-workspace" ${rm.confirmLegacyNoWorkspace ? 'checked' : ''} style="accent-color:var(--accent);">
+          ${t('rerun.confirmLegacyNoActiveWorkspace')}
+        </label>` : ''}
         <div style="display:flex;gap:10px;">
           <button class="btn btn-primary" data-action="apply-rerun" ${rm.loading ? 'disabled' : ''}>
             ${rm.loading ? '<span class="spinner"></span>' : '🔁'} ${t('rerun.apply')}
@@ -112,18 +133,31 @@ function registerSessionHistoryHandlers() {
   registerAction('link-session-to-strategic-context', async ({ element }) => {
     const sessionId = element?.dataset?.sessionId;
     if (!sessionId) return;
-    const ctxId = prompt('context_id:', '') || '';
-    if (!ctxId.trim()) return;
     const state = window.DecisionArena.store.state;
+    const t = window.i18n?.t?.bind(window.i18n) || ((k) => k);
+    const ctxId = String(
+      state.activeStrategicContextId
+      || state.strategicContextUi?.selectedContextId
+      || state.decisionMemoryUi?.navStrategicContextId
+      || '',
+    ).trim();
+    if (!ctxId) {
+      setUiError(state, t('error.selectStrategicContextBeforeLink'), { action: 'link-session-to-strategic-context', sessionId });
+      window.DecisionArena.render?.();
+      return;
+    }
     try {
-      await window.DecisionArena.services.StrategicContextService.linkSession(ctxId.trim(), sessionId);
+      await window.DecisionArena.services.StrategicContextService.linkSession(ctxId, sessionId);
       try {
         const data = await window.DecisionArena.services.StrategicContextService.list({ status: state.strategicContextUi?.statusFilter || 'active' }, 120);
         state.strategicContexts = { loading: false, error: null, items: data.contexts || [] };
+        const active = data.active_context ?? null;
+        state.activeStrategicContext = active;
+        state.activeStrategicContextId = active?.context_id ? String(active.context_id) : null;
       } catch (_) {}
-      state.toast = 'Session liée au contexte.';
+      state.toast = t('sessions.toastLinkedToContext');
     } catch (err) {
-      state.error = String(err.message || err);
+      setUiError(state, String(err.message || err), { action: 'link-session-to-strategic-context', sessionId });
     }
     window.DecisionArena.render?.();
   });
@@ -162,6 +196,14 @@ function registerSessionHistoryHandlers() {
     if (!sessionId) return;
     const DA = window.DecisionArena;
     const { store, services, router } = DA;
+    const source = store.state.sessions.find((s) => String(s.id) === String(sessionId));
+    const lifecycle = mapAnalysisLifecycle(source || null);
+    if (!['completed', 'archived'].includes(lifecycle.primaryStatus)) {
+      setUiError(store.state, t('error.lifecycleRequiresCompletedOrArchived'), { action: 'launch-premortem', sessionId });
+      DA.render?.();
+      return;
+    }
+
     const t = window.i18n?.t?.bind(window.i18n) || ((k) => k);
 
     store.state.error = null;
@@ -173,6 +215,7 @@ function registerSessionHistoryHandlers() {
         variations: ['pre-mortem'],
         premortem: true,
         keep_context_document: true,
+        ...strategicContextPayloadForRerun(store.state),
       });
 
       if (result?.session) {
@@ -203,7 +246,7 @@ function registerSessionHistoryHandlers() {
         router.navigate('new-session');
       }
     } catch (error) {
-      store.state.error = error?.message || t('premortem.launchError');
+      setUiError(store.state, error?.message || t('premortem.launchError'), { action: 'launch-premortem', sessionId });
     } finally {
       store.state.premortemLaunchSessionId = null;
       DA.render?.();
@@ -215,11 +258,19 @@ function registerSessionHistoryHandlers() {
     if (!sessionId) return;
     const DA = window.DecisionArena;
     const { store, services, router } = DA;
+    const source = store.state.sessions.find((s) => String(s.id) === String(sessionId));
+    const lifecycle = mapAnalysisLifecycle(source || null);
+    if (!['completed', 'archived'].includes(lifecycle.primaryStatus)) {
+      setUiError(store.state, t('error.lifecycleRequiresCompletedOrArchived'), { action: 'rerun-with-contradiction', sessionId });
+      DA.render?.();
+      return;
+    }
     try {
       store.state.isLoading = true;
       DA.render?.();
       const result = await services.SessionService.rerun(sessionId, {
         variations: ['more-disagreement', 'more-critical-agents'],
+        ...strategicContextPayloadForRerun(store.state),
       });
       if (result?.session) {
         store.state.currentSession = result.session;
@@ -257,7 +308,7 @@ function registerSessionHistoryHandlers() {
         router.navigate('new-session');
       }
     } catch (error) {
-      store.state.error = error?.message || 'Impossible de relancer avec contradiction.';
+      setUiError(store.state, error?.message || t('error.rerunWithContradictionFailed'), { action: 'rerun-with-contradiction', sessionId });
     } finally {
       store.state.isLoading = false;
       DA.render?.();
@@ -269,11 +320,18 @@ function registerSessionHistoryHandlers() {
     const { state, render } = getCtx();
     const sid  = element.dataset.sessionId;
     const sess = state.sessions.find((s) => s.id === sid) || {};
+    const lifecycle = mapAnalysisLifecycle(sess);
+    if (!['completed', 'archived'].includes(lifecycle.primaryStatus)) {
+      setUiError(state, t('error.lifecycleRequiresCompletedOrArchived'), { action: 'open-rerun-modal', sessionId: sid });
+      render();
+      return;
+    }
     state.rerunModal = {
       open: true, sessionId: sid, variations: [],
       targetMode: sess.mode || 'decision-room',
       language:   sess.language || 'fr',
       customInstruction: '', keepContext: true, loading: false,
+      confirmLegacyNoWorkspace: false,
     };
     render();
     upsertRerunModal();
@@ -306,15 +364,27 @@ function registerSessionHistoryHandlers() {
     const { state, render, navigate, apiFetch } = getCtx();
     const rm = state.rerunModal;
     if (!rm.sessionId) return;
+    const source = state.sessions.find((s) => String(s.id) === String(rm.sessionId));
+    const lifecycle = mapAnalysisLifecycle(source || null);
+    if (!['completed', 'archived'].includes(lifecycle.primaryStatus)) {
+      setUiError(state, t('error.lifecycleRequiresCompletedOrArchived'), { action: 'apply-rerun', sessionId: rm.sessionId });
+      render();
+      return;
+    }
 
     rm.targetMode        = document.getElementById('rerun-target-mode')?.value        || '';
     rm.language          = document.getElementById('rerun-language')?.value            || 'fr';
     rm.customInstruction = document.getElementById('rerun-custom-instruction')?.value  || '';
     rm.keepContext       = document.getElementById('rerun-keep-context')?.checked !== false;
+    rm.confirmLegacyNoWorkspace = document.getElementById('rerun-confirm-legacy-no-workspace')?.checked === true;
     rm.loading           = true;
     render();
 
     try {
+      const scPayload = strategicContextPayloadForRerun(state);
+      const legacyPayload = state.uiMode === 'expert' && rm.confirmLegacyNoWorkspace && Object.keys(scPayload).length === 0
+        ? { confirm_legacy_no_active_strategic_context: true }
+        : {};
       const result = await apiFetch(`/api/sessions/${rm.sessionId}/rerun`, {
         method: 'POST',
         body: JSON.stringify({
@@ -323,6 +393,8 @@ function registerSessionHistoryHandlers() {
           language:              rm.language,
           custom_instruction:    rm.customInstruction,
           keep_context_document: rm.keepContext,
+          ...scPayload,
+          ...legacyPayload,
         }),
       });
 
@@ -350,7 +422,7 @@ function registerSessionHistoryHandlers() {
         navigate('new-session');
       }
     } catch (err) {
-      state.error = err.message;
+      setUiError(state, err.message, { action: 'apply-rerun', sessionId: rm.sessionId });
       render();
     } finally {
       rm.loading = false;
@@ -497,12 +569,14 @@ function registerSessionHistoryHandlers() {
     const { state, render, apiFetch } = getCtx();
     const sessionId = element.dataset.sessionId;
     if (!sessionId) return;
+    const includeLegacy = element.dataset.includeLegacy === '1' ? '?include_legacy=1' : '';
     try {
-      const result = await apiFetch(`/api/sessions/${sessionId}/relationships`);
+      const result = await apiFetch(`/api/sessions/${sessionId}/relationships${includeLegacy}`);
       state.socialDynamics = state.socialDynamics || {};
       state.socialDynamics[sessionId] = {
         relationships: result.relationships || [],
         highlights: result.highlights || {},
+        meta: result.meta || null,
       };
       render();
     } catch (err) {
@@ -704,13 +778,28 @@ function registerSessionHistoryHandlers() {
     render();
   });
 
-  registerAction('apply-dynamics-reco-suggestion', async ({ element }) => {
+  registerAction('apply-dynamics-reco-suggestion', async (ctx = {}) => {
+    const { element } = ctx;
     const { state, render, apiFetch, t } = getCtx();
     const id = element?.dataset?.suggestionId;
     const sessionId = element?.dataset?.sessionId || '';
     const fromAdmin = element?.dataset?.source === 'admin';
     if (!id) return;
-    if (!window.confirm(t('dynamicsReco.applyConfirm'))) return;
+    if (!isConfirmationConfirmed(ctx)) {
+      requestConfirmation(state, {
+        id: `apply-dynamics-reco:${id}`,
+        mode: 'modal',
+        tone: 'warning',
+        title: t('dynamicsReco.applyConfirm'),
+        body: uiCopy('Cette recommandation ajuste la fiabilité utilisée par les prochaines analyses.', 'This recommendation adjusts reliability used by future analyses.'),
+        expertBody: uiCopy('Application manuelle: aucune suggestion n’est appliquée automatiquement.', 'Manual application: no suggestion is applied automatically.'),
+        confirmLabel: uiCopy('Appliquer l’ajustement', 'Apply adjustment'),
+        action: 'apply-dynamics-reco-suggestion',
+        payload: { suggestionId: id, sessionId, source: fromAdmin ? 'admin' : '' },
+      });
+      render();
+      return;
+    }
     try {
       await apiFetch('/api/analysis/agent-dynamics-suggestions/apply', {
         method: 'POST',
@@ -727,9 +816,9 @@ function registerSessionHistoryHandlers() {
         const res = await apiFetch('/api/analysis/agent-dynamics-suggestions');
         state.adminDynamicsReco = res;
       }
-      window.alert(t('dynamicsReco.appliedOk'));
+      state.toast = t('dynamicsReco.appliedOk');
     } catch (err) {
-      window.alert(`${t('dynamicsReco.appliedFail')} ${err.message || ''}`);
+      state.error = `${t('dynamicsReco.appliedFail')} ${err.message || ''}`;
     }
     render();
   });

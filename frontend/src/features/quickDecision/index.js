@@ -11,6 +11,8 @@ import { renderGraphViewPanel } from '../graphView/index.js';
 import { renderArgumentHeatmapPanel } from '../argumentHeatmap/index.js';
 import { renderDebateReplayPanel } from '../debateReplay/index.js';
 import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
+import { renderRunProgressPanel } from '../../ui/runProgressPanel.js';
+import { ensureLiveRunSessionHydratedIfMismatch } from '../../utils/liveRunCompletion.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -25,7 +27,20 @@ function renderQuickDecision() {
   const { state, escHtml, agentName, t } = getCtx();
   const session = state.currentSession;
   if (!session) return `<div class="view-container"><p>${t('chat.noSession')}</p></div>`;
+  const arena = window.DecisionArena;
+  queueMicrotask(() => {
+    ensureLiveRunSessionHydratedIfMismatch({
+      state: arena.store.state,
+      sessionId: session.id,
+      mode: 'quick-decision',
+      SessionService: arena.services.SessionService,
+      render: () => arena.render?.(),
+    });
+  });
   const results = state.qdResults;
+  const runProgressEntry = session?.id ? state.runProgressBySessionId?.[session.id] : null;
+  const liveRunProgress = runProgressEntry?.data || state.runProgress;
+  const terminalRunCompleted = String(liveRunProgress?.status || '').toLowerCase() === 'completed';
 
   return `
     <div class="full-height-view">
@@ -42,13 +57,20 @@ function renderQuickDecision() {
           <div class="session-result-actions">
             ${!state.qdRunning ? `<button class="btn btn-primary" data-action="run-quick-decision">${t('qd.run')}</button>` : ''}
             <div class="export-actions">${renderExportButtons(session.id)}</div>
-            <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
+            <button class="btn btn-secondary btn-sm" data-nav="analyses">${t('nav.back')}</button>
           </div>
         </div>
       </div>
       ${renderContextDocPanel()}
 
       <div class="dr-content">
+        ${state.qdRunning ? renderRunProgressPanel(liveRunProgress, {
+    t,
+    escHtml,
+    uiMode: state.uiMode,
+    mode: 'quick-decision',
+    polling: state.runProgressPolling || null,
+  }) : ''}
         ${state.qdRunning ? `<div class="loading-state"><span class="spinner spinner-lg"></span> ${t('qd.running')}</div>` : ''}
 
         ${!results && !state.qdRunning ? `
@@ -60,7 +82,13 @@ function renderQuickDecision() {
         ` : ''}
 
         ${results ? `
-          ${renderDecisionOutcomeCard(results.decision_outcome || results.decision_brief?.decision_outcome || null, { uiMode: state.uiMode, sessionId: session.id })}
+          ${renderDecisionOutcomeCard(results.decision_outcome || results.decision_brief?.decision_outcome || null, {
+            uiMode: state.uiMode,
+            sessionId: session.id,
+            verdict: results.verdict || null,
+            sessionCompleted: String(session?.status || '').toLowerCase() === 'completed',
+            terminalRunCompleted,
+          })}
           ${renderDecisionBrief(results.decision_brief || null, {
             sessionId: session.id,
             agentDecisionDynamics: results.agent_decision_dynamics,

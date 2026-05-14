@@ -74,12 +74,16 @@ final class DecisionRoomsController
             return Response::error('Context not found', 404);
         }
         $rid = (string)$room['room_id'];
-        return ['room' => [
-            ...$room,
-            'linked_memory_ids' => [],
-            'linked_session_ids' => [],
-            'current_state' => $this->rooms->currentState($rid),
-        ]];
+        $active = $this->contexts->getActiveContext();
+        return [
+            'room' => [
+                ...$room,
+                'linked_memory_ids' => [],
+                'linked_session_ids' => [],
+                'current_state' => $this->rooms->currentState($rid),
+            ],
+            'active_strategic_context_id' => $active['context_id'] ?? null,
+        ];
     }
 
     /** GET /api/decision-rooms/{room_id} */

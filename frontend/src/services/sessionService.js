@@ -1,11 +1,17 @@
 import { apiFetch } from './apiClient.js';
 
 const SessionService = {
-  list() {
-    return apiFetch('/api/sessions');
+  list(queryString = '') {
+    const q = queryString && String(queryString).startsWith('?')
+      ? queryString
+      : (queryString ? `?${queryString}` : '');
+    return apiFetch(`/api/sessions${q}`);
   },
   get(sessionId) {
     return apiFetch(`/api/sessions/${sessionId}`);
+  },
+  getRunStatus(sessionId, options = {}) {
+    return apiFetch(`/api/sessions/${sessionId}/run-status`, options);
   },
   create(payload) {
     return apiFetch('/api/sessions', {
@@ -15,6 +21,12 @@ const SessionService = {
   },
   remove(sessionId) {
     return apiFetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+  },
+  updateStatus(sessionId, status) {
+    return apiFetch(`/api/sessions/${sessionId}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ status }),
+    });
   },
   deleteAll() {
     return apiFetch('/api/sessions/delete-all', { method: 'POST' });

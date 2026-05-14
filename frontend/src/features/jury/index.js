@@ -11,6 +11,9 @@ import { renderArgumentHeatmapPanel } from '../argumentHeatmap/index.js';
 import { renderDebateReplayPanel } from '../debateReplay/index.js';
 import { renderGraphViewPanel } from '../graphView/index.js';
 import { renderSessionPresetUsedBanner } from '../../utils/sessionDynamicsPresetUi.js';
+import { renderLlmRoutingCompact } from '../../utils/llmRoutingUi.js';
+import { renderRunProgressPanel } from '../../ui/runProgressPanel.js';
+import { ensureLiveRunSessionHydratedIfMismatch } from '../../utils/liveRunCompletion.js';
 
 function getCtx() {
   const arena = window.DecisionArena;
@@ -54,6 +57,7 @@ function renderJuryAgentCard(msg, messageKey = '') {
   const contentHtml = isLong && collapsed
     ? `<div class="agent-content md-content"><p>${preview}…</p></div>`
     : `<div class="agent-content md-content">${renderMarkdown(msg.content)}</div>`;
+  const llmMeta = renderLlmRoutingCompact(msg, { escHtml, t, expert: state.uiMode === 'expert' });
   return `
     <div class="agent-card${msg.phase === 'jury-minority-report' ? ' agent-card--minority' : ''}">
       <div class="agent-card-header">
@@ -66,7 +70,7 @@ function renderJuryAgentCard(msg, messageKey = '') {
       </div>
       ${contentHtml}
       ${isLong ? `<button class="btn btn-secondary btn-sm" data-action="toggle-agent-message" data-message-id="${escHtml(messageId)}">${collapsed ? 'Voir' : 'Masquer'}</button>` : ''}
-      ${msg.model ? `<div class="agent-card-footer"><span>${escHtml(msg.provider_id ?? '')}</span><span>${escHtml(msg.model)}</span></div>` : ''}
+      ${llmMeta ? `<div class="agent-card-footer">${llmMeta}</div>` : ''}
     </div>
   `;
 }
@@ -342,7 +346,16 @@ function renderJuryResults(results) {
     </div>
   ` : '';
 
-  return renderDecisionOutcomeCard(results.decision_outcome || results.decision_brief?.decision_outcome || null, { uiMode: state.uiMode })
+  const rp = sessionId ? (state.runProgressBySessionId?.[sessionId]?.data || state.runProgress) : null;
+  const terminalRunCompleted = String(rp?.status || '').toLowerCase() === 'completed';
+
+  return renderDecisionOutcomeCard(results.decision_outcome || results.decision_brief?.decision_outcome || null, {
+    uiMode: state.uiMode,
+    sessionId,
+    verdict: results.verdict || null,
+    sessionCompleted: String(state.currentSession?.status || '').toLowerCase() === 'completed',
+    terminalRunCompleted,
+  })
     + renderDecisionBrief(results.decision_brief || null, {
     sessionId,
     agentDecisionDynamics: results.agent_decision_dynamics,
@@ -366,7 +379,19 @@ function renderJury() {
   const { state, escHtml, t } = getCtx();
   const session = state.currentSession;
   if (!session) return `<div class="view-container"><p>${t('chat.noSession')}</p></div>`;
+  const arena = window.DecisionArena;
+  queueMicrotask(() => {
+    ensureLiveRunSessionHydratedIfMismatch({
+      state: arena.store.state,
+      sessionId: session.id,
+      mode: 'jury',
+      SessionService: arena.services.SessionService,
+      render: () => arena.render?.(),
+    });
+  });
   const results = state.juryResults;
+  const runProgressEntry = session?.id ? state.runProgressBySessionId?.[session.id] : null;
+  const liveRunProgress = runProgressEntry?.data || state.runProgress;
 
   return `
     <div class="full-height-view">
@@ -383,7 +408,7 @@ function renderJury() {
           <div class="session-result-actions">
             ${!state.juryRunning ? `<button class="btn btn-primary" data-action="run-jury">${t('jury.run')}</button>` : ''}
             <div class="export-actions">${renderExportButtons(session.id)}</div>
-            <button class="btn btn-secondary btn-sm" data-nav="sessions">${t('nav.back')}</button>
+            <button class="btn btn-secondary btn-sm" data-nav="analyses">${t('nav.back')}</button>
           </div>
         </div>
       </div>
@@ -394,6 +419,18 @@ function renderJury() {
 
         ${state.error ? `<div class="alert alert-danger" style="margin:12px 0;padding:12px 16px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:6px;color:var(--color-error,#ef4444);font-size:13px;">⚠️ ${escHtml(state.error)}</div>` : ''}
 
+        ${state.uiMode === 'expert' && state.juryRunning && String(liveRunProgress?.status || '').toLowerCase() === 'completed'
+    ? `<div class="run-progress-warning" style="margin:8px 0;padding:10px 14px;font-size:12px;">⚠️ ${escHtml(t('runProgress.expertUiStale'))}${Array.isArray(liveRunProgress?.run_coherence_flags) && liveRunProgress.run_coherence_flags.length
+      ? ` <code style="font-size:11px;">${escHtml(liveRunProgress.run_coherence_flags.join(', '))}</code>` : ''}</div>`
+    : ''}
+
+        ${state.juryRunning ? renderRunProgressPanel(liveRunProgress, {
+    t,
+    escHtml,
+    uiMode: state.uiMode,
+    mode: 'jury',
+    polling: state.runProgressPolling || null,
+  }) : ''}
         ${state.juryRunning ? `<div class="loading-state"><span class="spinner spinner-lg"></span> ${t('jury.running')}</div>` : ''}
         ${state.juryAutoRetryBanner === 'running' ? `<div class="alert alert-warning" style="margin:8px 0;padding:10px 14px;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.4);border-radius:6px;font-size:13px;">⚡ ${t('autoretry.banner.running')}</div>` : ''}
         ${state.juryAutoRetryBanner === 'complete' ? `<div class="alert alert-info" style="margin:8px 0;padding:10px 14px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.3);border-radius:6px;font-size:13px;">✅ ${t('autoretry.banner.complete')}</div>` : ''}

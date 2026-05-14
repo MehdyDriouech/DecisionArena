@@ -72,14 +72,20 @@ function dm_make_session(SessionRepository $sessions, ?string $contextId = null)
     return $sid;
 }
 
-/** @param array<string,mixed> $canonical */
-function dm_run_result(array $canonical, array $context = []): array
+/** @param array<string,mixed> $extra projector_context?, verdict? */
+function dm_run_result(array $canonical, array $extra = []): array
 {
-    $outcome = DecisionOutcomeProjector::fromCanonical($canonical, $context);
-    return [
+    $projCtx = is_array($extra['projector_context'] ?? null) ? $extra['projector_context'] : [];
+    $outcome = DecisionOutcomeProjector::fromCanonical($canonical, $projCtx);
+    $r = [
         'canonical_synthesis' => $canonical,
         'decision_outcome' => $outcome,
     ];
+    if (isset($extra['verdict'])) {
+        $r['verdict'] = $extra['verdict'];
+    }
+
+    return $r;
 }
 
 echo "Decision Memory persistence contract checks\n\n";
@@ -118,21 +124,24 @@ $baseCanonical = [
 $sid1 = dm_make_session($sessions, $contextId);
 $m1 = $repo->persistAfterConfirmation(dm_run_result($baseCanonical), $sid1);
 dm_assert(is_array($m1) && !empty($m1['memory_id']), '1 complete outcome persisted');
+dm_assert(($m1['memory_state'] ?? '') === 'confirmed', '1 memory_state confirmed for safe complete outcome');
 
-// 2) sans status -> non persistable
+// 2) sans status -> persistable needs_review (statut normalisé validate_first)
 $sid2 = dm_make_session($sessions, $contextId);
 $c2 = $baseCanonical;
 $c2['status'] = '';
 $c2['decision'] = '';
 $m2 = $repo->persistAfterConfirmation(dm_run_result($c2), $sid2);
-dm_assert($m2 === null, '2 missing status is non-persistable');
+dm_assert(is_array($m2) && ($m2['memory_state'] ?? '') === 'needs_review', '2 missing status persisted as needs_review');
+$ps2 = is_array($m2['persistence_safety'] ?? null) ? $m2['persistence_safety'] : [];
+dm_assert(($ps2['da_review_required'] ?? null) === true, '2 review_required set');
 
-// 3) sans required_next_actions -> non persistable
+// 3) sans required_next_actions -> persistable needs_review
 $sid3 = dm_make_session($sessions, $contextId);
 $c3 = $baseCanonical;
 $c3['recommended_next_actions'] = [];
 $m3 = $repo->persistAfterConfirmation(dm_run_result($c3), $sid3);
-dm_assert($m3 === null, '3 missing required_next_actions is non-persistable');
+dm_assert(is_array($m3) && ($m3['memory_state'] ?? '') === 'needs_review', '3 missing actions persisted as needs_review');
 
 // 4) Validate First + actions actionnables -> persistable/confirmable
 $r4 = dm_run_result($baseCanonical);
@@ -168,7 +177,7 @@ $c8['next_steps'] = '## Next Steps';
 $r8 = dm_run_result($c8);
 dm_assert(($r8['decision_outcome']['required_next_actions'] ?? []) === [], '8 markdown heading rejected as action');
 
-// 9) fallback + missing critical -> refus strict
+// 9) fallback + missing critical -> persistable needs_review (qualité fallback)
 $sid9 = dm_make_session($sessions, $contextId);
 $c9 = $baseCanonical;
 $c9['status'] = '';
@@ -182,7 +191,9 @@ $c9['parser_diagnostics'] = [
     'extraction_strategy_used' => ['fallback_inference'],
 ];
 $m9 = $repo->persistAfterConfirmation(dm_run_result($c9), $sid9);
-dm_assert($m9 === null, '9 fallback with missing critical is strictly refused');
+dm_assert(is_array($m9) && ($m9['memory_state'] ?? '') === 'needs_review', '9 fallback with missing critical persisted as needs_review');
+$ps9 = is_array($m9['persistence_safety'] ?? null) ? $m9['persistence_safety'] : [];
+dm_assert(($ps9['da_persistence_quality'] ?? '') === 'fallback', '9 persistence_quality fallback');
 
 // 10) persistance avec strategic_context_id -> decision_memories + strategic_context_memories
 $sid10 = dm_make_session($sessions, $contextId);
@@ -225,5 +236,20 @@ $before15 = (int)$pdo->query('SELECT COUNT(*) FROM decision_memories')->fetchCol
 $snapshots->createSnapshot($contextId, 'manual', ['title' => 'DM contract snapshot', 'created_by' => 'qa-contract']);
 $after15 = (int)$pdo->query('SELECT COUNT(*) FROM decision_memories')->fetchColumn();
 dm_assert($before15 === $after15, '15 snapshot does not modify live decision memory');
+
+// 16) session non completed -> refus technique
+$sid16 = dm_make_session($sessions, $contextId);
+$sessions->update($sid16, ['status' => 'running']);
+$m16 = $repo->persistAfterConfirmation(dm_run_result($baseCanonical), $sid16);
+dm_assert($m16 === null, '16 non-completed session not persisted');
+
+// 17) validate_first + verdict go -> contradictions stockées
+$sid17 = dm_make_session($sessions, $contextId);
+$m17 = $repo->persistAfterConfirmation(dm_run_result($baseCanonical, [
+    'verdict' => ['verdict_label' => 'go'],
+]), $sid17);
+$ps17 = is_array($m17['persistence_safety'] ?? null) ? $m17['persistence_safety'] : [];
+dm_assert(($ps17['da_persistence_quality'] ?? '') === 'contradictory', '17 contradictory persistence_quality');
+dm_assert(!empty($ps17['da_decision_signal_contradictions']), '17 contradictions array non empty');
 
 echo "\nOK\n";

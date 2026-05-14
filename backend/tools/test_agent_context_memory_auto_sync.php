@@ -160,8 +160,8 @@ $readAgent = static function (string $agent) use ($storageRoot): string {
     return is_file($p) ? (string)file_get_contents($p) : '';
 };
 
-// --- Session A: message (architect) + selected (pm, synthesizer) — synth exclu ---
-$a = acm_make_session($sessions, $contextId, 'decision-room', ['pm', 'synthesizer']);
+// --- Session A: message (architect) + selected (pm, architect, synthesizer) — synth exclu sync DM ---
+$a = acm_make_session($sessions, $contextId, 'decision-room', ['pm', 'synthesizer', 'architect']);
 $sidA = $a['sid'];
 $pdo->prepare('INSERT INTO messages (id, session_id, role, agent_id, content, created_at) VALUES (?,?,?,?,?,?)')
     ->execute(['msg-' . $sidA, $sidA, 'assistant', 'architect', 'hello', gmdate('c')]);
@@ -332,16 +332,16 @@ $amsG = is_array($rG['agent_memory_sync'] ?? null) ? $rG['agent_memory_sync'] : 
 acm_assert(($amsG['enabled'] ?? false) === false, 'no agent sync without context');
 acm_assert(in_array('no_strategic_context_id', $amsG['warnings'] ?? [], true), 'warning no_strategic_context_id');
 
-// --- Non persistable (missing next actions) ---
+// --- Partiel (missing next actions) -> persisté needs_review ---
 $h = acm_make_session($sessions, $contextId, 'decision-room', ['pm']);
 $sidH = $h['sid'];
 $badCanon = acm_persistable_canonical();
 $badCanon['recommended_next_actions'] = [];
 $rH = $repo->persistAfterConfirmation(acm_run_result($badCanon), $sidH);
-acm_assert($rH === null, 'non-persistable outcome returns null');
+acm_assert(is_array($rH) && ($rH['memory_state'] ?? '') === 'needs_review', 'missing actions persisted as needs_review');
 $stmtDm = $pdo->prepare('SELECT COUNT(*) FROM decision_memories WHERE session_id = ?');
 $stmtDm->execute([$sidH]);
-acm_assert((int)$stmtDm->fetchColumn() === 0, 'no decision_memories row for non-persistable');
+acm_assert((int)$stmtDm->fetchColumn() === 1, 'decision_memories row for partial outcome');
 
 // --- Beliefs / narrative / compilations / snapshots unchanged for main context ---
 acm_assert($countCtx('strategic_context_beliefs') === $b0, 'no strategic_context_beliefs inserted by DM persist');

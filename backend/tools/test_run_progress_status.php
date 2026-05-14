@@ -12,6 +12,7 @@ spl_autoload_register(function (string $class): void {
 });
 
 use Controllers\SessionController;
+use Domain\Orchestration\RunTimeoutPolicy;
 use Http\Request;
 use Infrastructure\Persistence\MessageRepository;
 use Infrastructure\Persistence\RunStatusRepository;
@@ -201,6 +202,380 @@ $staleReq = new Request();
 $staleReq->setParams(['id' => $staleId]);
 $stalePayload = $controller->runStatus($staleReq);
 rp_ok((int)($stalePayload['progress']['percent'] ?? 999) <= 15, 'percent obsolète reclampé (round 0 idle sans events)');
+
+// Session lifecycle "completed" mais run_status JSON encore "running" => completed exposé + flag
+$desyncId = 'rp-' . bin2hex(random_bytes(5));
+$sessionRepo->create([
+    'id' => $desyncId,
+    'title' => 'Desync session vs run_status',
+    'mode' => 'jury',
+    'initial_prompt' => 'x',
+    'selected_agents' => json_encode(['pm', 'synthesizer']),
+    'rounds' => 3,
+    'language' => 'fr',
+    'status' => 'completed',
+    'cf_rounds' => 3,
+    'cf_interaction_style' => 'sequential',
+    'cf_reply_policy' => 'all-agents-reply',
+    'is_favorite' => 0,
+    'is_reference' => 0,
+    'force_disagreement' => 0,
+    'created_at' => $now,
+    'updated_at' => $now,
+]);
+$sessionRepo->update($desyncId, [
+    'result' => json_encode(['raw_decision' => ['decision' => 'go']], JSON_UNESCAPED_UNICODE),
+]);
+$runRepo->save($desyncId, [
+    'session_id' => $desyncId,
+    'mode' => 'jury',
+    'status' => 'running',
+    'started_at' => $now,
+    'updated_at' => $now,
+    'progress' => [
+        'percent' => 96,
+        'current_round' => 3,
+        'total_rounds' => 3,
+        'current_phase' => 'jury-verdict',
+        'current_phase_label' => 'Jury verdict',
+        'current_agent_id' => 'synthesizer',
+        'current_step' => 'llm_call',
+        'estimated' => true,
+    ],
+    'events' => [
+        ['ts' => date('c'), 'phase' => 'jury-verdict', 'label' => 'Synthese jury demarree'],
+    ],
+]);
+$desyncReq = new Request();
+$desyncReq->setParams(['id' => $desyncId]);
+$desyncPayload = $controller->runStatus($desyncReq);
+rp_ok(($desyncPayload['status'] ?? '') === 'completed', 'session completed + run_status running => run-status completed');
+rp_ok((int)($desyncPayload['progress']['percent'] ?? 0) === 100, 'coercion completed => 100%');
+rp_ok(in_array('session_completed_run_status_pending', $desyncPayload['run_coherence_flags'] ?? [], true), 'flag session_completed_run_status_pending');
+
+// Session "running" mais run_status deja "completed" => diagnostic inverse
+$tripId = 'rp-' . bin2hex(random_bytes(5));
+$sessionRepo->create([
+    'id' => $tripId,
+    'title' => 'Trip wire',
+    'mode' => 'jury',
+    'initial_prompt' => 'x',
+    'selected_agents' => json_encode(['pm']),
+    'rounds' => 2,
+    'language' => 'fr',
+    'status' => 'running',
+    'cf_rounds' => 2,
+    'cf_interaction_style' => 'sequential',
+    'cf_reply_policy' => 'all-agents-reply',
+    'is_favorite' => 0,
+    'is_reference' => 0,
+    'force_disagreement' => 0,
+    'created_at' => $now,
+    'updated_at' => $now,
+]);
+$runRepo->save($tripId, [
+    'session_id' => $tripId,
+    'mode' => 'jury',
+    'status' => 'completed',
+    'started_at' => $now,
+    'updated_at' => $now,
+    'progress' => [
+        'percent' => 100,
+        'current_round' => 2,
+        'total_rounds' => 2,
+        'current_phase' => 'session_completed',
+        'current_step' => 'done',
+        'estimated' => true,
+    ],
+    'events' => [],
+]);
+$tripReq = new Request();
+$tripReq->setParams(['id' => $tripId]);
+$tripPayload = $controller->runStatus($tripReq);
+rp_ok(in_array('run_status_completed_session_running', $tripPayload['run_coherence_flags'] ?? [], true), 'flag run_status_completed_session_running');
+
+rp_ok(RunTimeoutPolicy::hardRunWallSecondsForMode('jury') === 1800, 'mur timeout mode jury = 1800s');
+rp_ok(RunTimeoutPolicy::hardRunWallSecondsForMode('quick-decision') === 600, 'mur timeout quick-decision = 600s');
+
+$tsAgo = static fn(int $s): string => date('c', time() - $s);
+
+// Staleness: dernier event recent -> normal
+$st1 = 'rp-' . bin2hex(random_bytes(5));
+$sessionRepo->create([
+    'id' => $st1,
+    'title' => 'Staleness normal',
+    'mode' => 'jury',
+    'initial_prompt' => 'x',
+    'selected_agents' => json_encode(['pm']),
+    'rounds' => 2,
+    'language' => 'fr',
+    'status' => 'running',
+    'cf_rounds' => 2,
+    'cf_interaction_style' => 'sequential',
+    'cf_reply_policy' => 'all-agents-reply',
+    'is_favorite' => 0,
+    'is_reference' => 0,
+    'force_disagreement' => 0,
+    'created_at' => $now,
+    'updated_at' => $now,
+]);
+$runRepo->save($st1, [
+    'session_id' => $st1,
+    'mode' => 'jury',
+    'status' => 'running',
+    'started_at' => $tsAgo(120),
+    'updated_at' => $tsAgo(30),
+    'progress' => [
+        'percent' => 40,
+        'current_round' => 1,
+        'total_rounds' => 2,
+        'current_phase' => 'jury-opening',
+        'current_step' => 'llm_call',
+        'estimated' => true,
+    ],
+    'events' => [
+        ['ts' => $tsAgo(30), 'phase' => 'round_started', 'label' => 'ok'],
+    ],
+]);
+$reqSt1 = new Request();
+$reqSt1->setParams(['id' => $st1]);
+$rs1 = $controller->runStatus($reqSt1);
+rp_ok(($rs1['staleness']['level'] ?? '') === 'normal', 'staleness normal (<60s sans event)');
+
+// quiet ~75s
+$st2 = 'rp-' . bin2hex(random_bytes(5));
+$sessionRepo->create([
+    'id' => $st2,
+    'title' => 'Staleness quiet',
+    'mode' => 'jury',
+    'initial_prompt' => 'x',
+    'selected_agents' => json_encode(['pm']),
+    'rounds' => 2,
+    'language' => 'fr',
+    'status' => 'running',
+    'cf_rounds' => 2,
+    'cf_interaction_style' => 'sequential',
+    'cf_reply_policy' => 'all-agents-reply',
+    'is_favorite' => 0,
+    'is_reference' => 0,
+    'force_disagreement' => 0,
+    'created_at' => $now,
+    'updated_at' => $now,
+]);
+$runRepo->save($st2, [
+    'session_id' => $st2,
+    'mode' => 'jury',
+    'status' => 'running',
+    'started_at' => $tsAgo(400),
+    'updated_at' => $tsAgo(75),
+    'progress' => [
+        'percent' => 50,
+        'current_round' => 1,
+        'total_rounds' => 2,
+        'current_phase' => 'jury-opening',
+        'current_step' => 'llm_call',
+        'estimated' => true,
+    ],
+    'events' => [
+        ['ts' => $tsAgo(75), 'phase' => 'round_started', 'label' => 'vieux'],
+    ],
+]);
+$reqSt2 = new Request();
+$reqSt2->setParams(['id' => $st2]);
+$rs2 = $controller->runStatus($reqSt2);
+rp_ok(($rs2['staleness']['level'] ?? '') === 'quiet', 'staleness quiet (75s)');
+
+// long ~200s
+$st3 = 'rp-' . bin2hex(random_bytes(5));
+$sessionRepo->create([
+    'id' => $st3,
+    'title' => 'Staleness long',
+    'mode' => 'jury',
+    'initial_prompt' => 'x',
+    'selected_agents' => json_encode(['pm']),
+    'rounds' => 2,
+    'language' => 'fr',
+    'status' => 'running',
+    'cf_rounds' => 2,
+    'cf_interaction_style' => 'sequential',
+    'cf_reply_policy' => 'all-agents-reply',
+    'is_favorite' => 0,
+    'is_reference' => 0,
+    'force_disagreement' => 0,
+    'created_at' => $now,
+    'updated_at' => $now,
+]);
+$runRepo->save($st3, [
+    'session_id' => $st3,
+    'mode' => 'jury',
+    'status' => 'running',
+    'started_at' => $tsAgo(500),
+    'updated_at' => $tsAgo(200),
+    'progress' => [
+        'percent' => 55,
+        'current_round' => 1,
+        'total_rounds' => 2,
+        'current_phase' => 'jury-opening',
+        'current_step' => 'llm_call',
+        'estimated' => true,
+    ],
+    'events' => [
+        ['ts' => $tsAgo(200), 'phase' => 'round_started', 'label' => 'vieux'],
+    ],
+]);
+$reqSt3 = new Request();
+$reqSt3->setParams(['id' => $st3]);
+$rs3 = $controller->runStatus($reqSt3);
+rp_ok(($rs3['staleness']['level'] ?? '') === 'long', 'staleness long (200s)');
+
+// possibly_stuck ~400s
+$st4 = 'rp-' . bin2hex(random_bytes(5));
+$sessionRepo->create([
+    'id' => $st4,
+    'title' => 'Staleness stuck',
+    'mode' => 'jury',
+    'initial_prompt' => 'x',
+    'selected_agents' => json_encode(['pm']),
+    'rounds' => 2,
+    'language' => 'fr',
+    'status' => 'running',
+    'cf_rounds' => 2,
+    'cf_interaction_style' => 'sequential',
+    'cf_reply_policy' => 'all-agents-reply',
+    'is_favorite' => 0,
+    'is_reference' => 0,
+    'force_disagreement' => 0,
+    'created_at' => $now,
+    'updated_at' => $now,
+]);
+$runRepo->save($st4, [
+    'session_id' => $st4,
+    'mode' => 'jury',
+    'status' => 'running',
+    'started_at' => $tsAgo(500),
+    'updated_at' => $tsAgo(400),
+    'progress' => [
+        'percent' => 60,
+        'current_round' => 1,
+        'total_rounds' => 2,
+        'current_phase' => 'jury-opening',
+        'current_step' => 'llm_call',
+        'estimated' => true,
+    ],
+    'events' => [
+        ['ts' => $tsAgo(400), 'phase' => 'round_started', 'label' => 'tres vieux'],
+    ],
+]);
+$reqSt4 = new Request();
+$reqSt4->setParams(['id' => $st4]);
+$rs4 = $controller->runStatus($reqSt4);
+rp_ok(($rs4['staleness']['level'] ?? '') === 'possibly_stuck', 'staleness possibly_stuck (400s)');
+
+// Mur orchestration quick 600s -> blocked + staleness timeout
+$st5 = 'rp-' . bin2hex(random_bytes(5));
+$sessionRepo->create([
+    'id' => $st5,
+    'title' => 'Wall timeout',
+    'mode' => 'quick-decision',
+    'initial_prompt' => 'x',
+    'selected_agents' => json_encode(['pm']),
+    'rounds' => 2,
+    'language' => 'fr',
+    'status' => 'running',
+    'cf_rounds' => 2,
+    'cf_interaction_style' => 'sequential',
+    'cf_reply_policy' => 'all-agents-reply',
+    'is_favorite' => 0,
+    'is_reference' => 0,
+    'force_disagreement' => 0,
+    'created_at' => $now,
+    'updated_at' => $now,
+]);
+$runRepo->save($st5, [
+    'session_id' => $st5,
+    'mode' => 'quick-decision',
+    'status' => 'running',
+    'started_at' => $tsAgo(700),
+    'updated_at' => $tsAgo(700),
+    'progress' => [
+        'percent' => 80,
+        'current_round' => 1,
+        'total_rounds' => 2,
+        'current_phase' => 'analysis',
+        'current_step' => 'llm_call',
+        'estimated' => true,
+    ],
+    'events' => [
+        ['ts' => $tsAgo(700), 'phase' => 'session_started', 'label' => 'start'],
+    ],
+]);
+$reqSt5 = new Request();
+$reqSt5->setParams(['id' => $st5]);
+$rs5 = $controller->runStatus($reqSt5);
+rp_ok(strtolower((string)($rs5['status'] ?? '')) === 'blocked', 'mur 600s quick-decision => run_status blocked');
+rp_ok(($rs5['staleness']['level'] ?? '') === 'timeout', 'staleness timeout apres mur orchestration');
+
+// llm_call_started sans completed -> active
+$st6 = 'rp-' . bin2hex(random_bytes(5));
+$sessionRepo->create([
+    'id' => $st6,
+    'title' => 'LLM open',
+    'mode' => 'jury',
+    'initial_prompt' => 'x',
+    'selected_agents' => json_encode(['pm']),
+    'rounds' => 2,
+    'language' => 'fr',
+    'status' => 'running',
+    'cf_rounds' => 2,
+    'cf_interaction_style' => 'sequential',
+    'cf_reply_policy' => 'all-agents-reply',
+    'is_favorite' => 0,
+    'is_reference' => 0,
+    'force_disagreement' => 0,
+    'created_at' => $now,
+    'updated_at' => $now,
+]);
+$runRepo->save($st6, [
+    'session_id' => $st6,
+    'mode' => 'jury',
+    'status' => 'running',
+    'started_at' => $tsAgo(10),
+    'updated_at' => $tsAgo(5),
+    'progress' => [
+        'percent' => 50,
+        'current_round' => 1,
+        'total_rounds' => 2,
+        'current_phase' => 'jury-opening',
+        'current_step' => 'llm_call',
+        'estimated' => true,
+    ],
+    'events' => [
+        [
+            'ts' => $tsAgo(5),
+            'phase' => 'llm_call_started',
+            'label' => 'Appel',
+            'agent_id' => 'pm',
+            'orchestration_phase' => 'jury-opening',
+            'provider_id' => 'p1',
+            'model' => 'm1',
+        ],
+    ],
+]);
+$reqSt6 = new Request();
+$reqSt6->setParams(['id' => $st6]);
+$rs6 = $controller->runStatus($reqSt6);
+rp_ok(!empty($rs6['current_llm_call']['active']), 'llm_call_started sans fin => current_llm_call.active');
+
+$runRepo->appendEvent($st6, [
+    'ts' => $tsAgo(2),
+    'phase' => 'llm_call_completed',
+    'label' => 'fini',
+    'duration_ms' => 1200,
+], [], 'running', null);
+$reqSt6b = new Request();
+$reqSt6b->setParams(['id' => $st6]);
+$rs7 = $controller->runStatus($reqSt6b);
+rp_ok(empty($rs7['current_llm_call']['active']), 'llm_call_completed => current_llm_call inactif');
 
 if (($GLOBALS['__rp_fail'] ?? 0) > 0) {
     echo 'Run progress checks failed: ' . (int)$GLOBALS['__rp_fail'] . PHP_EOL;

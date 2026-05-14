@@ -43,6 +43,7 @@ class ReplayController {
             $content = $msg['content'] ?? '';
 
             $voteMeta = $this->extractVoteMeta($content);
+            $llmRoutingMeta = $this->extractLlmRoutingMeta($msg);
 
             $events[] = [
                 'id'              => $msg['id'],
@@ -50,6 +51,7 @@ class ReplayController {
                 'round'           => $round,
                 'phase'           => $phase,
                 'type'            => 'message',
+                'role'            => $msg['role'] ?? null,
                 'agent_id'        => $agentId,
                 'target_agent_id' => $msg['target_agent_id'] ?? null,
                 'title'           => $this->formatTitle($agentId, $phase),
@@ -60,6 +62,7 @@ class ReplayController {
                     'relation_type' => null,
                     'message_type'  => $msg['message_type'] ?? null,
                     'mode_context'  => $msg['mode_context'] ?? null,
+                    'llm_routing'   => $llmRoutingMeta,
                 ],
             ];
         }
@@ -189,6 +192,60 @@ class ReplayController {
         }
 
         return ['vote' => $vote, 'confidence' => $confidence];
+    }
+
+    private function extractLlmRoutingMeta(array $msg): ?array {
+        $meta = null;
+        $rawMeta = $msg['meta_json'] ?? null;
+        if (is_string($rawMeta) && $rawMeta !== '') {
+            $decoded = json_decode($rawMeta, true);
+            if (is_array($decoded)) {
+                $meta = $decoded;
+            }
+        } elseif (is_array($rawMeta)) {
+            $meta = $rawMeta;
+        }
+
+        $existing = is_array($meta['llm_routing'] ?? null) ? $meta['llm_routing'] : [];
+
+        $requestedProviderId = trim((string)($existing['requested_provider_id'] ?? ($msg['requested_provider_id'] ?? '')));
+        $requestedModel = trim((string)($existing['requested_model'] ?? ($msg['requested_model'] ?? '')));
+        $resolvedProviderId = trim((string)($existing['resolved_provider_id'] ?? ($msg['provider_id'] ?? '')));
+        $resolvedProviderLabel = trim((string)($existing['resolved_provider_label'] ?? ($msg['provider_name'] ?? $resolvedProviderId)));
+        $resolvedModel = trim((string)($existing['resolved_model'] ?? ($msg['model'] ?? '')));
+        $routingSource = trim((string)($existing['routing_source'] ?? ($meta['routing_source'] ?? '')));
+        $fallbackReason = trim((string)($existing['fallback_reason'] ?? ($msg['provider_fallback_reason'] ?? '')));
+        $fallbackFromProviderId = trim((string)($existing['fallback_from_provider_id'] ?? ''));
+        $fallbackFromModel = trim((string)($existing['fallback_from_model'] ?? ''));
+        $fallbackUsed = isset($existing['provider_fallback_used'])
+            ? ((int)$existing['provider_fallback_used'] === 1 || $existing['provider_fallback_used'] === true)
+            : ((int)($msg['provider_fallback_used'] ?? 0) === 1);
+
+        $hasAny = $requestedProviderId !== ''
+            || $requestedModel !== ''
+            || $resolvedProviderId !== ''
+            || $resolvedProviderLabel !== ''
+            || $resolvedModel !== ''
+            || $routingSource !== ''
+            || $fallbackUsed
+            || $fallbackReason !== '';
+
+        if (!$hasAny) {
+            return null;
+        }
+
+        return [
+            'requested_provider_id' => $requestedProviderId !== '' ? $requestedProviderId : null,
+            'requested_model' => $requestedModel !== '' ? $requestedModel : null,
+            'resolved_provider_id' => $resolvedProviderId !== '' ? $resolvedProviderId : null,
+            'resolved_provider_label' => $resolvedProviderLabel !== '' ? $resolvedProviderLabel : null,
+            'resolved_model' => $resolvedModel !== '' ? $resolvedModel : null,
+            'routing_source' => $routingSource !== '' ? $routingSource : null,
+            'provider_fallback_used' => $fallbackUsed,
+            'fallback_reason' => $fallbackReason !== '' ? $fallbackReason : null,
+            'fallback_from_provider_id' => $fallbackFromProviderId !== '' ? $fallbackFromProviderId : null,
+            'fallback_from_model' => $fallbackFromModel !== '' ? $fallbackFromModel : null,
+        ];
     }
 
     private function formatTitle(?string $agentId, string $phase): string {
