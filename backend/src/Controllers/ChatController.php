@@ -11,6 +11,7 @@ use Domain\Orchestration\ReactiveChatRunner;
 use Domain\Orchestration\PromptBuilder;
 
 class ChatController {
+    use DemoLlmQuotaTrait;
     private SessionRepository $sessionRepo;
     private MessageRepository $messageRepo;
     private ChatRunner $runner;
@@ -85,7 +86,7 @@ class ChatController {
             (new ContextDocumentRepository())->findBySession($sessionId)
         );
 
-        $chatRuntime = $this->runner->runWithRuntime(
+        $chatRuntime = $this->runWithDemoQuota($req, fn () => $this->runner->runWithRuntime(
             $sessionId,
             $message,
             $selectedAgents,
@@ -93,7 +94,7 @@ class ChatController {
             $language,
             $contextDoc,
             $session['decision_dynamics_preset'] ?? null
-        );
+        ));
         $agentMessages = is_array($chatRuntime['messages'] ?? null) ? $chatRuntime['messages'] : [];
 
         if ($contextMode === 'challenge') {
@@ -195,7 +196,7 @@ class ChatController {
 
         $strategicCtx = isset($session['strategic_context_id']) && (string)$session['strategic_context_id'] !== ''
             ? (string)$session['strategic_context_id'] : null;
-        $result = $this->reactiveRunner->run(
+        $result = $this->runWithDemoQuota($req, fn () => $this->reactiveRunner->run(
             $sessionId,
             $question,
             $primaryAgentId,
@@ -204,7 +205,7 @@ class ChatController {
             $contextDoc,
             $session['decision_dynamics_preset'] ?? null,
             $strategicCtx
-        );
+        ));
 
         return [
             'session_id'      => $sessionId,

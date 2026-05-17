@@ -19,7 +19,7 @@
   --text-lg:   16px;
   --text-xl:   20px;
 
-  /* radius */
+  /* radius (shell tokens --radius / --radius-lg live in styles.css :root) */
   --radius-sm:   4px;
   --radius-full: 9999px;
 

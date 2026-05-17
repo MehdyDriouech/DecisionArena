@@ -8,13 +8,14 @@ namespace Domain\Providers;
 class CommercialRuntimeContext {
     private static array $rows = [];
 
-    private const IDS = ['openai', 'anthropic', 'mistral', 'openrouter'];
+    private const IDS = ['openai', 'anthropic', 'mistral', 'openrouter', 'gemini'];
 
     private const LABELS = [
         'openai' => 'OpenAI',
         'anthropic' => 'Anthropic',
         'mistral' => 'Mistral AI',
         'openrouter' => 'OpenRouter',
+        'gemini' => 'Google Gemini (BYOK)',
     ];
 
     private const DEFAULT_BASE = [
@@ -22,6 +23,11 @@ class CommercialRuntimeContext {
         'anthropic' => 'https://api.anthropic.com',
         'mistral' => 'https://api.mistral.ai/v1',
         'openrouter' => 'https://openrouter.ai/api/v1',
+        'gemini' => 'https://generativelanguage.googleapis.com/v1beta/openai',
+    ];
+
+    private const DEFAULT_MODEL = [
+        'gemini' => 'gemini-2.5-flash',
     ];
 
     public static function clear(): void {
@@ -65,6 +71,9 @@ class CommercialRuntimeContext {
                 continue;
             }
             $model = trim((string)($cfg['default_model'] ?? ''));
+            if ($model === '' && isset(self::DEFAULT_MODEL[$id])) {
+                $model = self::DEFAULT_MODEL[$id];
+            }
             self::$rows[] = [
                 'id' => $id,
                 'name' => self::LABELS[$id] ?? $id,
@@ -75,6 +84,8 @@ class CommercialRuntimeContext {
                 'enabled' => 1,
                 'priority' => $prio,
                 'is_local' => 0,
+                'billing_source' => 'byok',
+                'byok_used' => true,
             ];
         }
     }

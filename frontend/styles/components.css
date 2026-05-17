@@ -264,24 +264,33 @@
 /* ── Simple vs Expert mode (progressive disclosure) ──────────────────────── */
 
 .hero-block {
-  padding: 24px;
-  margin-bottom: 20px;
-  border-radius: 12px;
-  background: var(--bg-elevated);
+  padding: 22px 24px;
+  margin-bottom: 24px;
+  border-radius: var(--radius-lg, 12px);
+  background: linear-gradient(
+    165deg,
+    color-mix(in srgb, var(--surface-elevated, var(--bg-elevated)) 92%, transparent) 0%,
+    color-mix(in srgb, var(--bg-card, #1a1e2c) 88%, var(--bg-secondary)) 100%
+  );
+  border: 1px solid var(--border-soft, var(--border));
+  box-shadow: var(--shadow-sm, 0 2px 8px rgba(0, 0, 0, 0.2));
 }
 
 .hero-block h1 {
   margin: 0 0 8px;
-  font-size: 28px;
+  font-size: 26px;
+  font-weight: 800;
   line-height: 1.2;
-  color: var(--text-primary);
+  letter-spacing: -0.03em;
+  color: var(--text-strong, var(--text-primary));
 }
 
 .hero-block p {
   margin: 0 0 16px;
-  max-width: 680px;
+  max-width: 62ch;
   color: var(--text-secondary);
-  line-height: 1.5;
+  line-height: 1.55;
+  font-size: 14px;
 }
 
 .intent-grid {
@@ -2106,14 +2115,11 @@ body.ui-expert .message-llm-meta[data-ui="expert-only"] {
   }
 }
 
-/* ===== About page (static editorial) ================================= */
+/* ===== About page (static editorial) — layout shell in features.css === */
 .about-page {
-  max-width: 720px;
+  max-width: 1040px;
   margin: 0 auto;
-}
-
-.about-page .page-header .page-title {
-  margin: 0;
+  padding-bottom: 32px;
 }
 
 .about-card {
@@ -2222,4 +2228,108 @@ body.ui-expert .message-llm-meta[data-ui="expert-only"] {
 
 body.ui-expert .about-expert-block {
   display: block;
+}
+
+/* Mobile layout notice — desktop-first recommendation (non-blocking) */
+#da-mobile-layout-notice-host {
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  pointer-events: none;
+}
+
+#da-mobile-layout-notice-host:not(:empty) {
+  pointer-events: auto;
+}
+
+.mobile-layout-notice {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 16px;
+}
+
+.mobile-layout-notice__overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(2px);
+}
+
+.mobile-layout-notice__card {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 460px;
+  padding: 28px 24px 24px;
+  border-radius: var(--radius-lg, 14px);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: linear-gradient(165deg, rgba(30, 34, 48, 0.98) 0%, rgba(18, 20, 30, 0.99) 100%);
+  box-shadow:
+    0 0 0 1px rgba(99, 102, 241, 0.08),
+    0 24px 48px rgba(0, 0, 0, 0.45),
+    0 0 40px rgba(99, 102, 241, 0.12);
+}
+
+.mobile-layout-notice__badge {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 14px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: rgba(99, 102, 241, 0.12);
+  color: #c7d2fe;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mobile-layout-notice__title {
+  margin: 0 0 12px;
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--text-primary, #f1f5f9);
+}
+
+.mobile-layout-notice__body {
+  margin: 0 0 10px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-secondary, #cbd5e1);
+}
+
+.mobile-layout-notice__helper {
+  margin: 0 0 22px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted, #94a3b8);
+}
+
+.mobile-layout-notice__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mobile-layout-notice__actions .btn {
+  width: 100%;
+  justify-content: center;
+}
+
+@media (min-width: 420px) {
+  .mobile-layout-notice__actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .mobile-layout-notice__actions .btn {
+    width: auto;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
 }

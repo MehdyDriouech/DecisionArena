@@ -3,6 +3,11 @@ import { dispatchAction, registerAction } from './events.js';
 import { finalizeLiveRunAfterTerminalPoll } from '../utils/liveRunCompletion.js';
 
 function registerGlobalHandlers() {
+  registerAction('dismiss-mobile-layout-notice', () => {
+    window.DecisionArena.store.dismissMobileLayoutNotice?.();
+    window.DecisionArena.render?.();
+  });
+
   registerAction('cancel-pending-confirmation', ({ element }) => {
     const state = window.DecisionArena.store.state;
     const id = element?.dataset?.confirmId || '';

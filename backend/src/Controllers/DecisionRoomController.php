@@ -15,6 +15,7 @@ use Domain\Orchestration\PromptBuilder;
 use Domain\Orchestration\StructuredRunResult;
 
 class DecisionRoomController {
+    use DemoLlmQuotaTrait;
     private SessionRepository $sessionRepo;
     private MessageRepository $messageRepo;
     private DecisionRoomRunner $runner;
@@ -114,12 +115,15 @@ class DecisionRoomController {
             'running'
         );
         try {
-            $result = $this->runner->run(
+            $result = $this->runWithDemoQuota($req, fn () => $this->runner->run(
                 $sessionId, $objective, $selectedAgents, $rounds, $language,
                 $forceDisagreement, $contextDoc,
                 $daEnabled, $daThreshold, $agentProviders, $decisionThreshold, $sessionOptions
-            );
+            ));
         } catch (\Throwable $e) {
+            if ($e instanceof \Domain\Demo\DemoHttpException) {
+                throw $e;
+            }
             $this->sessionRepo->update($sessionId, ['status' => 'draft']);
             $this->runStatusRepo->appendEvent(
                 $sessionId,

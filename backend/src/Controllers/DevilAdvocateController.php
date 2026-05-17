@@ -12,6 +12,7 @@ use Infrastructure\Persistence\MessageRepository;
 use Infrastructure\Persistence\SessionRepository;
 
 class DevilAdvocateController {
+    use DemoLlmQuotaTrait;
     private SessionRepository            $sessionRepo;
     private MessageRepository          $messageRepo;
     private ProviderRouter             $providerRouter;
@@ -90,7 +91,7 @@ class DevilAdvocateController {
         ];
 
         try {
-            $routed  = $this->providerRouter->chat($messages, null, null, null);
+            $routed = $this->runWithDemoQuota($req, fn () => $this->providerRouter->chat($messages, null, null, null));
             $content = $routed['content'];
 
             $msg = $this->messageRepo->create([
@@ -115,6 +116,9 @@ class DevilAdvocateController {
                 'round'     => $currentRound,
             ];
         } catch (\Throwable $e) {
+            if ($e instanceof \Domain\Demo\DemoHttpException) {
+                throw $e;
+            }
             return Response::error('Devil advocate call failed: ' . $e->getMessage(), 500);
         }
     }

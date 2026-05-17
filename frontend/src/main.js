@@ -7,6 +7,7 @@ import * as agentsUtils from './utils/agents.js';
 import * as intentPresetUtils from './utils/intentPresets.js';
 import * as messageLookup from './utils/messageLookup.js';
 import { renderSidebarShell } from './core/shell.js';
+import { bootstrapDemoAuth, registerDemoAuthHandlers, isDemoLoginGateActive } from './core/demoAuthHandlers.js';
 import { validatePlaybookCatalog } from './core/playbooks.js';
 
 /* ── Core: renderer + router + events ── */
@@ -44,6 +45,7 @@ import { registerAboutFeature } from './features/about/index.js';
 
 /* ── Feature handler modules ── */
 import { registerGlobalHandlers } from './core/globalHandlers.js';
+import { bindMobileLayoutNoticeViewportListener } from './ui/mobileLayoutNotice.js';
 import { registerSessionsHandlers } from './features/sessions/handlers.js';
 import { registerChatHandlers } from './features/chat/handlers.js';
 import { registerContextDocHandlers } from './features/contextDoc/handlers.js';
@@ -164,22 +166,28 @@ function bootstrapModuleArchitecture() {
   registerDashboardHandlers();
   registerOpenSpaceHandlers();
   registerHumanLoopHandlers();
+  registerDemoAuthHandlers();
 
   /* ── Wire global event delegation (replaces legacy-app.js listeners) ── */
   bindGlobalEventDelegation();
+  bindMobileLayoutNoticeViewportListener();
 }
 
-async function init() {
+async function initAppAfterLogin() {
   const { LoaderService } = services;
-  window.DecisionArena.render();
   await LoaderService.loadInitialData();
   hydrateNewSessionDefaultAgents(window.DecisionArena.store.state.newSession);
   await dispatchAction('load-dashboard-summary').catch(() => {});
   window.DecisionArena.render();
 }
 
+async function init() {
+  await initAppAfterLogin();
+}
+
 async function startApp() {
   bootstrapModuleArchitecture();
+  window.DecisionArena.initAppAfterLogin = initAppAfterLogin;
   if (typeof Router.initHashRouting === 'function') {
     Router.initHashRouting();
   }
@@ -196,7 +204,12 @@ async function startApp() {
   window.DecisionArena.applyUiModeVisibility = applyUiModeVisibility;
   window.DecisionArena.applyComplexityVisibility = applyComplexityVisibility;
   applyUiModeVisibility(window.DecisionArena?.store?.state?.uiMode || 'basic');
+  await bootstrapDemoAuth();
   renderSidebarShell(window.i18n);
+  if (isDemoLoginGateActive()) {
+    window.DecisionArena.render();
+    return;
+  }
   await init();
 }
 

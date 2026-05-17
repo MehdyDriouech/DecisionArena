@@ -1,0 +1,77 @@
+# Agent Context Memory
+
+## Stable Beliefs
+
+No stable belief extracted yet.
+
+## Strategic Assumptions
+
+No strategic assumption extracted yet.
+
+## Decisions Remembered
+- [2026-05-14] Decision Memory `efbadfa3-ca90-4c87-81e4-5108c95502e9` <!-- da-decision-memory-sync:efbadfa3-ca90-4c87-81e4-5108c95502e9 -->
+  - Session: `26652961-af99-4adb-9863-e4afd07561ae`
+  - Mode: `decision-room`
+  - Playbook: `quick-decision`
+  - Status (normalized): `proceed`
+  - Original outcome: `proceed`
+  - Memory state: `confirmed`
+  - Persistence quality: `full`
+  - Review required: `no`
+  - Summary: proceed: Ship MVP and measure retention for 14 days. (Contract OK.)
+  - Required next actions:
+    - Ship MVP and measure retention for 14 days.
+  - Source: decision_memory_auto_sync
+
+No confirmed decision memory synced yet.
+
+## Failed Predictions
+
+No failed prediction recorded yet.
+
+## Relationships
+
+No relationship signal extracted yet.
+
+## User Preferences
+
+No explicit user preference extracted yet.
+
+## Open Questions
+
+No open question extracted yet.
+
+## Recent Notes
+- [2026-05-14] Decision memory `efbadfa3-ca90-4c87-81e4-5108c95502e9` synced from session `26652961-af99-4adb-9863-e4afd07561ae`. <!-- da-decision-memory-sync-recent:efbadfa3-ca90-4c87-81e4-5108c95502e9 -->
+- [2026-05-14] Participated in session `26652961-af99-4adb-9863-e4afd07561ae` in context `ACM DA synth exclusion`.
+  - Mode: `decision-room`
+  - Topic: `ACM 26652961`
+  - Session outcome signal: `unknown`
+  - Verdict signal: `unknown`
+  - Reliability: `unknown`
+  - Main tension: `none`
+  - Participation role: participant agent
+  <!-- participant_context_sync:26652961-af99-4adb-9863-e4afd07561ae -->
+  Source: participant_context_sync
+
+
+
+## Contradictions To Review
+
+No contradiction recorded yet.
+
+## Deprecated / Forgotten
+
+No deprecated memory recorded yet.
+
+## Current Position
+- No current position extracted yet.
+- Last participation: `26652961-af99-4adb-9863-e4afd07561ae`
+  <!-- current_position_last_participation:26652961-af99-4adb-9863-e4afd07561ae -->
+  Source: participant_context_sync
+
+No current position extracted yet.
+
+## Pending Consolidation Notes
+
+No pending consolidation note.

@@ -291,7 +291,7 @@ function renderAdministrationSimple(t, escHtml, pageTitle) {
       <div class="page-title">${escHtml(pageTitle)}</div>
       <div class="page-subtitle">${escHtml(t('admin.home.subtitleSimple'))}</div>
     </div>
-    <div class="admin-home admin-home--simple">
+    <div class="admin-home admin-home--simple admin-workspace">
       ${renderSystemStatus()}
       ${renderAdminIntentBlock(t, escHtml, {
         blockId: 'setup',
@@ -381,7 +381,7 @@ function renderAdministrationExpert(t, escHtml, state, pageTitle) {
       <div class="page-title">${escHtml(pageTitle)}</div>
       <div class="page-subtitle">${escHtml(t('admin.home.subtitle'))}</div>
     </div>
-    <div class="admin-home admin-home--expert">
+    <div class="admin-home admin-home--expert admin-workspace">
       ${renderSystemStatus()}
       ${setupBlock}
       ${buildBlock}
@@ -1381,6 +1381,7 @@ const BYOK_PROVIDER_ROWS = [
   { id: 'anthropic', label: 'Anthropic' },
   { id: 'mistral', label: 'Mistral AI' },
   { id: 'openrouter', label: 'OpenRouter' },
+  { id: 'gemini', label: 'Google Gemini', quotaHint: true },
 ];
 
 function renderProviderLocalQuickRow() {
@@ -1439,7 +1440,7 @@ function renderProviderLocalModalShell() {
 
 /** Quick setup BYOK : liste compacte + dialogue Connecter / Modifier. */
 function renderProviderQuickSetupSection() {
-  const { escHtml, state } = getCtx();
+  const { escHtml, state, t } = getCtx();
   const ps =
     state.providerSettings && typeof state.providerSettings === 'object'
       ? state.providerSettings
@@ -1447,7 +1448,7 @@ function renderProviderQuickSetupSection() {
 
   const localRowHtml = renderProviderLocalQuickRow();
 
-  const rows = BYOK_PROVIDER_ROWS.map(({ id, label }) => {
+  const rows = BYOK_PROVIDER_ROWS.map(({ id, label, quotaHint }) => {
     const row = ps[id] || {};
     const rawKey = typeof row.apiKey === 'string' ? row.apiKey : '';
     const hasKey = rawKey.trim() !== '';
@@ -1479,6 +1480,7 @@ function renderProviderQuickSetupSection() {
           <span class="byok-quick-status-cell">${statusHtml}</span>
           <span class="byok-quick-actions">${actionsHtml}</span>
         </div>
+        ${quotaHint ? `<p class="card-description byok-quota-hint" style="margin:6px 0 0;font-size:12px;">${escHtml(t('providers.geminiByokQuotaHint'))}</p>` : ''}
         <div class="byok-feedback provider-test-result byok-quick-feedback" hidden role="status" aria-live="polite"></div>
       </div>`;
   }).join('');
@@ -1489,7 +1491,7 @@ function renderProviderQuickSetupSection() {
         Connecter votre fournisseur IA
       </h2>
       <p class="card-description" style="margin-bottom:14px;">
-        Provider local via le serveur (Ollama, LM Studio, …). Fournisseurs cloud : OpenAI, Anthropic, Mistral ou OpenRouter — clés uniquement dans ce navigateur (BYOK).
+        ${escHtml(t('providers.byokSectionLead'))}
       </p>
       <div class="byok-quick-list">
         ${localRowHtml}

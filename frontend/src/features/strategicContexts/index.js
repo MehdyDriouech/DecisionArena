@@ -307,10 +307,10 @@ function renderStrategicContexts() {
   `;
 
   if (pkg.loading) {
-    return top + `<div class="loading-state"><span class="spinner spinner-lg"></span> ${escHtml(t('contexts.loading'))}</div>`;
+    return `<div class="strategic-contexts-workspace">${top}<div class="loading-state"><span class="spinner spinner-lg"></span> ${escHtml(t('contexts.loading'))}</div></div>`;
   }
   if (pkg.error) {
-    return top + `<div class="error-banner">⚠️ ${escHtml(pkg.error)}</div>`;
+    return `<div class="strategic-contexts-workspace">${top}<div class="error-banner">⚠️ ${escHtml(pkg.error)}</div></div>`;
   }
 
   const filterRow = `
@@ -1941,13 +1941,14 @@ function renderStrategicContexts() {
     </div>`;
   })();
 
-  return top + filterRow + deepComparePanel + noWorkspaceBanner + renderForm() + renderLinkForm() + `
+  return `<div class="strategic-contexts-workspace">${top}${filterRow}${deepComparePanel}${noWorkspaceBanner}${renderForm()}${renderLinkForm()}`
+    + `
     <div class="sc-layout-grid">
       <div class="sc-layout-list-column">${list}</div>
       <div class="sc-layout-detail-column">${detail || ''}</div>
       ${compareBlock}
     </div>
-  `;
+  ` + '</div>';
 }
 
 function registerStrategicContextsFeature() {

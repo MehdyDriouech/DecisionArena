@@ -114,7 +114,7 @@ class ProviderRouter {
                     'metadata' => ['duration_ms' => $duration, 'success' => true],
                 ]);
 
-                return [
+                return $this->attachBillingMetadata([
                     'content'                => $content,
                     'provider_id'            => (string)$providerData['id'],
                     'provider_name'          => (string)($providerData['name'] ?? $providerData['id']),
@@ -135,7 +135,7 @@ class ProviderRouter {
                     ),
                     'fallback_used'          => false,
                     'fallback_reason'        => null,
-                ];
+                ], $providerData);
 
             } catch (\Throwable $e) {
                 // Override failed — gracefully fall back to global routing
@@ -207,7 +207,7 @@ class ProviderRouter {
                     'success' => true,
                 ],
             ]);
-            return [
+            return $this->attachBillingMetadata([
                 'content'               => $content,
                 'provider_id'           => (string)$providerData['id'],
                 'provider_name'         => (string)($providerData['name'] ?? $providerData['id']),
@@ -228,7 +228,7 @@ class ProviderRouter {
                 ),
                 'fallback_used'         => false,
                 'fallback_reason'       => null,
-            ];
+            ], $providerData);
         }
 
         $settings = $this->settingsRepo->get();
@@ -295,7 +295,7 @@ class ProviderRouter {
                         'success' => true,
                     ],
                 ]);
-                return [
+                return $this->attachBillingMetadata([
                     'routing_source'         => (
                         $personaProviderId !== '' && !$personaProviderDisabled
                             ? 'persona_default'
@@ -322,7 +322,7 @@ class ProviderRouter {
                     'fallback_reason'       => $fallbackReason ?? ($personaProviderDisabled ? 'Provider disabled' : null),
                     'fallback_from_provider_id' => $fallbackReason !== null ? $requestedProviderId : null,
                     'fallback_from_model'   => $fallbackReason !== null ? $requestedModel : null,
-                ];
+                ], $providerData);
             } catch (\Throwable $e) {
                 $lastErr = $e;
                 $duration = (int)floor(microtime(true) * 1000) - $start;
@@ -580,7 +580,7 @@ class ProviderRouter {
         }
         foreach ($commercial as $p) {
             $cid = (string)($p['id'] ?? '');
-            if ($cid !== '' && !isset($byId[$cid])) {
+            if ($cid !== '') {
                 $byId[$cid] = $p;
             }
         }
@@ -707,6 +707,19 @@ class ProviderRouter {
         // Default fallback
         $fallback = $primary ?: $firstEnabled;
         return $agentPreferred ? $unique([$agentPreferred, $fallback]) : [$fallback];
+    }
+
+    /**
+     * @param array<string,mixed> $result
+     * @param array<string,mixed> $providerData
+     * @return array<string,mixed>
+     */
+    private function attachBillingMetadata(array $result, array $providerData): array {
+        $byok = ($providerData['billing_source'] ?? '') === 'byok'
+            || !empty($providerData['byok_used']);
+        $result['billing_source'] = $byok ? 'byok' : 'server';
+        $result['byok_used'] = $byok;
+        return $result;
     }
 }
 

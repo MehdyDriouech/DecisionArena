@@ -58,7 +58,7 @@ function formatNumber(v) {
 }
 
 function kpiCard(title, value, subtitle = '', tone = '', options = {}) {
-  const toneClass = tone ? ` dashboard-kpi-${tone}` : '';
+  const toneClass = tone ? ` dashboard-kpi--${tone}` : '';
   const clickable = options.clickable ? ' cursor:pointer;' : '';
   const attrs = options.clickable
     ? ` data-action="open-dashboard-kpi-detail" data-detail-kind="${options.detailKind || ''}" role="button" tabindex="0"`
@@ -399,12 +399,14 @@ function renderDashboardCockpit() {
   const detailDrawer = summary ? renderRiskDetails(summary, dashboardState, escHtml, t) : '';
 
   return `
+    <div class="dashboard-workspace">
     ${renderDashboardHeader(summary, dashboardState, metaScope, lastLoaded, escHtml, t)}
     ${loadingHtml}
     ${errorHtml}
     ${emptyHtml}
     ${mainContent}
     ${detailDrawer}
+    </div>
   `;
 }
 

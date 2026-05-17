@@ -15,6 +15,7 @@ use Domain\Orchestration\PromptBuilder;
 use Domain\Orchestration\StructuredRunResult;
 
 class QuickDecisionController {
+    use DemoLlmQuotaTrait;
     private SessionRepository         $sessionRepo;
     private QuickDecisionRunner       $runner;
     private ContextDocumentRepository $docRepo;
@@ -97,7 +98,7 @@ class QuickDecisionController {
             'running'
         );
         try {
-            $result = $this->runner->run(
+            $result = $this->runWithDemoQuota($req, fn () => $this->runner->run(
                 $sessionId,
                 $objective,
                 $selectedAgents,
@@ -108,7 +109,7 @@ class QuickDecisionController {
                 $decisionThreshold,
                 $session['decision_dynamics_preset'] ?? null,
                 $strategicCtx
-            );
+            ));
         } catch (\Throwable $e) {
             $this->sessionRepo->update($sessionId, ['status' => 'draft']);
             $this->runStatusRepo->appendEvent(
@@ -127,6 +128,9 @@ class QuickDecisionController {
                 'failed',
                 (string)$e->getMessage()
             );
+            if ($e instanceof \Domain\Demo\DemoHttpException) {
+                throw $e;
+            }
             return Response::error('Quick decision run failed: ' . $e->getMessage(), 500);
         }
 

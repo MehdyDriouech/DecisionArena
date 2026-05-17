@@ -32,6 +32,7 @@ class Router {
                 $handler = $route['handler'];
                 $body = $request->body();
                 \Domain\Providers\CommercialRuntimeContext::loadFromRequestBody($body);
+                \Domain\Providers\RuntimeBillingContext::loadFromRequestBody($body);
                 try {
                     if (is_callable($handler)) {
                         return $handler($request);
@@ -41,6 +42,7 @@ class Router {
                     return $controller->$action($request);
                 } finally {
                     \Domain\Providers\CommercialRuntimeContext::clear();
+                    \Domain\Providers\RuntimeBillingContext::clear();
                 }
             }
         }

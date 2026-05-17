@@ -1,6 +1,8 @@
 <?php
 namespace Infrastructure\Persistence;
 
+use Domain\Providers\ProviderSecretResolver;
+
 class ProviderRepository {
     private \PDO $pdo;
 
@@ -40,6 +42,9 @@ class ProviderRepository {
             return $base !== '';
         }
         if ($type === 'openai-compatible') {
+            if ($key === '' && ProviderSecretResolver::isGeminiRow($p)) {
+                $key = ProviderSecretResolver::geminiEnvKey();
+            }
             return $base !== '' && $key !== '';
         }
         return false;

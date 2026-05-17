@@ -1394,7 +1394,7 @@ function renderSessionHistory() {
   })();
 
   return `
-    <div style="max-width:960px;margin:0 auto;padding:24px 20px;">
+    <div class="session-history-workspace">
       <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:24px;">
         <button class="btn btn-secondary btn-sm" data-nav="analyses">← ${t('nav.back')}</button>
         <button class="btn btn-secondary btn-sm" data-ui="expert-only" data-action="link-session-to-strategic-context" data-session-id="${escHtml(session.id)}">🧭 ${escHtml(t('contexts.linkSession'))}</button>

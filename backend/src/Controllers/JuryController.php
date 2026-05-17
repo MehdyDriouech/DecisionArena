@@ -15,6 +15,7 @@ use Domain\Orchestration\PromptBuilder;
 use Domain\Orchestration\StructuredRunResult;
 
 class JuryController {
+    use DemoLlmQuotaTrait;
     private SessionRepository $sessionRepo;
     private JuryRunner        $runner;
     private DecisionMemoryRepository $memoryRepo;
@@ -118,7 +119,7 @@ class JuryController {
             'running'
         );
         try {
-            $result = $this->runner->run(
+            $result = $this->runWithDemoQuota($req, fn () => $this->runner->run(
                 $sessionId,
                 $objective,
                 $selectedAgents,
@@ -131,8 +132,11 @@ class JuryController {
                 $adversarialCfg,
                 $session['decision_dynamics_preset'] ?? null,
                 $strategicCtx
-            );
+            ));
         } catch (\Throwable $e) {
+            if ($e instanceof \Domain\Demo\DemoHttpException) {
+                throw $e;
+            }
             $this->sessionRepo->update($sessionId, ['status' => 'draft']);
             $this->runStatusRepo->appendEvent(
                 $sessionId,

@@ -153,13 +153,14 @@ function readProviderRoutingFromDom() {
 }
 
 /** Local BYOK (browser store) provider ids matching data-provider on cards. */
-const ALLOWED_BYOK = new Set(['openai', 'anthropic', 'mistral', 'openrouter']);
+const ALLOWED_BYOK = new Set(['openai', 'anthropic', 'mistral', 'openrouter', 'gemini']);
 
 const BYOK_UI_LABELS = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
   mistral: 'Mistral AI',
   openrouter: 'OpenRouter',
+  gemini: 'Google Gemini',
 };
 
 const BYOK_DEFAULT_BASE_URL = {
@@ -167,6 +168,7 @@ const BYOK_DEFAULT_BASE_URL = {
   anthropic: 'https://api.anthropic.com',
   mistral: 'https://api.mistral.ai/v1',
   openrouter: 'https://openrouter.ai/api/v1',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
 };
 
 function normalizeByokProvider(raw) {

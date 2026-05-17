@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../src/mbstring-polyfill.php';
+require_once __DIR__ . '/../config/DemoLocalConfig.php';
 
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Headers: Content-Type, Authorization');
@@ -37,12 +38,27 @@ $db = Database::getInstance();
 $migration = new Migration($db);
 $migration->run();
 
+\Domain\Demo\DemoAuthService::startSessionIfNeeded();
+\Domain\Demo\DemoAuthService::releaseSessionLock();
+
 $router = new Router();
 
 // Health
 $router->get('/api/health', function(Request $req) {
     return ['status' => 'ok', 'app' => 'Decision Arena'];
 });
+
+// Demo auth (lot C1) — login / logout / me
+$router->get('/api/demo-auth/config', [Controllers\DemoAuthApiController::class, 'config']);
+$router->post('/api/demo-auth/login', [Controllers\DemoAuthApiController::class, 'login']);
+$router->post('/api/demo-auth/logout', [Controllers\DemoAuthApiController::class, 'logout']);
+$router->get('/api/demo-auth/me', [Controllers\DemoAuthApiController::class, 'me']);
+
+// Legacy demo routes (lot B quota — conservées)
+$router->get('/api/demo/config', [Controllers\DemoAuthController::class, 'config']);
+$router->post('/api/demo/login', [Controllers\DemoAuthController::class, 'login']);
+$router->post('/api/demo/logout', [Controllers\DemoAuthController::class, 'logout']);
+$router->get('/api/demo/me', [Controllers\DemoAuthController::class, 'me']);
 
 // Personas — specific routes BEFORE parameterized routes
 $router->get('/api/personas/custom', [Controllers\PersonaController::class, 'custom']);
@@ -357,6 +373,16 @@ try {
     } else {
         echo $json;
     }
+} catch (\Domain\Demo\DemoHttpException $e) {
+    http_response_code($e->getStatusCode());
+    $payload = [
+        'error'   => true,
+        'message' => $e->getMessage(),
+    ];
+    if ($e->getErrorCode() !== '') {
+        $payload['code'] = $e->getErrorCode();
+    }
+    echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 } catch (\Throwable $e) {
     http_response_code(500);
     echo json_encode([

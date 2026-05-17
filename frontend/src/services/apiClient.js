@@ -1,13 +1,28 @@
-// API_BASE is a static string constant — fully resolved at module evaluation time.
+// API_BASE is resolved once at module load from window.location (no build-time config).
 // logService.js imports API_BASE from here (one-way dependency: logService → apiClient).
 // apiClient.js intentionally accesses LogService through window.DecisionArena.services
 // rather than a direct import to prevent a circular dependency
 // (apiClient ← apiFetch ← every feature, logService ← apiClient would form a cycle).
-const API_BASE = 'http://localhost/decision-room-ai/backend/public';
+
+/**
+ * Derive the backend public URL from the current page location.
+ * - Prod at domain root (/frontend/…): {origin}/backend/public
+ * - Local subfolder (/decision-room-ai/frontend/…): {origin}/decision-room-ai/backend/public
+ */
+function resolveApiBase() {
+  const { origin, pathname } = window.location;
+  const frontendIdx = pathname.indexOf('/frontend');
+  const appRoot = frontendIdx >= 0 ? pathname.slice(0, frontendIdx) : '';
+  const base = `${origin}${appRoot}/backend/public`;
+  return base.replace(/([^:]\/)\/+/g, '$1');
+}
+
+const API_BASE = resolveApiBase();
 
 async function apiFetch(path, options = {}) {
   const res = await fetch(API_BASE + path, {
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     ...options,
   });
   if (!res.ok) {

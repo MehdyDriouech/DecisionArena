@@ -15,7 +15,7 @@ class OpenAICompatibleProvider implements LlmProviderInterface {
         $temperature = isset($options['temperature']) && is_numeric($options['temperature'])
             ? (float)$options['temperature']
             : 0.7;
-        $url = rtrim($this->baseUrl, '/') . '/v1/chat/completions';
+        $url = OpenAiCompatibleUrl::chatCompletions($this->baseUrl);
         $payload = json_encode([
             'model'       => $model,
             'messages'    => $messages,

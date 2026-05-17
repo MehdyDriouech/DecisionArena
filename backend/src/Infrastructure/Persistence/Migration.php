@@ -45,6 +45,8 @@ class Migration {
         $this->createPostmortemsTable();
         $this->createSessionAgentProvidersTable();
         $this->addMissingColumnsV2();
+        $this->createDemoQuotaTable();
+        $this->createDemoUsersTable();
         $this->createSocialDynamicsTables();
         $this->ensureSocialDynamicsStrategicContextColumns();
         $this->createEvidenceTables();
@@ -1942,6 +1944,32 @@ class Migration {
         $this->pdo->exec("
             CREATE INDEX IF NOT EXISTS idx_jury_adversarial_session
             ON jury_adversarial_reports(session_id)
+        ");
+    }
+
+    private function createDemoQuotaTable(): void {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS demo_llm_usage (
+                user_id TEXT NOT NULL,
+                usage_date TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, usage_date)
+            )
+        ");
+    }
+
+    private function createDemoUsersTable(): void {
+        $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS demo_users (
+                id TEXT PRIMARY KEY,
+                login TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
         ");
     }
 }

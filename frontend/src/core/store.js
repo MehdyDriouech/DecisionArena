@@ -115,6 +115,32 @@ function readInitialUiMode() {
 }
 
 const EXPERIMENTAL_FEATURES_STORAGE_KEY = 'da_experimental_features';
+const MOBILE_LAYOUT_NOTICE_STORAGE_KEY = 'da_mobile_layout_notice_dismissed';
+const MOBILE_LAYOUT_MAX_WIDTH_PX = 768;
+
+function readMobileLayoutNoticeDismissed() {
+  try {
+    return localStorage.getItem(MOBILE_LAYOUT_NOTICE_STORAGE_KEY) === '1';
+  } catch (_) {
+    return false;
+  }
+}
+
+function isMobileLayout() {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  return window.matchMedia(`(max-width: ${MOBILE_LAYOUT_MAX_WIDTH_PX}px)`).matches;
+}
+
+function shouldShowMobileLayoutNotice(stateRef = state) {
+  return isMobileLayout() && !stateRef.mobileLayoutNoticeDismissed;
+}
+
+function dismissMobileLayoutNotice() {
+  try {
+    localStorage.setItem(MOBILE_LAYOUT_NOTICE_STORAGE_KEY, '1');
+  } catch (_) {}
+  state.mobileLayoutNoticeDismissed = true;
+}
 
 function readInitialExperimentalFeatures() {
   try {
@@ -156,6 +182,13 @@ const DEFAULT_PROVIDER_SETTINGS = {
     priority: 100,
     defaultModel: '',
   },
+  gemini: {
+    enabled: false,
+    apiKey: '',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    priority: 100,
+    defaultModel: 'gemini-2.5-flash',
+  },
 };
 
 function mergeProviderSettingsFromStorage(stored) {
@@ -165,6 +198,7 @@ function mergeProviderSettingsFromStorage(stored) {
     anthropic: { ...defaults.anthropic },
     mistral: { ...defaults.mistral },
     openrouter: { ...defaults.openrouter },
+    gemini: { ...defaults.gemini },
   };
   if (!stored || typeof stored !== 'object') {
     return next;
@@ -215,7 +249,7 @@ function persistProviderSettingsSnapshot(settings) {
 }
 
 const KNOWN_PROVIDER_SETTINGS_IDS = Object.freeze(
-  new Set(['openai', 'anthropic', 'mistral', 'openrouter']),
+  new Set(['openai', 'anthropic', 'mistral', 'openrouter', 'gemini']),
 );
 
 /**
@@ -312,6 +346,14 @@ const createInitialState = () => {
   const providerSettingsHydrated = readStoredProviderSettings();
   return ({
   view: 'dashboard',
+  demoAuth: {
+    loading: true,
+    authRequired: false,
+    authenticated: false,
+    user: null,
+    error: null,
+    accountMenuOpen: false,
+  },
   sessions: [],
   personas: [],
   providers: [],
@@ -586,6 +628,8 @@ const createInitialState = () => {
   uiComplexity: uiModeToLegacyComplexity(initialUiMode),
   /** Alpha / experimental UI (OpenSpace, couches cognitives avancées). Persisté localStorage ; défaut false. */
   experimentalFeaturesEnabled: readInitialExperimentalFeatures(),
+  /** Avertissement layout mobile (≤768px) fermé par l'utilisateur. */
+  mobileLayoutNoticeDismissed: readMobileLayoutNoticeDismissed(),
   /** Dernière vue OpenSpace demandée avant page de garde (debug / copy). */
   experimentalGateRequestedView: null,
   /** Set of panel keys currently collapsed in session history */
@@ -947,6 +991,12 @@ export {
   updateProviderSettings,
   deleteProviderKey,
   maskProviderKey,
+  MOBILE_LAYOUT_NOTICE_STORAGE_KEY,
+  MOBILE_LAYOUT_MAX_WIDTH_PX,
+  isMobileLayout,
+  shouldShowMobileLayoutNotice,
+  dismissMobileLayoutNotice,
+  readMobileLayoutNoticeDismissed,
 };
 
 export {

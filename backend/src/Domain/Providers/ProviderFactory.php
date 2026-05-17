@@ -3,7 +3,15 @@ namespace Domain\Providers;
 
 class ProviderFactory {
     public static function create(array $providerData): LlmProviderInterface {
-        return match($providerData['type']) {
+        $providerData = ProviderSecretResolver::enrich($providerData);
+        $type = (string)($providerData['type'] ?? '');
+        if ($type === 'openai-compatible'
+            && ProviderSecretResolver::isGeminiRow($providerData)
+            && trim((string)($providerData['api_key'] ?? '')) === ''
+        ) {
+            throw new \RuntimeException(ProviderSecretResolver::missingGeminiKeyMessage());
+        }
+        return match($type) {
             'openai-compatible' => new OpenAICompatibleProvider(
                 $providerData['base_url'],
                 $providerData['api_key'] ?? '',

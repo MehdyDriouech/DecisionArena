@@ -1,5 +1,10 @@
 import { state, canShowExperimentalFeatures } from './store.js';
 import { mountHtml } from '../ui/components.js';
+import { renderSidebarAccountBlock } from './sidebarAccountUi.js';
+
+function escHtml(s) {
+  return window.DecisionArena?.utils?.escHtml ? window.DecisionArena.utils.escHtml(s) : String(s);
+}
 
 function readAnalysesNavOpen() {
   if (typeof state.analysesSidebarOpen === 'boolean') return state.analysesSidebarOpen;
@@ -118,6 +123,7 @@ function renderSidebarShell(i18n) {
         <span class="nav-item-icon">⚙️</span><span>${t('nav.admin')}</span>
       </button>
     </nav>
+    ${renderSidebarAccountBlock(state, escHtml)}
     <div class="sidebar-ui-mode">
       <div class="sidebar-ui-mode-label">${t('ui.mode.label')}</div>
       <div class="sidebar-ui-mode-buttons">

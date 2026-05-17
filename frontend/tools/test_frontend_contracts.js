@@ -128,13 +128,13 @@ check(fileHasAll('frontend/src/core/renderer.js', ['https://dawp-engineering.com
 
 // 2b. About / footer i18n keys.
 check(fileHasAll('frontend/i18n.js', ["'footer.poweredByPrefix': 'Propulsé par '", "'footer.about': 'À propos'", "'about.title': 'À propos de Decision Arena'", "'footer.poweredByPrefix': 'Powered by '", "'footer.about': 'About'", "'about.title': 'About Decision Arena'"]), 'footer and about i18n keys present in fr and en');
-check(fileHasAll('frontend/i18n.js', ["'about.community.body1': 'Decision Arena est pensé pour être proposé comme une Community Edition ouverte et accessible.'", "'about.community.body1': 'Decision Arena is intended to be offered as an open and accessible Community Edition.'"]), 'about community edition copy present (fr + en, no OSI open-source claim)');
+check(fileHasAll('frontend/i18n.js', ["'about.community.body1': 'Decision Arena est pensé pour exister sous la forme d’une Community Edition ouverte, accessible et expérimentale.'", "'about.community.body1': 'Decision Arena is meant to exist as an open, accessible, experimental Community Edition.'"]), 'about community edition copy present (fr + en, no OSI open-source claim)');
 check(contains('frontend/i18n.js', "'about.contact.email': 'driouechmehdy.pro@gmail.com'"), 'about contact email key present');
 
 // 2c. About view markup contracts.
 const aboutView = read('frontend/src/features/about/index.js');
 check(aboutView.includes('data-ui="expert-only"') && aboutView.includes('mailto:') && aboutView.includes('driouechmehdy.pro@gmail.com'), 'about view includes expert-only block, mailto, and contact email');
-check(aboutView.includes('CONTACT_EMAIL') && aboutView.includes('esc(t('), 'about view keeps fixed mailto target and escapes i18n strings');
+check(aboutView.includes('CONTACT_EMAIL') && aboutView.includes('tx(t,'), 'about view keeps fixed mailto target and escapes i18n strings');
 
 // 3. Deep-link session routes.
 check(fileHasAll('frontend/src/core/router.js', ['head === \'sessions\'', 'head === \'analyses\'', 'head === \'session-history\'', 'openSessionFromHash']), 'deep-link session aliases declared');
@@ -196,6 +196,36 @@ const criticalActions = [
   'apply-agent-context-memories-sync',
 ];
 const corpusText = srcFiles.map((x) => x.text).join('\n');
+
+// 5b. Mobile layout notice (desktop-first, non-blocking).
+check(fileHasAll('frontend/src/core/store.js', [
+  'da_mobile_layout_notice_dismissed',
+  'mobileLayoutNoticeDismissed',
+  'dismissMobileLayoutNotice',
+  'shouldShowMobileLayoutNotice',
+  'isMobileLayout',
+  'MOBILE_LAYOUT_MAX_WIDTH_PX = 768',
+]), 'mobile layout notice store helpers and storage key');
+check(fileHasAll('frontend/src/ui/mobileLayoutNotice.js', [
+  'renderMobileLayoutNotice',
+  'dismiss-mobile-layout-notice',
+  'mobile-layout-notice__card',
+  'max-width: 768px',
+]), 'mobile layout notice UI component');
+check(fileHasAll('frontend/src/core/renderer.js', ['renderMobileLayoutNotice']), 'renderer mounts mobile layout notice');
+check(fileHasAll('frontend/src/core/globalHandlers.js', ["registerAction('dismiss-mobile-layout-notice'"]), 'dismiss-mobile-layout-notice action registered');
+check(fileHasAll('frontend/i18n.js', [
+  "'mobileNotice.title': 'Expérience ordinateur recommandée'",
+  "'mobileNotice.title': 'Desktop experience recommended'",
+  "'mobileNotice.continue': 'Continuer quand même'",
+  "'mobileNotice.continue': 'Continue anyway'",
+]), 'mobile notice i18n keys (fr + en)');
+check(
+  corpusText.includes('data-action="dismiss-mobile-layout-notice"')
+    && corpusText.includes("registerAction('dismiss-mobile-layout-notice'"),
+  'dismiss-mobile-layout-notice emitted and registered',
+);
+
 for (const action of criticalActions) {
   const emitted = corpusText.includes(`data-action="${action}"`) || corpusText.includes(`data-action='${action}'`);
   const registered = corpusText.includes(`registerAction('${action}'`) || corpusText.includes(`registerAction("${action}"`);

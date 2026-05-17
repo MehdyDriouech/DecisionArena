@@ -1133,7 +1133,7 @@ function renderNewSession() {
   if (isSimpleDisplay) {
     const playbook = resolvePlaybookForNewSession(ns, uiLang);
     return `
-      <section class="simple-new-session">
+      <section class="simple-new-session new-session-workspace">
         <header class="simple-new-session-header">
           <h1>${escHtml(t('newSession.simple.title'))}</h1>
           <p>${escHtml(t('newSession.simple.subtitle'))}</p>
@@ -1193,6 +1193,7 @@ function renderNewSession() {
   }
 
   return `
+    <div class="new-session-workspace">
     <div class="page-header">
       <div class="page-title">${t('newSession.title')}</div>
       <div class="page-subtitle">${t('newSession.subtitle')}</div>
@@ -1306,6 +1307,7 @@ function renderNewSession() {
     </div>
 
     ${renderContextDocumentSection()}
+    </div>
   `;
 }
 

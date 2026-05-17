@@ -5,13 +5,14 @@
 
 const LOCAL_TYPES = new Set(['ollama', 'lmstudio', 'openai-compatible']);
 
-const COMMERCIAL_IDS = ['openai', 'anthropic', 'mistral', 'openrouter'];
+const COMMERCIAL_IDS = ['openai', 'anthropic', 'mistral', 'openrouter', 'gemini'];
 
 const COMMERCIAL_LABELS = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
   mistral: 'Mistral AI',
   openrouter: 'OpenRouter',
+  gemini: 'Google Gemini',
 };
 
 function validPriority(p) {

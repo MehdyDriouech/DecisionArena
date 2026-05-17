@@ -16,7 +16,7 @@ export function buildProviderRuntimePayload() {
   if (!ps || typeof ps !== 'object') return {};
 
   const out = {};
-  for (const id of ['openai', 'anthropic', 'mistral', 'openrouter']) {
+  for (const id of ['openai', 'anthropic', 'mistral', 'openrouter', 'gemini']) {
     const row = ps[id];
     if (!row || !row.enabled) continue;
     const key = typeof row.apiKey === 'string' ? row.apiKey.trim() : '';

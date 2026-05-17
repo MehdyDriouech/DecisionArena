@@ -14,6 +14,7 @@ use Domain\Orchestration\StructuredRunResult;
 use Domain\Orchestration\PromptBuilder;
 
 class StressTestController {
+    use DemoLlmQuotaTrait;
     private SessionRepository         $sessionRepo;
     private ContextDocumentRepository $docRepo;
     private StressTestRunner          $runner;
@@ -106,7 +107,7 @@ class StressTestController {
             'running'
         );
         try {
-            $result = $this->runner->run(
+            $result = $this->runWithDemoQuota($req, fn () => $this->runner->run(
                 $sessionId,
                 $objective,
                 $selectedAgents,
@@ -120,8 +121,11 @@ class StressTestController {
                 $decisionThreshold,
                 $session['decision_dynamics_preset'] ?? null,
                 $strategicCtx
-            );
+            ));
         } catch (\Throwable $e) {
+            if ($e instanceof \Domain\Demo\DemoHttpException) {
+                throw $e;
+            }
             $this->sessionRepo->update($sessionId, ['status' => 'draft']);
             $this->runStatusRepo->appendEvent(
                 $sessionId,

@@ -4,7 +4,9 @@ namespace Controllers;
 use Http\Request;
 use Http\Response;
 use Infrastructure\Persistence\ProviderRepository;
+use Domain\Providers\OpenAiCompatibleUrl;
 use Domain\Providers\ProviderFactory;
+use Domain\Providers\ProviderSecretResolver;
 
 class ProviderController {
     private ProviderRepository $repo;
@@ -74,7 +76,7 @@ class ProviderController {
             return Response::error('Provider not found', 404);
         }
         try {
-            $provider = ProviderFactory::create($providerData);
+            $provider = ProviderFactory::create(ProviderSecretResolver::enrich($providerData));
             $ok = $provider->test();
             return [
                 'success' => $ok,
@@ -99,6 +101,7 @@ class ProviderController {
             }
             $type = (string)($provider['type'] ?? '');
             $baseUrl = trim((string)($provider['base_url'] ?? ''));
+            $provider = ProviderSecretResolver::enrich($provider);
             $apiKey = trim((string)($provider['api_key'] ?? ''));
         }
 
@@ -170,7 +173,7 @@ class ProviderController {
             if ($type === 'openai-compatible' && $apiKey !== '') {
                 $headers[] = 'Authorization: Bearer ' . $apiKey;
             }
-            $data = $this->httpGetJson(rtrim($baseUrl, '/') . '/v1/models', $headers);
+            $data = $this->httpGetJson(OpenAiCompatibleUrl::models($baseUrl), $headers);
             $rawModels = is_array($data['data'] ?? null) ? $data['data'] : [];
             $models = array_map(function ($m) {
                 $id = (string)($m['id'] ?? '');

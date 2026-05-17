@@ -1,6 +1,10 @@
 /* Renderer — manages DOM updates for sidebar and main content */
 import { normalizeUiMode, canShowExperimentalFeatures } from './store.js';
 import { renderPendingConfirmation } from '../ui/components.js';
+import { renderMobileLayoutNotice } from '../ui/mobileLayoutNotice.js';
+import { renderSidebarAccountBlock } from './sidebarAccountUi.js';
+import { renderDemoLoginView, renderDemoLoginLoading } from '../features/demoLogin/view.js';
+import { isDemoLoginGateActive } from './demoAuthHandlers.js';
 
 function t(key) {
   return window.i18n?.t(key) ?? key;
@@ -146,6 +150,7 @@ function renderSidebar() {
         `;
       }).join('')}
     </nav>
+    ${renderSidebarAccountBlock(state, escHtml)}
     <div class="sidebar-ui-mode">
       <div class="sidebar-ui-mode-label">${t('ui.mode.label')}</div>
       <div class="sidebar-ui-mode-buttons">
@@ -184,6 +189,22 @@ function renderMain() {
   const state = window.DecisionArena.store.state;
   const main  = document.getElementById('main-content');
   if (!main) return;
+
+  const app = document.getElementById('app');
+  const footer = document.getElementById('app-footer');
+  if (isDemoLoginGateActive()) {
+    if (app) app.classList.add('demo-auth-gate');
+    if (footer) footer.style.display = 'none';
+    if (state.demoAuth.loading) {
+      main.innerHTML = renderDemoLoginLoading();
+    } else {
+      main.innerHTML = renderDemoLoginView();
+    }
+    main.dataset.renderedView = 'demo-login';
+    return;
+  }
+  if (app) app.classList.remove('demo-auth-gate');
+  if (footer) footer.style.display = '';
 
   // Preserve scroll position when re-rendering the same view.
   // On view navigation we intentionally reset to the top.
@@ -276,13 +297,18 @@ function applyComplexityVisibility(level) {
 }
 
 function render() {
-  renderSidebar();
+  if (!isDemoLoginGateActive()) {
+    renderSidebar();
+  }
   renderMain();
-  renderAppFooter();
+  if (!isDemoLoginGateActive()) {
+    renderAppFooter();
+  }
   try {
     const mode = window.DecisionArena.store.state.uiMode || 'basic';
     applyUiModeVisibility(mode);
   } catch (_) {}
+  renderMobileLayoutNotice(window.DecisionArena?.store?.state);
 }
 
 export { render, renderSidebar, renderMain, applyUiModeVisibility, applyComplexityVisibility };

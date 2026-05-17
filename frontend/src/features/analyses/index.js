@@ -113,17 +113,176 @@ function matchesFilters(session, filters, contextMap) {
   return true;
 }
 
-function statusBadgeClass(status) {
+function analysisStatusBadgeClass(status) {
   switch (status) {
-    case 'completed': return 'badge-success';
-    case 'running': return 'badge-info';
-    case 'archived': return 'badge-muted';
-    case 'fragile': return 'badge-warning';
-    case 'blocked': return 'badge-danger';
-    case 'rerun': return 'badge-primary';
-    case 'forked': return 'badge-primary';
-    default: return 'badge-muted';
+    case 'completed': return 'analysis-status-badge analysis-status-completed';
+    case 'running': return 'analysis-status-badge analysis-status-running';
+    case 'archived': return 'analysis-status-badge analysis-status-archived';
+    case 'fragile': return 'analysis-status-badge analysis-status-fragile';
+    case 'blocked': return 'analysis-status-badge analysis-status-blocked';
+    case 'rerun':
+    case 'forked': return 'analysis-status-badge analysis-status-rerun';
+    case 'draft':
+    default: return 'analysis-status-badge analysis-status-draft';
   }
+}
+
+function verdictBadgeClass(verdict) {
+  const raw = String(verdict || '').trim().toLowerCase();
+  const norm = raw.replace(/[\s_]+/g, '-');
+  if (!norm || norm === 'n/a' || norm === 'na' || norm === 'none') {
+    return 'analysis-verdict-badge analysis-verdict-na';
+  }
+  if (norm.includes('no-go') || norm.includes('nogo') || norm === 'no') {
+    return 'analysis-verdict-badge analysis-verdict-no-go';
+  }
+  if (norm.includes('reduce') && norm.includes('scope')) {
+    return 'analysis-verdict-badge analysis-verdict-reduce-scope';
+  }
+  if (norm.includes('needs') || norm.includes('more-info') || norm.includes('more_info')) {
+    return 'analysis-verdict-badge analysis-verdict-needs-more-info';
+  }
+  if (norm === 'go' || (norm.includes('go') && !norm.includes('no'))) {
+    return 'analysis-verdict-badge analysis-verdict-go';
+  }
+  return 'analysis-verdict-badge';
+}
+
+function renderAnalysesFiltersBlock({ filters, modeOptions, contextOptions, filteredCount, escHtml, t }) {
+  return `
+    <div class="card analyses-workspace-filters">
+      <div class="analyses-filters-grid">
+        <label class="analyses-filter-field analyses-filter-field--wide">
+          <span class="analyses-filter-label">${escHtml(t('analyses.filters.queryLabel'))}</span>
+          <input id="analyses-filter-query" class="input analyses-filter-input" type="search" value="${escHtml(filters.query || '')}" placeholder="${escHtml(t('analyses.filters.queryPlaceholder'))}" />
+        </label>
+        <label class="analyses-filter-field">
+          <span class="analyses-filter-label">${escHtml(t('analyses.filters.modeLabel'))}</span>
+          <select id="analyses-filter-mode" class="input analyses-filter-input">${['all', ...modeOptions].map((mode) => `<option value="${escHtml(mode)}" ${String(filters.mode) === mode ? 'selected' : ''}>${mode === 'all' ? escHtml(t('analyses.common.all')) : escHtml(mode)}</option>`).join('')}</select>
+        </label>
+        <label class="analyses-filter-field">
+          <span class="analyses-filter-label">${escHtml(t('analyses.filters.statusLabel'))}</span>
+          <select id="analyses-filter-status" class="input analyses-filter-input">${['all', 'draft', 'running', 'completed', 'archived', 'blocked', 'fragile', 'rerun', 'forked'].map((status) => `<option value="${escHtml(status)}" ${String(filters.status) === status ? 'selected' : ''}>${status === 'all' ? escHtml(t('analyses.common.all')) : escHtml(lifecycleLabel(status, t))}</option>`).join('')}</select>
+        </label>
+        <label class="analyses-filter-field">
+          <span class="analyses-filter-label">${escHtml(t('analyses.filters.contextLabel'))}</span>
+          <select id="analyses-filter-context" class="input analyses-filter-input">
+            <option value="all" ${String(filters.contextId) === 'all' ? 'selected' : ''}>${escHtml(t('analyses.common.all'))}</option>
+            ${contextOptions.map((ctx) => `<option value="${escHtml(ctx.id)}" ${String(filters.contextId) === ctx.id ? 'selected' : ''}>${escHtml(ctx.title)}</option>`).join('')}
+          </select>
+        </label>
+        <label class="analyses-filter-field">
+          <span class="analyses-filter-label">${escHtml(t('analyses.filters.dateLabel'))}</span>
+          <select id="analyses-filter-date" class="input analyses-filter-input">${['all', '7d', '30d', '90d'].map((range) => `<option value="${range}" ${String(filters.dateRange) === range ? 'selected' : ''}>${escHtml(analysisDateRangeLabel(range, t))}</option>`).join('')}</select>
+        </label>
+        <label class="analyses-filter-field">
+          <span class="analyses-filter-label">${escHtml(t('analyses.filters.verdictLabel'))}</span>
+          <input id="analyses-filter-verdict" class="input analyses-filter-input" type="text" value="${escHtml(filters.verdict === 'all' ? '' : filters.verdict)}" placeholder="${escHtml(t('analyses.filters.verdictPlaceholder'))}" />
+        </label>
+      </div>
+      <div class="analyses-filters-actions">
+        <div class="analyses-filters-actions__primary">
+          <button type="button" class="btn btn-primary btn-sm" data-action="analyses-apply-filters">${escHtml(t('analyses.actions.applyFilters'))}</button>
+          <button type="button" class="btn btn-secondary btn-sm" data-action="analyses-clear-filters">${escHtml(t('analyses.actions.clearFilters'))}</button>
+        </div>
+        <div class="analyses-filters-actions__bulk">
+          <button type="button" class="btn btn-secondary btn-sm analyses-filters-bulk-btn" data-action="analyses-select-visible">${escHtml(t('analyses.actions.selectVisible'))} <span class="analyses-filters-count">(${filteredCount})</span></button>
+          <button type="button" class="btn btn-secondary btn-sm analyses-filters-bulk-btn" data-action="analyses-clear-selection">${escHtml(t('analyses.actions.clearSelection'))}</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderAnalysesEmptyState({ sessionsCount, filteredCount, escHtml, t }) {
+  if (sessionsCount === 0) {
+    return `
+      <div class="analyses-empty-state empty-state">
+        <p class="analyses-empty-state__text">${escHtml(t('sessions.empty'))}</p>
+        <button type="button" class="btn btn-primary" data-nav="new-session">${escHtml(t('nav.newSession'))}</button>
+      </div>`;
+  }
+  if (filteredCount === 0) {
+    return `
+      <div class="analyses-empty-state empty-state">
+        <p class="analyses-empty-state__text">${escHtml(t('analyses.empty.filtered'))}</p>
+        <button type="button" class="btn btn-secondary" data-action="analyses-clear-filters">${escHtml(t('analyses.actions.clearFilters'))}</button>
+      </div>`;
+  }
+  return '';
+}
+
+function renderAnalysisCard(session, opts) {
+  const {
+    contextMap, selectedIds, escHtml, formatDate, t,
+  } = opts;
+  const contextId = String(session?.strategic_context_id || '');
+  const contextTitle = contextId
+    ? (contextMap.get(contextId)?.title || `${contextId.slice(0, 8)}...`)
+    : t('analyses.context.none');
+  const verdict = deriveVerdict(session);
+  const score = deriveQualityScore(session);
+  const falseConsensus = deriveFalseConsensus(session);
+  const lifecycle = mapAnalysisLifecycle(session);
+  const isChecked = selectedIds.has(session.id);
+  const agentsCount = Array.isArray(session?.selected_agents) ? session.selected_agents.length : 0;
+  const rounds = Number(session?.rounds || 0);
+  const canArchiveToggle = lifecycle.primaryStatus === 'completed' || lifecycle.primaryStatus === 'archived';
+  const archiveLabel = lifecycle.primaryStatus === 'archived' ? t('analyses.actions.restore') : t('analyses.actions.archive');
+  const canRerunOrFork = lifecycle.primaryStatus === 'completed' || lifecycle.primaryStatus === 'archived';
+  const updatedLabel = formatDate(session.updated_at || session.created_at);
+  const overlayBadges = lifecycle.overlays
+    .filter((ov) => ov !== lifecycle.primaryStatus)
+    .map((ov) => `<span class="${analysisStatusBadgeClass(ov)}">${escHtml(lifecycleLabel(ov, t))}</span>`)
+    .join('');
+
+  return `
+    <article class="session-card-full analysis-card">
+      <div class="analysis-card__top">
+        <label class="analysis-card__select">
+          <input type="checkbox" data-action="analyses-toggle-selection" data-session-id="${escHtml(session.id)}" ${isChecked ? 'checked' : ''} />
+        </label>
+        <div class="analysis-card__title-wrap">
+          <h3 class="analysis-card__title">${escHtml(session.title || t('analyses.untitled'))}</h3>
+        </div>
+        <div class="analysis-card__status-group">
+          <span class="${analysisStatusBadgeClass(lifecycle.primaryStatus)}">${escHtml(lifecycleLabel(lifecycle.primaryStatus, t))}</span>
+          ${overlayBadges}
+        </div>
+      </div>
+      <div class="analysis-card__meta-primary">
+        ${session.mode ? `<span class="analysis-meta-badge">${escHtml(String(session.mode))}</span>` : ''}
+        <span class="analysis-context-badge" title="${escHtml(contextTitle)}">${escHtml(contextTitle)}</span>
+        ${verdict ? `<span class="${verdictBadgeClass(verdict)}"><span class="analysis-verdict-badge__label">${escHtml(t('analyses.badges.verdict'))}</span><span class="analysis-verdict-badge__value">${escHtml(String(verdict))}</span></span>` : ''}
+        ${score !== null ? `<span class="analysis-quality-badge"><span class="analysis-quality-badge__label">${escHtml(t('analyses.badges.quality'))}</span><span class="analysis-quality-badge__value">${score}</span></span>` : ''}
+      </div>
+      <p class="analysis-card__meta-secondary">
+        <span class="analysis-meta-item"><span class="analysis-meta-item__label">${escHtml(t('analyses.badges.updatedAt'))}</span> ${escHtml(updatedLabel)}</span>
+        <span class="analysis-meta-sep" aria-hidden="true">·</span>
+        <span class="analysis-meta-item"><span class="analysis-meta-item__label">${escHtml(t('analyses.badges.personas'))}</span> ${agentsCount}</span>
+        <span class="analysis-meta-sep" aria-hidden="true">·</span>
+        <span class="analysis-meta-item"><span class="analysis-meta-item__label">${escHtml(t('analyses.badges.rounds'))}</span> ${rounds}</span>
+        <span class="analysis-meta-sep" aria-hidden="true">·</span>
+        <span class="analysis-meta-item analysis-meta-item--${escHtml(falseConsensus === 'high' || falseConsensus === 'critical' ? 'warn' : 'muted')}"><span class="analysis-meta-item__label">${escHtml(t('analyses.badges.falseConsensus'))}</span> ${escHtml(falseConsensus)}</span>
+      </p>
+      ${(lifecycle.overlays.includes('blocked') || lifecycle.overlays.includes('fragile')) ? `
+        <div class="analysis-card__runtime" data-ui="expert-only">
+          <span aria-hidden="true">⚠</span> ${escHtml(t('analyses.runtimeSignal'))}: ${escHtml(lifecycle.overlays.join(', '))}
+        </div>
+      ` : ''}
+      <div class="analysis-card__actions">
+        <div class="analysis-card__actions-primary">
+          <button type="button" class="btn btn-primary btn-sm" data-action="open-session" data-session-id="${escHtml(session.id)}" data-mode="history">${escHtml(t('sessions.open'))}</button>
+          <button type="button" class="btn btn-secondary btn-sm" data-action="open-rerun-modal" data-session-id="${escHtml(session.id)}" ${canRerunOrFork ? '' : 'disabled'}>${escHtml(t('sessions.rerun'))}</button>
+          <button type="button" class="btn btn-secondary btn-sm" data-action="fork-session" data-session-id="${escHtml(session.id)}" ${canRerunOrFork ? '' : 'disabled'}>${escHtml(t('hitl.forkVariant'))}</button>
+        </div>
+        <div class="analysis-card__actions-secondary">
+          <button type="button" class="btn btn-secondary btn-sm analysis-card__btn-ghost" data-action="export-session" data-session-id="${escHtml(session.id)}" data-format="markdown">${escHtml(t('sessions.exportMd'))}</button>
+          <button type="button" class="btn btn-secondary btn-sm analysis-card__btn-ghost" data-action="toggle-compare-session" data-session-id="${escHtml(session.id)}">${escHtml(t('sessions.compareSelected'))}</button>
+          <button type="button" class="btn btn-secondary btn-sm analysis-card__btn-ghost" data-action="archive-session" data-session-id="${escHtml(session.id)}" ${canArchiveToggle ? '' : 'disabled'}>${escHtml(archiveLabel)}</button>
+          <button type="button" class="btn btn-danger btn-sm analysis-card__btn-danger" data-action="delete-session" data-session-id="${escHtml(session.id)}" data-session-title="${escHtml(session.title || '')}">${escHtml(t('sessions.delete'))}</button>
+        </div>
+      </div>
+    </article>`;
 }
 
 function lifecycleLabel(status, t) {
@@ -151,114 +310,34 @@ function renderAnalyses() {
   const selectedIds = new Set(Array.isArray(filters.selectedIds) ? filters.selectedIds : []);
   const modeOptions = [...new Set(sessions.map((s) => String(s.mode || '')).filter(Boolean))].sort();
   const contextOptions = contexts.map((ctx) => ({ id: String(ctx.context_id), title: String(ctx.title || '').trim() || String(ctx.context_id) }));
+  const cardOpts = { contextMap, selectedIds, escHtml, formatDate, t };
+  const listHtml = filtered.length === 0
+    ? renderAnalysesEmptyState({ sessionsCount: sessions.length, filteredCount: filtered.length, escHtml, t })
+    : filtered.map((session) => renderAnalysisCard(session, cardOpts)).join('');
 
   return `
+    <div class="analyses-workspace">
     <div class="page-header">
       <div class="page-title">${escHtml(t('sessions.title'))}</div>
       <div class="page-subtitle">${escHtml(t('sessions.subtitle'))}</div>
     </div>
 
-    <div class="card analyses-workspace-filters" style="padding:14px;margin-bottom:14px;">
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end;">
-        <label class="form-group" style="margin:0;">
-          <span class="label">${escHtml(t('analyses.filters.queryLabel'))}</span>
-          <input id="analyses-filter-query" class="input" type="search" value="${escHtml(filters.query || '')}" placeholder="${escHtml(t('analyses.filters.queryPlaceholder'))}" />
-        </label>
-        <label class="form-group" style="margin:0;">
-          <span class="label">${escHtml(t('analyses.filters.modeLabel'))}</span>
-          <select id="analyses-filter-mode" class="input">${['all', ...modeOptions].map((mode) => `<option value="${escHtml(mode)}" ${String(filters.mode) === mode ? 'selected' : ''}>${mode === 'all' ? escHtml(t('analyses.common.all')) : escHtml(mode)}</option>`).join('')}</select>
-        </label>
-        <label class="form-group" style="margin:0;">
-          <span class="label">${escHtml(t('analyses.filters.statusLabel'))}</span>
-          <select id="analyses-filter-status" class="input">${['all', 'draft', 'running', 'completed', 'archived', 'blocked', 'fragile', 'rerun', 'forked'].map((status) => `<option value="${escHtml(status)}" ${String(filters.status) === status ? 'selected' : ''}>${status === 'all' ? escHtml(t('analyses.common.all')) : escHtml(lifecycleLabel(status, t))}</option>`).join('')}</select>
-        </label>
-        <label class="form-group" style="margin:0;">
-          <span class="label">${escHtml(t('analyses.filters.contextLabel'))}</span>
-          <select id="analyses-filter-context" class="input">
-            <option value="all" ${String(filters.contextId) === 'all' ? 'selected' : ''}>${escHtml(t('analyses.common.all'))}</option>
-            ${contextOptions.map((ctx) => `<option value="${escHtml(ctx.id)}" ${String(filters.contextId) === ctx.id ? 'selected' : ''}>${escHtml(ctx.title)}</option>`).join('')}
-          </select>
-        </label>
-        <label class="form-group" style="margin:0;">
-          <span class="label">${escHtml(t('analyses.filters.dateLabel'))}</span>
-          <select id="analyses-filter-date" class="input">${['all', '7d', '30d', '90d'].map((range) => `<option value="${range}" ${String(filters.dateRange) === range ? 'selected' : ''}>${escHtml(analysisDateRangeLabel(range, t))}</option>`).join('')}</select>
-        </label>
-        <label class="form-group" style="margin:0;">
-          <span class="label">${escHtml(t('analyses.filters.verdictLabel'))}</span>
-          <input id="analyses-filter-verdict" class="input" type="text" value="${escHtml(filters.verdict === 'all' ? '' : filters.verdict)}" placeholder="${escHtml(t('analyses.filters.verdictPlaceholder'))}" />
-        </label>
-      </div>
-      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
-        <button class="btn btn-primary btn-sm" data-action="analyses-apply-filters">${escHtml(t('analyses.actions.applyFilters'))}</button>
-        <button class="btn btn-secondary btn-sm" data-action="analyses-clear-filters">${escHtml(t('analyses.actions.clearFilters'))}</button>
-        <button class="btn btn-secondary btn-sm" data-action="analyses-select-visible">${escHtml(t('analyses.actions.selectVisible'))} (${filtered.length})</button>
-        <button class="btn btn-secondary btn-sm" data-action="analyses-clear-selection">${escHtml(t('analyses.actions.clearSelection'))}</button>
-      </div>
-    </div>
+    ${renderAnalysesFiltersBlock({ filters, modeOptions, contextOptions, filteredCount: filtered.length, escHtml, t })}
 
     ${selectedIds.size > 0 ? `
-      <div class="alert alert-info" style="margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <span><strong>${selectedIds.size}</strong> ${escHtml(t('analyses.selectedCount'))}</span>
-        <button class="btn btn-secondary btn-sm" data-action="analyses-bulk-archive">${escHtml(t('analyses.actions.bulkArchive'))}</button>
-        <button class="btn btn-danger btn-sm" data-action="analyses-bulk-delete">${escHtml(t('analyses.actions.bulkDelete'))}</button>
-        <button class="btn btn-primary btn-sm" data-action="analyses-bulk-compare">${escHtml(t('analyses.actions.bulkCompare'))}</button>
+      <div class="alert alert-info analyses-selection-bar">
+        <span class="analyses-selection-bar__count"><strong>${selectedIds.size}</strong> ${escHtml(t('analyses.selectedCount'))}</span>
+        <div class="analyses-selection-bar__actions">
+          <button type="button" class="btn btn-secondary btn-sm" data-action="analyses-bulk-archive">${escHtml(t('analyses.actions.bulkArchive'))}</button>
+          <button type="button" class="btn btn-danger btn-sm" data-action="analyses-bulk-delete">${escHtml(t('analyses.actions.bulkDelete'))}</button>
+          <button type="button" class="btn btn-primary btn-sm" data-action="analyses-bulk-compare">${escHtml(t('analyses.actions.bulkCompare'))}</button>
+        </div>
       </div>
     ` : ''}
 
-    <div class="sessions-list">
-      ${filtered.length === 0 ? `<div class="empty-state"><p>${escHtml(t('sessions.empty'))}</p></div>` : filtered.map((session) => {
-        const contextId = String(session?.strategic_context_id || '');
-        const contextTitle = contextId ? (contextMap.get(contextId)?.title || `${contextId.slice(0, 8)}...`) : t('analyses.context.none');
-        const verdict = deriveVerdict(session);
-        const score = deriveQualityScore(session);
-        const falseConsensus = deriveFalseConsensus(session);
-        const lifecycle = mapAnalysisLifecycle(session);
-        const isChecked = selectedIds.has(session.id);
-        const agentsCount = Array.isArray(session?.selected_agents) ? session.selected_agents.length : 0;
-        const rounds = Number(session?.rounds || 0);
-        const canArchiveToggle = lifecycle.primaryStatus === 'completed' || lifecycle.primaryStatus === 'archived';
-        const archiveLabel = lifecycle.primaryStatus === 'archived' ? t('analyses.actions.restore') : t('analyses.actions.archive');
-        const canRerunOrFork = lifecycle.primaryStatus === 'completed' || lifecycle.primaryStatus === 'archived';
-
-        return `
-          <div class="session-card-full">
-            <div class="session-card-full-header" style="align-items:flex-start;">
-              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding-top:2px;">
-                <input type="checkbox" data-action="analyses-toggle-selection" data-session-id="${escHtml(session.id)}" ${isChecked ? 'checked' : ''} style="accent-color:var(--accent);" />
-              </label>
-              <div style="flex:1;min-width:0;">
-                <div class="session-title">${escHtml(session.title || t('analyses.untitled'))}</div>
-                <div class="session-meta" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px;">
-                  <span class="badge badge-default">${escHtml(String(session.mode || ''))}</span>
-                  <span class="badge ${statusBadgeClass(lifecycle.primaryStatus)}">${escHtml(lifecycleLabel(lifecycle.primaryStatus, t))}</span>
-                  ${lifecycle.overlays.map((ov) => `<span class="badge ${statusBadgeClass(ov)}">${escHtml(lifecycleLabel(ov, t))}</span>`).join('')}
-                  <span class="badge badge-info">${escHtml(contextTitle)}</span>
-                  ${verdict ? `<span class="badge badge-primary">${escHtml(t('analyses.badges.verdict'))}: ${escHtml(String(verdict))}</span>` : ''}
-                  ${score !== null ? `<span class="badge badge-muted">${escHtml(t('analyses.badges.quality'))}: ${score}</span>` : ''}
-                  <span class="badge ${falseConsensus === 'high' || falseConsensus === 'critical' ? 'badge-warning' : 'badge-muted'}">${escHtml(t('analyses.badges.falseConsensus'))}: ${escHtml(falseConsensus)}</span>
-                  <span class="badge badge-muted">${escHtml(t('analyses.badges.personas'))}: ${agentsCount}</span>
-                  <span class="badge badge-muted">${escHtml(t('analyses.badges.rounds'))}: ${rounds}</span>
-                  <span class="badge badge-muted">${escHtml(t('analyses.badges.updatedAt'))}: ${escHtml(formatDate(session.updated_at || session.created_at))}</span>
-                </div>
-                ${(lifecycle.overlays.includes('blocked') || lifecycle.overlays.includes('fragile')) ? `
-                  <div data-ui="expert-only" style="margin-top:6px;font-size:11px;color:var(--text-muted);">
-                    ⚠ ${escHtml(t('analyses.runtimeSignal'))}: ${escHtml(lifecycle.overlays.join(', '))}
-                  </div>
-                ` : ''}
-              </div>
-            </div>
-            <div class="session-card-full-actions">
-              <button class="btn btn-primary btn-sm" data-action="open-session" data-session-id="${escHtml(session.id)}" data-mode="history">${escHtml(t('sessions.open'))}</button>
-              <button class="btn btn-secondary btn-sm" data-action="open-rerun-modal" data-session-id="${escHtml(session.id)}" ${canRerunOrFork ? '' : 'disabled'}>${escHtml(t('sessions.rerun'))}</button>
-              <button class="btn btn-secondary btn-sm" data-action="fork-session" data-session-id="${escHtml(session.id)}" ${canRerunOrFork ? '' : 'disabled'}>${escHtml(t('hitl.forkVariant'))}</button>
-              <button class="btn btn-secondary btn-sm" data-action="export-session" data-session-id="${escHtml(session.id)}" data-format="markdown">${escHtml(t('sessions.exportMd'))}</button>
-              <button class="btn btn-secondary btn-sm" data-action="toggle-compare-session" data-session-id="${escHtml(session.id)}">${escHtml(t('sessions.compareSelected'))}</button>
-              <button class="btn btn-secondary btn-sm" data-action="archive-session" data-session-id="${escHtml(session.id)}" ${canArchiveToggle ? '' : 'disabled'}>${archiveLabel}</button>
-              <button class="btn btn-danger btn-sm" data-action="delete-session" data-session-id="${escHtml(session.id)}" data-session-title="${escHtml(session.title || '')}">${escHtml(t('sessions.delete'))}</button>
-            </div>
-          </div>
-        `;
-      }).join('')}
+    <div class="analyses-list sessions-list">
+      ${listHtml}
+    </div>
     </div>
   `;
 }

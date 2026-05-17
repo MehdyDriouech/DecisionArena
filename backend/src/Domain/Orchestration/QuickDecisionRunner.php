@@ -9,6 +9,7 @@ use Domain\Evidence\EvidenceReportService;
 use Domain\Risk\RiskProfileAnalyzer;
 use Domain\SocialDynamics\SocialDynamicsService;
 use Domain\SocialDynamics\SocialPromptContextBuilder;
+use Domain\Providers\LlmRoutingMeta;
 use Domain\Providers\ProviderRouter;
 use Domain\Verdict\VerdictParser;
 use Domain\Vote\VoteAggregator;
@@ -184,6 +185,7 @@ class QuickDecisionRunner {
                     RunTimeoutPolicy::routerOptionsForTelemetry($sessionId, 'quick-decision', 'analysis', $agentId, 1, null)
                 );
                 $content = $routed['content'];
+                $promptMetaJson = LlmRoutingMeta::mergeIntoMetaJson($promptMetaJson, $routed);
 
                 $msg = $this->messageRepo->create([
                     'id'                       => $this->uuid(),
